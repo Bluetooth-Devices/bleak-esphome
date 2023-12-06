@@ -1,0 +1,20 @@
+# Changes here will be overwritten by Copier
+_commit: eb99dee
+_src_path: gh:browniebroke/pypackage-template
+add_me_as_contributor: false
+copyright_year: '2023'
+documentation: true
+email: bluetooth@koston.org
+full_name: J. Nick Koston
+github_username: bluetooth-devices
+has_cli: false
+initial_commit: true
+open_source_license: MIT
+package_name: bleak_esphome
+project_name: bleak-esphome
+project_short_description: Bleak backend of ESPHome
+project_slug: bleak-esphome
+run_poetry_install: true
+setup_github: true
+setup_pre_commit: true
+
