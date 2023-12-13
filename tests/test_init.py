@@ -1,4 +1,4 @@
-from bleak_esphome.scanner import ESPHomeScanner
+from bleak_esphome.backend.scanner import ESPHomeScanner
 
 
 def test_dummy():
