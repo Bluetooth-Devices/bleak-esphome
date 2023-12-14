@@ -36,6 +36,7 @@ from bleak.backends.client import BaseBleakClient, NotifyCallback
 from bleak.backends.device import BLEDevice
 from bleak.backends.service import BleakGATTServiceCollection
 from bleak.exc import BleakError
+from bluetooth_data_tools import mac_to_int
 
 from .cache import ESPHomeBluetoothCache
 from .characteristic import BleakGATTCharacteristicESPHome
@@ -61,11 +62,6 @@ _LOGGER = logging.getLogger(__name__)
 _ESPHomeClient = TypeVar("_ESPHomeClient", bound="ESPHomeClient")
 _R = TypeVar("_R")
 _P = ParamSpec("_P")
-
-
-def mac_to_int(address: str) -> int:
-    """Convert a mac address to an integer."""
-    return int(address.replace(":", ""), 16)
 
 
 def api_error_as_bleak_error(

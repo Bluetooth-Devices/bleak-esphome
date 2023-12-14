@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.2.0 (2023-12-13)
+
+### Feature
+
+- Move mac_to_int helper to bluetooth_data_tools (#2) ([`79ff7da`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/79ff7da11cd360becf0e4c69c41c630d47b6fa13))
+
 ## v0.1.0 (2023-12-13)
 
 ### Feature
