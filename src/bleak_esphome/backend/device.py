@@ -20,6 +20,7 @@ class ESPHomeBluetoothDevice:
         default_factory=list
     )
     loop: asyncio.AbstractEventLoop = field(default_factory=asyncio.get_running_loop)
+    available: bool = False
 
     def async_update_ble_connection_limits(self, free: int, limit: int) -> None:
         """Update the BLE connection limits."""
