@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.3.0 (2023-12-14)
+
+### Feature
+
+- Add available property to know when the esp device is connected (#3) ([`7732629`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/773262937fe106c573077a1f1d43156f00579f64))
+
 ## v0.2.0 (2023-12-13)
 
 ### Feature
