@@ -55,6 +55,9 @@ async def connect_scanner(
     3. Registering the scanner with the HA Bluetooth manager and also
        un-registering it when the ESP is disconnected.
 
+    The caller may choose to override ESPHomeClientData.disconnect_callbacks
+    with its own set. If it does so, it must do so before calling
+    ESPHomeClientData.scanner.async_setup().
     """
     source = device_info.mac_address
     name = device_info.name
