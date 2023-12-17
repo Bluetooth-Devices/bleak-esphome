@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.4.0 (2023-12-17)
+
+### Feature
+
+- Add connect scanner helper (#4) ([`c4b110a`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/c4b110a6f3301af2d7a4bded236e2f5036a0d598))
+
 ## v0.3.0 (2023-12-14)
 
 ### Feature
