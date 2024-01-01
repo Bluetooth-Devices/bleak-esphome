@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.4.1 (2024-01-01)
+
+### Performance
+
+- Avoid recreating enums from feature flags (#5) ([`00beb54`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/00beb54db075768069d9b48c1244866d2d402db2))
+
 ## v0.4.0 (2023-12-17)
 
 ### Feature
