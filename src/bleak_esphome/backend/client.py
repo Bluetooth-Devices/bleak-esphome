@@ -284,7 +284,7 @@ class ESPHomeClient(BaseBleakClient):
         self._mtu = cache.get_gatt_mtu_cache(self._address_as_int)
         has_cache = bool(
             dangerous_use_bleak_cache
-            and self._feature_flags & BluetoothProxyFeature.REMOTE_CACHING
+            and self._feature_flags & BluetoothProxyFeature.REMOTE_CACHING.value
             and cache.get_gatt_services_cache(self._address_as_int)
             and self._mtu
         )
@@ -379,7 +379,7 @@ class ESPHomeClient(BaseBleakClient):
     @api_error_as_bleak_error
     async def pair(self, *args: Any, **kwargs: Any) -> bool:
         """Attempt to pair."""
-        if not self._feature_flags & BluetoothProxyFeature.PAIRING:
+        if not self._feature_flags & BluetoothProxyFeature.PAIRING.value:
             raise NotImplementedError(
                 "Pairing is not available in this version ESPHome; "
                 f"Upgrade the ESPHome version on the {self._device_info.name} device."
@@ -396,7 +396,7 @@ class ESPHomeClient(BaseBleakClient):
     @api_error_as_bleak_error
     async def unpair(self) -> bool:
         """Attempt to unpair."""
-        if not self._feature_flags & BluetoothProxyFeature.PAIRING:
+        if not self._feature_flags & BluetoothProxyFeature.PAIRING.value:
             raise NotImplementedError(
                 "Unpairing is not available in this version ESPHome; "
                 f"Upgrade the ESPHome version on the {self._device_info.name} device."
@@ -441,7 +441,7 @@ class ESPHomeClient(BaseBleakClient):
         # because the esp has already wiped the services list to
         # save memory.
         if (
-            self._feature_flags & BluetoothProxyFeature.REMOTE_CACHING
+            self._feature_flags & BluetoothProxyFeature.REMOTE_CACHING.value
             or dangerous_use_bleak_cache
         ) and (cached_services := cache.get_gatt_services_cache(address_as_int)):
             _LOGGER.debug("%s: Cached services hit", self._description)
@@ -506,7 +506,7 @@ class ESPHomeClient(BaseBleakClient):
         cache = self._cache
         cache.clear_gatt_services_cache(self._address_as_int)
         cache.clear_gatt_mtu_cache(self._address_as_int)
-        if not self._feature_flags & BluetoothProxyFeature.CACHE_CLEARING:
+        if not self._feature_flags & BluetoothProxyFeature.CACHE_CLEARING.value:
             _LOGGER.warning(
                 "On device cache clear is not available with this ESPHome version; "
                 "Upgrade the ESPHome version on the device %s; "
@@ -666,7 +666,7 @@ class ESPHomeClient(BaseBleakClient):
             lambda handle, data: callback(data),
         )
 
-        if not self._feature_flags & BluetoothProxyFeature.REMOTE_CACHING:
+        if not self._feature_flags & BluetoothProxyFeature.REMOTE_CACHING.value:
             return
 
         # For connection v3 we are responsible for enabling notifications
