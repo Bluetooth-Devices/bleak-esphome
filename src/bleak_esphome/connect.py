@@ -37,7 +37,7 @@ def _can_connect(bluetooth_device: ESPHomeBluetoothDevice, source: str) -> bool:
     return can_connect
 
 
-async def connect_scanner(
+def connect_scanner(
     cli: APIClient,
     device_info: DeviceInfo,
     cache: ESPHomeBluetoothCache,
