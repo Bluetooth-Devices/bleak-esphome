@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.0.0 (2024-02-18)
+
+### Breaking
+
+- Updates for aioesphomeapi 22 (#6) ([`c6a113a`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/c6a113a95313a22e47ccb6a1fda8c6e2e4b32850))
+
 ## v0.4.1 (2024-01-01)
 
 ### Performance

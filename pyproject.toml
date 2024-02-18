@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "bleak-esphome"
-version = "0.4.1"
+version = "1.0.0"
 description = "Bleak backend of ESPHome"
 authors = ["J. Nick Koston <bluetooth@koston.org>"]
 license = "MIT"
