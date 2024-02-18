@@ -1,11 +1,9 @@
 """Bluetooth support for esphome."""
 from __future__ import annotations
 
-import asyncio
 import logging
-from collections.abc import Coroutine
 from functools import partial
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING
 
 from aioesphomeapi import APIClient, BluetoothProxyFeature, DeviceInfo
 from habluetooth import (
@@ -39,7 +37,7 @@ def _can_connect(bluetooth_device: ESPHomeBluetoothDevice, source: str) -> bool:
     return can_connect
 
 
-async def connect_scanner(
+def connect_scanner(
     cli: APIClient,
     device_info: DeviceInfo,
     cache: ESPHomeBluetoothCache,
@@ -91,7 +89,6 @@ async def connect_scanner(
     )
     scanner = ESPHomeScanner(source, name, connector, connectable)
     client_data.scanner = scanner
-    coros: list[Coroutine[Any, Any, Callable[[], None]]] = []
     # These calls all return a callback that can be used to unsubscribe
     # but we never unsubscribe so we don't care about the return value
 
@@ -99,22 +96,15 @@ async def connect_scanner(
         # If its connectable be sure not to register the scanner
         # until we know the connection is fully setup since otherwise
         # there is a race condition where the connection can fail
-        coros.append(
-            cli.subscribe_bluetooth_connections_free(
-                bluetooth_device.async_update_ble_connection_limits
-            )
+        cli.subscribe_bluetooth_connections_free(
+            bluetooth_device.async_update_ble_connection_limits
         )
 
     if feature_flags & BluetoothProxyFeature.RAW_ADVERTISEMENTS:
-        coros.append(
-            cli.subscribe_bluetooth_le_raw_advertisements(
-                scanner.async_on_raw_advertisements
-            )
+        cli.subscribe_bluetooth_le_raw_advertisements(
+            scanner.async_on_raw_advertisements
         )
     else:
-        coros.append(
-            cli.subscribe_bluetooth_le_advertisements(scanner.async_on_advertisement)
-        )
+        cli.subscribe_bluetooth_le_advertisements(scanner.async_on_advertisement)
 
-    await asyncio.gather(*coros)
     return client_data
