@@ -87,7 +87,7 @@ def connect_scanner(
         source=source,
         can_connect=partial(_can_connect, bluetooth_device, source),
     )
-    scanner = ESPHomeScanner(source, name, connector, connectable)
+    scanner = ESPHomeScanner(source, name, connector, connectable, feature_flags)
     client_data.scanner = scanner
     # These calls all return a callback that can be used to unsubscribe
     # but we never unsubscribe so we don't care about the return value
