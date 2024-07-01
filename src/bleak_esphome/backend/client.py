@@ -1,4 +1,5 @@
 """Bluetooth client for esphome."""
+
 from __future__ import annotations
 
 import asyncio
@@ -277,6 +278,7 @@ class ESPHomeClient(BaseBleakClient):
         Returns
         -------
             Boolean representing connection status.
+
         """
         await self._wait_for_free_connection_slot(CONNECT_FREE_SLOT_TIMEOUT)
         cache = self._cache
@@ -421,6 +423,7 @@ class ESPHomeClient(BaseBleakClient):
         -------
            A :py:class:`bleak.backends.service.BleakGATTServiceCollection`
            with this device's services tree.
+
         """
         return await self._get_services(
             dangerous_use_bleak_cache=dangerous_use_bleak_cache, **kwargs
@@ -545,6 +548,7 @@ class ESPHomeClient(BaseBleakClient):
         Returns:
         -------
             (bytearray) The read data.
+
         """
         self._raise_if_not_connected()
         characteristic = self._resolve_characteristic(char_specifier)
@@ -565,6 +569,7 @@ class ESPHomeClient(BaseBleakClient):
         Returns:
         -------
             (bytearray) The read data.
+
         """
         self._raise_if_not_connected()
         return await self._client.bluetooth_gatt_read_descriptor(
@@ -590,6 +595,7 @@ class ESPHomeClient(BaseBleakClient):
             data (bytes or bytearray): The data to send.
             response (bool): If write-with-response operation should be done.
                 Defaults to `False`.
+
         """
         self._raise_if_not_connected()
         characteristic = self._resolve_characteristic(characteristic)
@@ -606,6 +612,7 @@ class ESPHomeClient(BaseBleakClient):
         ----
             handle (int): The handle of the descriptor to read from.
             data (bytes or bytearray): The data to send.
+
         """
         self._raise_if_not_connected()
         await self._client.bluetooth_gatt_write_descriptor(
@@ -639,6 +646,7 @@ class ESPHomeClient(BaseBleakClient):
                 directly by the BleakGATTCharacteristic object representing it.
             callback (function): The function to be called on notification.
             kwargs: Unused.
+
         """
         self._raise_if_not_connected()
         ble_handle = characteristic.handle
@@ -658,12 +666,12 @@ class ESPHomeClient(BaseBleakClient):
                 "does not have notify or indicate property set."
             )
 
-        self._notify_cancels[
-            ble_handle
-        ] = await self._client.bluetooth_gatt_start_notify(
-            self._address_as_int,
-            ble_handle,
-            lambda handle, data: callback(data),
+        self._notify_cancels[ble_handle] = (
+            await self._client.bluetooth_gatt_start_notify(
+                self._address_as_int,
+                ble_handle,
+                lambda handle, data: callback(data),
+            )
         )
 
         if not self._feature_flags & BluetoothProxyFeature.REMOTE_CACHING.value:
@@ -709,6 +717,7 @@ class ESPHomeClient(BaseBleakClient):
                 The characteristic to deactivate notification/indication on,
                 specified by either integer handle, UUID or directly by the
                 BleakGATTCharacteristic object representing it.
+
         """
         self._raise_if_not_connected()
         characteristic = self._resolve_characteristic(char_specifier)

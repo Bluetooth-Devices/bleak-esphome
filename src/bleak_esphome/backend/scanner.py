@@ -1,4 +1,5 @@
 """Bluetooth scanner for esphome."""
+
 from __future__ import annotations
 
 from aioesphomeapi import BluetoothLEAdvertisement, BluetoothLERawAdvertisementsResponse
