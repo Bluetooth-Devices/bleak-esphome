@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.1.0 (2024-10-05)
+
+### Feature
+
+- Add support for python 3.13 (#19) ([`c3f2575`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/c3f2575c9b942c1d89fb0f804b943678a6e75044))
+
 ## v1.0.0 (2024-02-18)
 
 ### Breaking
