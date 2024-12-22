@@ -38,7 +38,6 @@ class ESPHomeScanner(BaseHaRemoteScanner):
     ) -> None:
         """Call the registered callback."""
         now = MONOTONIC_TIME()
-        print(raw)
         for adv in raw.advertisements:
             self._async_on_advertisement(
                 int_to_bluetooth_address(adv.address),
