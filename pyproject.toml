@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "bleak-esphome"
-version = "1.1.1"
+version = "1.1.0"
 description = "Bleak backend of ESPHome"
 authors = ["J. Nick Koston <bluetooth@koston.org>"]
 license = "MIT"
@@ -33,6 +33,7 @@ lru-dict = ">=1.2.0"
 [tool.poetry.group.dev.dependencies]
 pytest = "^7.0"
 pytest-cov = ">=3,<7"
+pytest-codspeed = "^3.1.0"
 
 [tool.poetry.group.docs]
 optional = true
