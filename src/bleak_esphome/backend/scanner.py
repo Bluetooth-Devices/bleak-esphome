@@ -38,7 +38,11 @@ class ESPHomeScanner(BaseHaRemoteScanner):
     ) -> None:
         """Call the registered callback."""
         now = MONOTONIC_TIME()
-        for adv in raw.advertisements:
+        # Avoid enumeration of raw.advertisements in the loop
+        # because protobuf will always have an internal exception
+        # when the list is exhausted.
+        for i in range(len(raw.advertisements)):
+            adv = raw.advertisements[i]
             self._async_on_advertisement(
                 int_to_bluetooth_address(adv.address),
                 adv.rssi,
