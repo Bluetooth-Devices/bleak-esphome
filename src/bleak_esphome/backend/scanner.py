@@ -41,8 +41,8 @@ class ESPHomeScanner(BaseHaRemoteScanner):
         # Avoid enumeration of raw.advertisements in the loop
         # because protobuf will always have an internal exception
         # when the list is exhausted.
-        for i in range(len(raw.advertisements)):
-            adv = raw.advertisements[i]
+        adv_len_idx = len(raw.advertisements) - 1
+        for i, adv in enumerate(raw.advertisements):
             self._async_on_advertisement(
                 int_to_bluetooth_address(adv.address),
                 adv.rssi,
@@ -50,3 +50,6 @@ class ESPHomeScanner(BaseHaRemoteScanner):
                 {"address_type": adv.address_type},
                 now,
             )
+            if i == adv_len_idx:
+                # Break at the end since we are done
+                break
