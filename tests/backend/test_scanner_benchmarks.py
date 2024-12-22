@@ -3,9 +3,9 @@ from aioesphomeapi import (
     BluetoothLERawAdvertisementsResponse,
 )
 from habluetooth import (
-    BaseHaRemoteScanner,
     HaBluetoothConnector,
 )
+from pytest_codspeed import BenchmarkFixture
 
 from bleak_esphome.backend.client import ESPHomeClientData
 from bleak_esphome.backend.scanner import ESPHomeScanner
@@ -14,13 +14,7 @@ ESP_MAC_ADDRESS = "AA:BB:CC:DD:EE:FF"
 ESP_NAME = "proxy"
 
 
-def test_scanner() -> None:
-    connector = HaBluetoothConnector(ESPHomeClientData, ESP_MAC_ADDRESS, lambda: True)
-    scanner = ESPHomeScanner(ESP_MAC_ADDRESS, ESP_NAME, connector, True)
-    assert isinstance(scanner, BaseHaRemoteScanner)
-
-
-def test_scanner_async_on_advertisement() -> None:
+def test_scanner_async_on_advertisement(benchmark: BenchmarkFixture) -> None:
     connector = HaBluetoothConnector(ESPHomeClientData, ESP_MAC_ADDRESS, lambda: True)
     scanner = ESPHomeScanner(ESP_MAC_ADDRESS, ESP_NAME, connector, True)
     adv = BluetoothLERawAdvertisementsResponse(
@@ -39,4 +33,8 @@ def test_scanner_async_on_advertisement() -> None:
             ),
         ]
     )
-    scanner.async_on_raw_advertisements(adv)
+
+    @benchmark
+    def _benchmark():
+        for _ in range(1000):
+            scanner.async_on_raw_advertisements(adv)
