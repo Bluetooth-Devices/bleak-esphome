@@ -77,7 +77,7 @@ jobs:
         uses: CodSpeedHQ/action@v3
         with:
           token: ${{ secrets.CODSPEED_TOKEN }}
-          run: poetry run pytest tests/ --codspeed
+          run: poetry run pytest --no-cov tests/ --codspeed
 
   release:
     needs:
