@@ -246,11 +246,11 @@ async def test_client_usage_while_not_connected(client_data: ESPHomeClientData) 
 
 
 @pytest.mark.asyncio
-async def test_client_get_services(
+async def test_client_get_services_and_write(
     client_data: ESPHomeClientData,
     esphome_bluetooth_gatt_services: ESPHomeBluetoothGATTServices,
 ) -> None:
-    """Test getting client services."""
+    """Test getting client services and writing a GATT char."""
     ble_device = generate_ble_device(
         "CC:BB:AA:DD:EE:FF", details={"source": ESP_MAC_ADDRESS, "address_type": 1}
     )
