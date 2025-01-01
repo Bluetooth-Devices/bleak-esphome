@@ -300,6 +300,16 @@ async def test_client_get_services_and_write(
 
     mock_write.assert_called_once_with(225106397622015, 20, b"test", True)
 
+    with patch.object(
+        client._client,
+        "bluetooth_gatt_read",
+    ) as mock_read:
+        await client.read_gatt_char(
+            "090b7847-e12b-09a8-b04b-8e0922a9abab",
+        )
+
+    mock_read.assert_called_once_with(225106397622015, 20, 30)
+
 
 @pytest.mark.asyncio
 async def test_bleak_client_get_services_and_write(
@@ -360,3 +370,13 @@ async def test_bleak_client_get_services_and_write(
         )
 
     mock_write.assert_called_once_with(225106397622015, 20, b"test", True)
+
+    with patch.object(
+        client._client,
+        "bluetooth_gatt_read",
+    ) as mock_read:
+        await bleak_client.read_gatt_char(
+            "090b7847-e12b-09a8-b04b-8e0922a9abab",
+        )
+
+    mock_read.assert_called_once_with(225106397622015, 20, 30)
