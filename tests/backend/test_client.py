@@ -406,6 +406,10 @@ async def test_bleak_client_cached_get_services_and_read_write(
 
     assert services is not None
 
+    services2 = await bleak_client.get_services(dangerous_use_bleak_cache=True)
+    assert services2 is not None
+    assert services2 == services
+
     char2 = bleak_client.services.get_characteristic(
         "090b7847-e12b-09a8-b04b-8e0922a9abab"
     )
