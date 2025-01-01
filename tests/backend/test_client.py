@@ -325,14 +325,6 @@ async def test_bleak_client_get_services_and_write(
 
     assert services is not None
 
-    char = client._resolve_characteristic(
-        char_specifier="090b7847-e12b-09a8-b04b-8e0922a9abab",
-    )
-    assert char is not None
-    assert char.uuid == "090b7847-e12b-09a8-b04b-8e0922a9abab"
-    assert char.properties == ["read", "write"]
-    assert char.handle == 20
-
     char2 = bleak_client.services.get_characteristic(
         "090b7847-e12b-09a8-b04b-8e0922a9abab"
     )
@@ -348,6 +340,14 @@ async def test_bleak_client_get_services_and_write(
     assert char3.uuid == "090b7847-e12b-09a8-b04b-8e0922a9abab"
     assert char3.properties == ["read", "write"]
     assert char3.handle == 20
+
+    char = client._resolve_characteristic(
+        char_specifier="090b7847-e12b-09a8-b04b-8e0922a9abab",
+    )
+    assert char is not None
+    assert char.uuid == "090b7847-e12b-09a8-b04b-8e0922a9abab"
+    assert char.properties == ["read", "write"]
+    assert char.handle == 20
 
     with patch.object(
         client._client,
