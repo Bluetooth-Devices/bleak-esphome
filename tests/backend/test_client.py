@@ -285,3 +285,15 @@ async def test_client_get_services(
     assert char3.uuid == "090b7847-e12b-09a8-b04b-8e0922a9abab"
     assert char3.properties == ["read", "write"]
     assert char3.handle == 20
+
+    with patch.object(
+        client._client,
+        "bluetooth_gatt_write",
+    ) as mock_write:
+        await client.write_gatt_char(
+            "090b7847-e12b-09a8-b04b-8e0922a9abab",
+            b"test",
+            True,
+        )
+
+    mock_write.assert_called_once_with(225106397622015, 20, b"test", True)
