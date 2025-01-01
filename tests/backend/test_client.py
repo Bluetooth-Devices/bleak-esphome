@@ -1,3 +1,4 @@
+from functools import partial
 from unittest.mock import patch
 from uuid import UUID
 
@@ -12,6 +13,7 @@ from aioesphomeapi import (
     DeviceInfo,
     ESPHomeBluetoothGATTServices,
 )
+from bleak import BleakClient
 from bleak.exc import BleakError
 from habluetooth import BaseHaRemoteScanner, HaBluetoothConnector
 from pytest_asyncio import fixture as aio_fixture
@@ -291,6 +293,67 @@ async def test_client_get_services_and_write(
         "bluetooth_gatt_write",
     ) as mock_write:
         await client.write_gatt_char(
+            "090b7847-e12b-09a8-b04b-8e0922a9abab",
+            b"test",
+            True,
+        )
+
+    mock_write.assert_called_once_with(225106397622015, 20, b"test", True)
+
+
+@pytest.mark.asyncio
+async def test_bleak_client_get_services_and_write(
+    client_data: ESPHomeClientData,
+    esphome_bluetooth_gatt_services: ESPHomeBluetoothGATTServices,
+) -> None:
+    """Test getting client services and writing a GATT char."""
+    ble_device = generate_ble_device(
+        "CC:BB:AA:DD:EE:FF", details={"source": ESP_MAC_ADDRESS, "address_type": 1}
+    )
+
+    bleak_client = BleakClient(
+        ble_device, backend=partial(ESPHomeClient, client_data=client_data)
+    )
+    client: ESPHomeClient = bleak_client._backend
+    client._is_connected = True
+    with patch.object(
+        client._client,
+        "bluetooth_gatt_get_services",
+        return_value=esphome_bluetooth_gatt_services,
+    ):
+        services = await bleak_client.get_services()
+
+    assert services is not None
+
+    char = client._resolve_characteristic(
+        char_specifier="090b7847-e12b-09a8-b04b-8e0922a9abab",
+    )
+    assert char is not None
+    assert char.uuid == "090b7847-e12b-09a8-b04b-8e0922a9abab"
+    assert char.properties == ["read", "write"]
+    assert char.handle == 20
+
+    char2 = bleak_client.services.get_characteristic(
+        "090b7847-e12b-09a8-b04b-8e0922a9abab"
+    )
+    assert char2 is not None
+    assert char2.uuid == "090b7847-e12b-09a8-b04b-8e0922a9abab"
+    assert char2.properties == ["read", "write"]
+    assert char2.handle == 20
+
+    char3 = bleak_client.services.get_characteristic(
+        UUID("090b7847-e12b-09a8-b04b-8e0922a9abab")
+    )
+    assert char3 is not None
+    assert char3.uuid == "090b7847-e12b-09a8-b04b-8e0922a9abab"
+    assert char3.properties == ["read", "write"]
+    assert char3.handle == 20
+
+    with patch.object(
+        client._client,
+        "bluetooth_gatt_write",
+    ) as mock_write:
+        await bleak_client.write_gatt_char(
             "090b7847-e12b-09a8-b04b-8e0922a9abab",
             b"test",
             True,
