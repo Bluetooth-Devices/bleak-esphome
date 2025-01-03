@@ -1,3 +1,4 @@
+import asyncio
 from functools import partial
 from unittest.mock import patch
 from uuid import UUID
@@ -455,3 +456,121 @@ async def test_bleak_client_cached_get_services_and_read_write(
         )
 
     mock_read.assert_called_once_with(225106397622015, 20, 30)
+
+
+@pytest.mark.asyncio
+async def test_bleak_client_connect(
+    client_data: ESPHomeClientData,
+    esphome_bluetooth_gatt_services: ESPHomeBluetoothGATTServices,
+) -> None:
+    """Test connect and disconnect when connection slots are available."""
+    ble_device = generate_ble_device(
+        "CC:BB:AA:DD:EE:FF", details={"source": ESP_MAC_ADDRESS, "address_type": 1}
+    )
+
+    bleak_client = BleakClient(
+        ble_device, backend=partial(ESPHomeClient, client_data=client_data)
+    )
+    client: ESPHomeClient = bleak_client._backend
+    client._bluetooth_device.ble_connections_free = 10
+    with patch.object(
+        client._client,
+        "bluetooth_device_connect",
+    ) as mock_connect, patch.object(
+        client._client,
+        "bluetooth_gatt_get_services",
+        return_value=esphome_bluetooth_gatt_services,
+    ):
+        task = asyncio.create_task(bleak_client.connect(dangerous_use_bleak_cache=True))
+        await asyncio.sleep(0)
+        callback = mock_connect.call_args_list[0][0][1]
+        # Mock connected with MTU of 23 and error code 0
+        callback(True, 23, 0)
+        await task
+
+    assert client.is_connected
+    assert client._mtu == 23
+    with patch.object(
+        client._client,
+        "bluetooth_device_disconnect",
+    ) as mock_disconnect:
+        await client.disconnect()
+
+    mock_disconnect.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_bleak_client_connect_wait_for_connection_slot(
+    client_data: ESPHomeClientData,
+    esphome_bluetooth_gatt_services: ESPHomeBluetoothGATTServices,
+) -> None:
+    """Test connect and disconnect when connection slots are not available."""
+    ble_device = generate_ble_device(
+        "CC:BB:AA:DD:EE:FF", details={"source": ESP_MAC_ADDRESS, "address_type": 1}
+    )
+
+    bleak_client = BleakClient(
+        ble_device, backend=partial(ESPHomeClient, client_data=client_data)
+    )
+    client: ESPHomeClient = bleak_client._backend
+    client._bluetooth_device.ble_connections_free = 0
+    with patch.object(
+        client._client,
+        "bluetooth_device_connect",
+    ) as mock_connect, patch.object(
+        client._client,
+        "bluetooth_gatt_get_services",
+        return_value=esphome_bluetooth_gatt_services,
+    ):
+        task = asyncio.create_task(bleak_client.connect(dangerous_use_bleak_cache=True))
+        await asyncio.sleep(0)
+        mock_connect.assert_not_called()
+        client._bluetooth_device.async_update_ble_connection_limits(10, 10)
+        await asyncio.sleep(0)
+        callback = mock_connect.call_args_list[0][0][1]
+        # Mock connected with MTU of 23 and error code 0
+        callback(True, 23, 0)
+        await task
+
+    assert client.is_connected
+    assert client._mtu == 23
+    with patch.object(
+        client._client,
+        "bluetooth_device_disconnect",
+    ) as mock_disconnect:
+        await client.disconnect()
+
+    mock_disconnect.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_bleak_client_connect_wait_for_connection_slot_timeout(
+    client_data: ESPHomeClientData,
+    esphome_bluetooth_gatt_services: ESPHomeBluetoothGATTServices,
+) -> None:
+    """Test connect and disconnect when connection slots wait times out."""
+    ble_device = generate_ble_device(
+        "CC:BB:AA:DD:EE:FF", details={"source": ESP_MAC_ADDRESS, "address_type": 1}
+    )
+
+    bleak_client = BleakClient(
+        ble_device, backend=partial(ESPHomeClient, client_data=client_data)
+    )
+    client: ESPHomeClient = bleak_client._backend
+    client._bluetooth_device.ble_connections_free = 0
+    with pytest.raises(asyncio.TimeoutError), patch.object(
+        client._client,
+        "bluetooth_device_connect",
+    ) as mock_connect, patch.object(
+        client._client,
+        "bluetooth_gatt_get_services",
+        return_value=esphome_bluetooth_gatt_services,
+    ), patch(
+        "bleak_esphome.backend.client.CONNECT_FREE_SLOT_TIMEOUT", 0.0001
+    ):
+        task = asyncio.create_task(bleak_client.connect(dangerous_use_bleak_cache=True))
+        await asyncio.sleep(0)
+        mock_connect.assert_not_called()
+        await task
+
+    assert not client.is_connected
