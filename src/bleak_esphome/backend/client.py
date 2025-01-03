@@ -365,8 +365,7 @@ class ESPHomeClient(BaseBleakClient):
             "%s: Out of connection slots, waiting for a free one",
             self._description,
         )
-        async with asyncio.timeout(timeout):
-            await bluetooth_device.wait_for_ble_connections_free()
+        await bluetooth_device.wait_for_ble_connections_free(timeout)
 
     @property
     def is_connected(self) -> bool:
