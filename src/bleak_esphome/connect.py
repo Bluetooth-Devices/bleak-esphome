@@ -11,7 +11,6 @@ from habluetooth import (
     HaBluetoothConnector,
 )
 
-from .backend.cache import ESPHomeBluetoothCache
 from .backend.client import ESPHomeClient, ESPHomeClientData
 from .backend.device import ESPHomeBluetoothDevice
 from .backend.scanner import ESPHomeScanner
@@ -39,10 +38,7 @@ def _can_connect(bluetooth_device: ESPHomeBluetoothDevice, source: str) -> bool:
 
 
 def connect_scanner(
-    cli: APIClient,
-    device_info: DeviceInfo,
-    cache: ESPHomeBluetoothCache,
-    available: bool,
+    cli: APIClient, device_info: DeviceInfo, available: bool
 ) -> ESPHomeClientData:
     """
     Connect scanner.
@@ -76,7 +72,6 @@ def connect_scanner(
     )
     client_data = ESPHomeClientData(
         bluetooth_device=bluetooth_device,
-        cache=cache,
         client=cli,
         device_info=device_info,
         api_version=cli.api_version,

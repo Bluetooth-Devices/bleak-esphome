@@ -6,6 +6,8 @@ import asyncio
 import logging
 from dataclasses import dataclass, field
 
+from .cache import ESPHomeBluetoothCache
+
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -22,6 +24,7 @@ class ESPHomeBluetoothDevice:
     )
     loop: asyncio.AbstractEventLoop = field(default_factory=asyncio.get_running_loop)
     available: bool = False
+    cache: ESPHomeBluetoothCache = field(default_factory=ESPHomeBluetoothCache)
 
     def async_update_ble_connection_limits(self, free: int, limit: int) -> None:
         """Update the BLE connection limits."""

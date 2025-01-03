@@ -19,7 +19,6 @@ from bleak.exc import BleakError
 from habluetooth import BaseHaRemoteScanner, HaBluetoothConnector
 from pytest_asyncio import fixture as aio_fixture
 
-from bleak_esphome.backend.cache import ESPHomeBluetoothCache
 from bleak_esphome.backend.client import ESPHomeClient, ESPHomeClientData
 from bleak_esphome.backend.device import ESPHomeBluetoothDevice
 from bleak_esphome.backend.scanner import ESPHomeScanner
@@ -216,7 +215,6 @@ async def client_data_fixture(mock_client: APIClient) -> ESPHomeClientData:
     connector = HaBluetoothConnector(ESPHomeClientData, ESP_MAC_ADDRESS, lambda: True)
     return ESPHomeClientData(
         bluetooth_device=ESPHomeBluetoothDevice(ESP_NAME, ESP_MAC_ADDRESS),
-        cache=ESPHomeBluetoothCache(),
         client=mock_client,
         device_info=DeviceInfo(
             mac_address=ESP_MAC_ADDRESS,
