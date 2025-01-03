@@ -39,7 +39,6 @@ from bleak.backends.service import BleakGATTServiceCollection
 from bleak.exc import BleakError
 from bluetooth_data_tools import mac_to_int
 
-from .cache import ESPHomeBluetoothCache
 from .characteristic import BleakGATTCharacteristicESPHome
 from .descriptor import BleakGATTDescriptorESPHome
 from .device import ESPHomeBluetoothDevice
@@ -114,7 +113,6 @@ class ESPHomeClientData:
     """Define a class that stores client data for an esphome client."""
 
     bluetooth_device: ESPHomeBluetoothDevice
-    cache: ESPHomeBluetoothCache
     client: APIClient
     device_info: DeviceInfo
     api_version: APIVersion
@@ -148,7 +146,7 @@ class ESPHomeClient(BaseBleakClient):
         if TYPE_CHECKING:
             assert ble_device.details is not None
         self._source = ble_device.details["source"]
-        self._cache = client_data.cache
+        self._cache = client_data.bluetooth_device.cache
         self._bluetooth_device = client_data.bluetooth_device
         self._client = client_data.client
         self._is_connected = False
