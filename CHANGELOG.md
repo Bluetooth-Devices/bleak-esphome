@@ -1,5 +1,19 @@
 # Changelog
 
+## v2.0.0 (2025-01-03)
+
+### Breaking
+
+
+- Move cache to device (#57) ([`2e44b28`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/2e44b284bc92967ccf1124dc9a78a9e04f0fb1f5))
+
+
+### Refactor
+
+
+- Make wait_for_ble_connections_free require a timeout (#56) ([`72c0107`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/72c01078ed75686a8a6bd1ab0ed8243b0e69f99c))
+
+
 ## v1.1.1 (2024-12-22)
 
 ### Fix
