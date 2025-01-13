@@ -34,7 +34,7 @@ lru-dict = ">=1.2.0"
 pytest = ">=7,<9"
 pytest-cov = ">=3,<7"
 pytest-codspeed = "^3.1.0"
-zeroconf = "^0.136.2"
+zeroconf = ">=0.136.2,<0.140.0"
 pytest-asyncio = "^0.25.0"
 
 [tool.poetry.group.docs]
