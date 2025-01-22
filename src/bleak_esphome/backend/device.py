@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass, field
+
+from bleak_retry_connector import Allocations
 
 from .cache import ESPHomeBluetoothCache
 
@@ -25,6 +28,13 @@ class ESPHomeBluetoothDevice:
     loop: asyncio.AbstractEventLoop = field(default_factory=asyncio.get_running_loop)
     available: bool = False
     cache: ESPHomeBluetoothCache = field(default_factory=ESPHomeBluetoothCache)
+    _connection_slots_callback: Callable[[Allocations], None] | None = None
+
+    def async_subscribe_connection_slots(
+        self, callback: Callable[[Allocations], None]
+    ) -> None:
+        """Subscribe to connection slot changes."""
+        self._connection_slots_callback = callback
 
     def async_update_ble_connection_limits(self, free: int, limit: int) -> None:
         """Update the BLE connection limits."""
@@ -47,6 +57,10 @@ class ESPHomeBluetoothDevice:
             if not fut.done():
                 fut.set_result(free)
         self._ble_connection_free_futures.clear()
+        if connection_slots_callback := self._connection_slots_callback:
+            # Currently we don't know which connections are in use, so we
+            # just return an empty list.
+            connection_slots_callback(Allocations(self.mac_address, limit, free, []))
 
     def _wait_for_ble_connections_free_timeout(self, fut: asyncio.Future[int]) -> None:
         """Timeout the wait_for_ble_connections_free future."""
