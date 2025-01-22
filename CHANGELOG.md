@@ -1,5 +1,13 @@
 # Changelog
 
+## v2.1.1 (2025-01-22)
+
+### Fix
+
+
+- Suppress duplicate connection changed callbacks (#73) ([`e3a5059`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/e3a505964ca3670e8f99450a4e33761026a5581b))
+
+
 ## v2.1.0 (2025-01-22)
 
 ### Feature
