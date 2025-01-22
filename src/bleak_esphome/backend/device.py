@@ -53,15 +53,14 @@ class ESPHomeBluetoothDevice:
         )
         self.ble_connections_free = free
         self.ble_connections_limit = limit
-        if not free:
-            return
-        for fut in self._ble_connection_free_futures:
-            # If wait_for_ble_connections_free gets cancelled, it will
-            # leave a future in the list. We need to check if it's done
-            # before setting the result.
-            if not fut.done():
-                fut.set_result(free)
-        self._ble_connection_free_futures.clear()
+        if free:
+            for fut in self._ble_connection_free_futures:
+                # If wait_for_ble_connections_free gets cancelled, it will
+                # leave a future in the list. We need to check if it's done
+                # before setting the result.
+                if not fut.done():
+                    fut.set_result(free)
+            self._ble_connection_free_futures.clear()
         if (changed or not self._called_callback) and (
             connection_slots_callback := self._connection_slots_callback
         ):
