@@ -76,7 +76,7 @@ def api_error_as_bleak_error(
         try:
             return await func(self, *args, **kwargs)
         except TimeoutAPIError as err:
-            raise asyncio.TimeoutError(str(err)) from err
+            raise TimeoutError(str(err)) from err
         except BluetoothConnectionDroppedError as ex:
             _LOGGER.debug(
                 "%s: BLE device disconnected during %s operation",
