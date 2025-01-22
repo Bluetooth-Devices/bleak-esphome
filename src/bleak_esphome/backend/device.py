@@ -29,12 +29,14 @@ class ESPHomeBluetoothDevice:
     available: bool = False
     cache: ESPHomeBluetoothCache = field(default_factory=ESPHomeBluetoothCache)
     _connection_slots_callback: Callable[[Allocations], None] | None = None
+    _called_callback: bool = False
 
     def async_subscribe_connection_slots(
         self, callback: Callable[[Allocations], None]
     ) -> None:
         """Subscribe to connection slot changes."""
         self._connection_slots_callback = callback
+        self._called_callback = False
 
     def async_update_ble_connection_limits(self, free: int, limit: int) -> None:
         """Update the BLE connection limits."""
@@ -46,20 +48,25 @@ class ESPHomeBluetoothDevice:
             free,
             limit,
         )
+        changed = (
+            free != self.ble_connections_free or limit != self.ble_connections_limit
+        )
         self.ble_connections_free = free
         self.ble_connections_limit = limit
-        if not free:
-            return
-        for fut in self._ble_connection_free_futures:
-            # If wait_for_ble_connections_free gets cancelled, it will
-            # leave a future in the list. We need to check if it's done
-            # before setting the result.
-            if not fut.done():
-                fut.set_result(free)
-        self._ble_connection_free_futures.clear()
-        if connection_slots_callback := self._connection_slots_callback:
+        if free:
+            for fut in self._ble_connection_free_futures:
+                # If wait_for_ble_connections_free gets cancelled, it will
+                # leave a future in the list. We need to check if it's done
+                # before setting the result.
+                if not fut.done():
+                    fut.set_result(free)
+            self._ble_connection_free_futures.clear()
+        if (changed or not self._called_callback) and (
+            connection_slots_callback := self._connection_slots_callback
+        ):
             # Currently we don't know which connections are in use, so we
             # just return an empty list.
+            self._called_callback = True
             connection_slots_callback(Allocations(self.mac_address, limit, free, []))
 
     def _wait_for_ble_connections_free_timeout(self, fut: asyncio.Future[int]) -> None:
