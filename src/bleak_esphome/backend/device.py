@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Callable, Optional
 
 from bleak_retry_connector import Allocations
 
@@ -28,7 +28,7 @@ class ESPHomeBluetoothDevice:
     loop: asyncio.AbstractEventLoop = field(default_factory=asyncio.get_running_loop)
     available: bool = False
     cache: ESPHomeBluetoothCache = field(default_factory=ESPHomeBluetoothCache)
-    _connection_slots_callback: Optional[Callable[[Allocations], None]] = None
+    _connection_slots_callback: Callable[[Allocations], None] | None = None
 
     def async_subscribe_connection_slots(
         self, callback: Callable[[Allocations], None]
