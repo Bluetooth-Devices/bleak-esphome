@@ -7,9 +7,7 @@ from functools import partial
 from typing import TYPE_CHECKING
 
 from aioesphomeapi import APIClient, BluetoothProxyFeature, DeviceInfo
-from habluetooth import (
-    HaBluetoothConnector,
-)
+from habluetooth import HaBluetoothConnector, get_manager
 
 from .backend.client import ESPHomeClient, ESPHomeClientData
 from .backend.device import ESPHomeBluetoothDevice
@@ -62,6 +60,9 @@ def connect_scanner(
     connectable = bool(feature_flags & BluetoothProxyFeature.ACTIVE_CONNECTIONS)
     bluetooth_device = ESPHomeBluetoothDevice(
         name, device_info.mac_address, available=available
+    )
+    bluetooth_device.async_subscribe_connection_slots(
+        get_manager().async_on_allocation_changed
     )
     _LOGGER.debug(
         "%s [%s]: Connecting scanner feature_flags=%s, connectable=%s",
