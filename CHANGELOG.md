@@ -1,5 +1,13 @@
 # Changelog
 
+## v2.2.0 (2025-01-28)
+
+### Feature
+
+
+- Add support for tracking bluetooth connection slot allocations (#74) ([`81fb130`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/81fb13001bf919962a26c51045c8acf4fd87f536))
+
+
 ## v2.1.1 (2025-01-22)
 
 ### Fix
