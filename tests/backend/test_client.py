@@ -523,7 +523,7 @@ async def test_bleak_client_connect_wait_for_connection_slot(
         task = asyncio.create_task(bleak_client.connect(dangerous_use_bleak_cache=True))
         await asyncio.sleep(0)
         mock_connect.assert_not_called()
-        client._bluetooth_device.async_update_ble_connection_limits(10, 10)
+        client._bluetooth_device.async_update_ble_connection_limits(10, 10, [])
         await asyncio.sleep(0)
         callback = mock_connect.call_args_list[0][0][1]
         # Mock connected with MTU of 23 and error code 0
