@@ -1,4 +1,5 @@
 """Bluetooth support for esphome."""
+
 from __future__ import annotations
 
 import logging
@@ -6,11 +7,8 @@ from functools import partial
 from typing import TYPE_CHECKING
 
 from aioesphomeapi import APIClient, BluetoothProxyFeature, DeviceInfo
-from habluetooth import (
-    HaBluetoothConnector,
-)
+from habluetooth import HaBluetoothConnector, get_manager
 
-from .backend.cache import ESPHomeBluetoothCache
 from .backend.client import ESPHomeClient, ESPHomeClientData
 from .backend.device import ESPHomeBluetoothDevice
 from .backend.scanner import ESPHomeScanner
@@ -38,10 +36,7 @@ def _can_connect(bluetooth_device: ESPHomeBluetoothDevice, source: str) -> bool:
 
 
 def connect_scanner(
-    cli: APIClient,
-    device_info: DeviceInfo,
-    cache: ESPHomeBluetoothCache,
-    available: bool,
+    cli: APIClient, device_info: DeviceInfo, available: bool
 ) -> ESPHomeClientData:
     """
     Connect scanner.
@@ -66,6 +61,9 @@ def connect_scanner(
     bluetooth_device = ESPHomeBluetoothDevice(
         name, device_info.mac_address, available=available
     )
+    bluetooth_device.async_subscribe_connection_slots(
+        get_manager().async_on_allocation_changed
+    )
     _LOGGER.debug(
         "%s [%s]: Connecting scanner feature_flags=%s, connectable=%s",
         name,
@@ -75,7 +73,6 @@ def connect_scanner(
     )
     client_data = ESPHomeClientData(
         bluetooth_device=bluetooth_device,
-        cache=cache,
         client=cli,
         device_info=device_info,
         api_version=cli.api_version,

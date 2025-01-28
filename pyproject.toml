@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "bleak-esphome"
-version = "1.0.0"
+version = "2.2.0"
 description = "Bleak backend of ESPHome"
 authors = ["J. Nick Koston <bluetooth@koston.org>"]
 license = "MIT"
@@ -23,16 +23,20 @@ packages = [
 "Changelog" = "https://github.com/bluetooth-devices/bleak-esphome/blob/main/CHANGELOG.md"
 
 [tool.poetry.dependencies]
-python = ">=3.10,<3.13"
-aioesphomeapi = ">=22.0.0"
+python = ">=3.11,<3.14"
+aioesphomeapi = ">=29"
 bleak = ">=0.21.1"
 bluetooth-data-tools = ">=1.18.0"
-habluetooth = ">=1.0.0"
+habluetooth = ">=3.10.0"
 lru-dict = ">=1.2.0"
+bleak-retry-connector = ">=3.8.0"
 
 [tool.poetry.group.dev.dependencies]
-pytest = "^7.0"
-pytest-cov = "^3.0"
+pytest = ">=7,<9"
+pytest-cov = ">=3,<7"
+pytest-codspeed = "^3.1.0"
+zeroconf = ">=0.136.2,<0.142.0"
+pytest-asyncio = "^0.25.0"
 
 [tool.poetry.group.docs]
 optional = true

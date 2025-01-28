@@ -1,4 +1,5 @@
 """BleakGATTDescriptorESPHome."""
+
 from __future__ import annotations
 
 from aioesphomeapi.model import BluetoothGATTDescriptor
