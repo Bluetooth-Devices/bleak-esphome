@@ -24,7 +24,7 @@ packages = [
 
 [tool.poetry.dependencies]
 python = ">=3.11,<3.14"
-aioesphomeapi = ">=27.0.0"
+aioesphomeapi = ">=29"
 bleak = ">=0.21.1"
 bluetooth-data-tools = ">=1.18.0"
 habluetooth = ">=3.10.0"
