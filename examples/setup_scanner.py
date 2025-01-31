@@ -3,23 +3,12 @@ import logging
 
 import aioesphomeapi
 import habluetooth
-from bleak_retry_connector import BleakSlotManager
-from bluetooth_adapters import get_adapters
 from zeroconf.asyncio import AsyncZeroconf
 
 import bleak_esphome
 
 ESPHOME_DEVICE = "XXXX.local."
 NOISE_PSK = ""
-
-
-async def setup_habluetooth() -> None:
-    """Setup the habluetooth manager."""
-    slot_manager = BleakSlotManager()
-    bluetooth_adapters = get_adapters()
-    manager = habluetooth.BluetoothManager(bluetooth_adapters, slot_manager)
-    habluetooth.set_manager(manager)
-    await manager.async_setup()
 
 
 async def setup_api_connection(
@@ -71,7 +60,7 @@ async def run() -> None:
     aiozc: AsyncZeroconf | None = None
     try:
         aiozc = AsyncZeroconf()
-        await setup_habluetooth()
+        await habluetooth.BluetoothManager().async_setup()
         reconnect_logic, cli = await setup_api_connection(aiozc)
         await run_application(cli)
     finally:

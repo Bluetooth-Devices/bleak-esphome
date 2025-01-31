@@ -22,15 +22,6 @@ ESPHOME_DEVICE = "XXXX.local."
 NOISE_PSK = ""
 
 
-async def setup_habluetooth() -> None:
-    """Setup the habluetooth manager."""
-    slot_manager = BleakSlotManager()
-    bluetooth_adapters = get_adapters()
-    manager = habluetooth.BluetoothManager(bluetooth_adapters, slot_manager)
-    habluetooth.set_manager(manager)
-    await manager.async_setup()
-
-
 async def setup_api_connection(
     aiozc: AsyncZeroconf,
 ) -> tuple[aioesphomeapi.ReconnectLogic, aioesphomeapi.APIClient]:
@@ -80,7 +71,7 @@ async def run() -> None:
     aiozc: AsyncZeroconf | None = None
     try:
         aiozc = AsyncZeroconf()
-        await setup_habluetooth()
+        await habluetooth.BluetoothManager().async_setup()
         reconnect_logic, cli = await setup_api_connection(aiozc)
         await run_application(cli)
     finally:
