@@ -1,5 +1,13 @@
 # Changelog
 
+## v2.5.0 (2025-01-31)
+
+### Feature
+
+
+- Reduce boilerplate in examples (#84) ([`03f3ff8`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/03f3ff83d8f5719a53628d542a47e71988eb4599))
+
+
 ## v2.4.0 (2025-01-31)
 
 ### Feature
