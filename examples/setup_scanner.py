@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from collections.abc import Callable
 
 import habluetooth
 from aioesphomeapi import APIClient, ReconnectLogic
@@ -16,13 +17,22 @@ async def setup_api_connection() -> tuple[ReconnectLogic, APIClient]:
     if NOISE_PSK:
         args["noise_psk"] = NOISE_PSK
     cli = APIClient(**args)
+    unregister_scanner: Callable[[], None] | None = None
 
     async def on_disconnect(expected_disconnect: bool) -> None:
-        pass
+        nonlocal unregister_scanner
+        if unregister_scanner is not None:
+            unregister_scanner()
+            unregister_scanner = None
 
     async def on_connect() -> None:
+        nonlocal unregister_scanner
         device_info = await cli.device_info()
-        bleak_esphome.connect_scanner(cli, device_info, True)
+        client_data = bleak_esphome.connect_scanner(cli, device_info, True)
+        scanner = client_data.scanner
+        assert scanner is not None  # noqa: S101
+        scanner.async_setup()
+        unregister_scanner = habluetooth.get_manager().async_register_scanner(scanner)
 
     reconnect_logic = ReconnectLogic(
         client=cli,
