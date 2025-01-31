@@ -10,8 +10,8 @@ Example usage with `bleak`:
 import asyncio
 import logging
 
-import aioesphomeapi
 import habluetooth
+from aioesphomeapi import APIClient, ReconnectLogic
 
 import bleak_esphome
 
@@ -19,14 +19,12 @@ ESPHOME_DEVICE = "XXXX.local."
 NOISE_PSK = ""
 
 
-async def setup_api_connection() -> (
-    tuple[aioesphomeapi.ReconnectLogic, aioesphomeapi.APIClient]
-):
+async def setup_api_connection() -> tuple[ReconnectLogic, APIClient]:
     """Setup the API connection."""
     args = {"address": ESPHOME_DEVICE, "port": 6053, "password": None}
     if NOISE_PSK:
         args["noise_psk"] = NOISE_PSK
-    cli = aioesphomeapi.APIClient(**args)
+    cli = APIClient(**args)
 
     async def on_disconnect(expected_disconnect: bool) -> None:
         pass
@@ -35,7 +33,7 @@ async def setup_api_connection() -> (
         device_info = await cli.device_info()
         bleak_esphome.connect_scanner(cli, device_info, True)
 
-    reconnect_logic = aioesphomeapi.ReconnectLogic(
+    reconnect_logic = ReconnectLogic(
         client=cli,
         on_disconnect=on_disconnect,
         on_connect=on_connect,
@@ -45,7 +43,7 @@ async def setup_api_connection() -> (
     return reconnect_logic, cli
 
 
-async def run_application(cli: aioesphomeapi.APIClient) -> None:
+async def run_application(cli: APIClient) -> None:
     """Test application here."""
     import bleak  # noqa
 
@@ -58,8 +56,8 @@ async def run_application(cli: aioesphomeapi.APIClient) -> None:
 
 async def run() -> None:
     """Run the main application."""
-    reconnect_logic: aioesphomeapi.ReconnectLogic | None = None
-    cli: aioesphomeapi.APIClient | None = None
+    reconnect_logic: ReconnectLogic | None = None
+    cli: APIClient | None = None
     try:
         await habluetooth.BluetoothManager().async_setup()
         reconnect_logic, cli = await setup_api_connection()
