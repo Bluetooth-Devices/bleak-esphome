@@ -4,18 +4,19 @@ import logging
 import aioesphomeapi
 import habluetooth
 from bleak_retry_connector import BleakSlotManager
-from bluetooth_adapters import BluetoothAdapters
+from bluetooth_adapters import get_adapters
 from zeroconf.asyncio import AsyncZeroconf
 
 import bleak_esphome
 
-ESPHOME_DEVICE = "kitchenalexproxy.local."
+ESPHOME_DEVICE = "XXXX.local."
+NOISE_PSK = ""
 
 
-async def setup_hablueooth() -> None:
+async def setup_habluetooth() -> None:
     """Setup the habluetooth manager."""
     slot_manager = BleakSlotManager()
-    bluetooth_adapters = BluetoothAdapters()
+    bluetooth_adapters = get_adapters()
     manager = habluetooth.BluetoothManager(bluetooth_adapters, slot_manager)
     habluetooth.set_manager(manager)
     await manager.async_setup()
@@ -25,11 +26,14 @@ async def setup_api_connection(
     aiozc: AsyncZeroconf,
 ) -> tuple[aioesphomeapi.ReconnectLogic, aioesphomeapi.APIClient]:
     """Setup the API connection."""
-    cli = aioesphomeapi.APIClient(
-        address=ESPHOME_DEVICE,
-        port=6052,
-        password=None,
-    )
+    args = {
+        "address": ESPHOME_DEVICE,
+        "port": 6053,
+        "password": None,
+    }
+    if NOISE_PSK:
+        args["noise_psk"] = NOISE_PSK
+    cli = aioesphomeapi.APIClient(**args)
 
     async def on_disconnect(expected_disconnect: bool) -> None:
         pass
@@ -44,29 +48,40 @@ async def setup_api_connection(
         on_connect=on_connect,
         zeroconf_instance=aiozc,
     )
+    await reconnect_logic.start()
 
     return reconnect_logic, cli
 
 
 async def run_application(cli: aioesphomeapi.APIClient) -> None:
     """Test application here."""
+    import bleak  # noqa
+
+    # Use bleak normally here
+
+    # Wait forever
     event = asyncio.Event()
     await event.wait()
 
 
 async def run() -> None:
     """Run the main application."""
+    reconnect_logic: aioesphomeapi.ReconnectLogic | None = None
+    cli: aioesphomeapi.APIClient | None = None
+    aiozc: AsyncZeroconf | None = None
     try:
         aiozc = AsyncZeroconf()
-        await setup_hablueooth()
+        await setup_habluetooth()
         reconnect_logic, cli = await setup_api_connection(aiozc)
         await run_application(cli)
     finally:
-        await reconnect_logic.stop()
-        await cli.disconnect()
-        await aiozc.async_close()
+        if reconnect_logic is not None:
+            await reconnect_logic.stop()
+        if cli is not None:
+            await cli.disconnect()
+        if aiozc is not None:
+            await aiozc.async_close()
 
 
 logging.basicConfig(level=logging.DEBUG)
-
 asyncio.run(run())
