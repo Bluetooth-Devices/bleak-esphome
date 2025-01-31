@@ -91,9 +91,9 @@ async def run() -> None:
     try:
         await habluetooth.BluetoothManager().async_setup()
         for device in ESPHOME_DEVICES:
-            esphome_connections.append(await setup_api_connection(
-                device["address"], device["noise_psk"]
-            ))
+            esphome_connections.append(
+                await setup_api_connection(device["address"], device["noise_psk"])
+            )
         await run_application(cli)
     finally:
         for reconnect_logic, cli in esphome_connections:
