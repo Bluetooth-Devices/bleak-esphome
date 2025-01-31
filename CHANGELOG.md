@@ -1,5 +1,13 @@
 # Changelog
 
+## v2.4.0 (2025-01-31)
+
+### Feature
+
+
+- Simplify examples when using new habluetooth (#83) ([`1b38b3e`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/1b38b3ef5f95b9df3fc3d71b123dadacd451852d))
+
+
 ## v2.3.0 (2025-01-31)
 
 ### Feature
