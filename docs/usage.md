@@ -7,25 +7,44 @@ Assuming that you've followed the {ref}`installations steps <installation>`, you
 Example usage with `bleak`:
 
 ```python
+from __future__ import annotations
+
 import asyncio
 import logging
 from collections.abc import Callable
+from typing import TypedDict
 
 import habluetooth
 from aioesphomeapi import APIClient, ReconnectLogic
 
 import bleak_esphome
 
-ESPHOME_DEVICE = "XXXX.local."
-NOISE_PSK = ""
+
+class ESPHomeDeviceConfig(TypedDict):
+    """Configuration for an ESPHome device."""
+
+    address: str
+    noise_psk: str | None
 
 
-async def setup_api_connection() -> tuple[ReconnectLogic, APIClient]:
+# An unlimited number of devices can be added here
+ESPHOME_DEVICES: list[ESPHomeDeviceConfig] = [
+    {
+        "address": "XXXX.local.",
+        "noise_psk": None,
+    },
+    {
+        "address": "YYYY.local.",
+        "noise_psk": None,
+    },
+]
+
+
+async def setup_api_connection(
+    address: str, noise_psk: str | None = None
+) -> tuple[ReconnectLogic, APIClient]:
     """Setup the API connection."""
-    args = {"address": ESPHOME_DEVICE, "port": 6053, "password": None}
-    if NOISE_PSK:
-        args["noise_psk"] = NOISE_PSK
-    cli = APIClient(**args)
+    cli = APIClient(address=address, port=6053, password=None, noise_psk=noise_psk)
     unregister_scanner: Callable[[], None] | None = None
 
     async def on_disconnect(expected_disconnect: bool) -> None:
@@ -66,16 +85,20 @@ async def run_application(cli: APIClient) -> None:
 
 async def run() -> None:
     """Run the main application."""
+    esphome_connections: list[tuple[ReconnectLogic, APIClient]] = []
     reconnect_logic: ReconnectLogic | None = None
     cli: APIClient | None = None
     try:
         await habluetooth.BluetoothManager().async_setup()
-        reconnect_logic, cli = await setup_api_connection()
+        for device in ESPHOME_DEVICES:
+            reconnect_logic, cli = await setup_api_connection(
+                device["address"], device["noise_psk"]
+            )
+            esphome_connections.append((reconnect_logic, cli))
         await run_application(cli)
     finally:
-        if reconnect_logic is not None:
+        for reconnect_logic, cli in esphome_connections:
             await reconnect_logic.stop()
-        if cli is not None:
             await cli.disconnect()
 
 
