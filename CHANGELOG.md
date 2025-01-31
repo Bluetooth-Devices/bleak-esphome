@@ -1,5 +1,13 @@
 # Changelog
 
+## v2.6.0 (2025-01-31)
+
+### Feature
+
+
+- Update example to show how to use multiple devices (#85) ([`4a97019`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/4a97019bcf8baa7bfd4894d643d3f6c300de7603))
+
+
 ## v2.5.0 (2025-01-31)
 
 ### Feature
