@@ -1,5 +1,13 @@
 # Changelog
 
+## v2.3.0 (2025-01-31)
+
+### Feature
+
+
+- Add example on connecting the scanner (#82) ([`b2d0eed`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/b2d0eedb5e22a448d41c2e65cfc4998a3e3972e2))
+
+
 ## v2.2.0 (2025-01-28)
 
 ### Feature
