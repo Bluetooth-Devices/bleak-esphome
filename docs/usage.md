@@ -12,8 +12,6 @@ import logging
 
 import aioesphomeapi
 import habluetooth
-from bleak_retry_connector import BleakSlotManager
-from bluetooth_adapters import get_adapters
 from zeroconf.asyncio import AsyncZeroconf
 
 import bleak_esphome
@@ -85,5 +83,4 @@ async def run() -> None:
 
 logging.basicConfig(level=logging.DEBUG)
 asyncio.run(run())
-
 ```
