@@ -1,12 +1,3 @@
-(usage)=
-
-# Usage
-
-Assuming that you've followed the {ref}`installations steps <installation>`, you're now ready to use this package.
-
-Example usage with `bleak`:
-
-```python
 import asyncio
 import logging
 
@@ -94,5 +85,3 @@ async def run() -> None:
 
 logging.basicConfig(level=logging.DEBUG)
 asyncio.run(run())
-
-```
