@@ -38,7 +38,16 @@ class ESPHomeScanner(BaseHaRemoteScanner):
     ) -> None:
         """Call the registered callback."""
         now = MONOTONIC_TIME()
-        for adv in raw.advertisements:
+        advertisements = raw.advertisements
+        # We avoid __iter__ on the protobuf object because
+        # the the protobuf library has an expensive internal
+        # debug logging when it reaches the end of a repeated field.
+        # https://github.com/Bluetooth-Devices/bleak-esphome/pull/90
+        # To work around this we use a for loop to iterate over
+        # the repeated field since `PyUpb_RepeatedContainer_Subscript`
+        # does not trigger the debug logging.
+        for i in range(len(advertisements)):
+            adv = advertisements[i]
             self._async_on_advertisement(
                 int_to_bluetooth_address(adv.address),
                 adv.rssi,
