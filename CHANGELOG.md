@@ -1,5 +1,13 @@
 # Changelog
 
+## v2.7.0 (2025-02-02)
+
+### Feature
+
+
+- Avoid protobuf repeated container overhead (#90) ([`4a99c14`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/4a99c14613c3243716e237d53816d821b12de2f4))
+
+
 ## v2.6.0 (2025-01-31)
 
 ### Feature
