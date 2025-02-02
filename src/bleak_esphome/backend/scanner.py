@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any, ClassVar
+
 from aioesphomeapi import BluetoothLEAdvertisement, BluetoothLERawAdvertisementsResponse
 from bluetooth_data_tools import (
     int_to_bluetooth_address,
@@ -16,6 +18,7 @@ from habluetooth import BaseHaRemoteScanner
 class ESPHomeScanner(BaseHaRemoteScanner):
     """Scanner for esphome."""
 
+    _address_type_cache: ClassVar[dict[int, dict[str, Any]]] = {}
     __slots__ = ()
 
     def async_on_advertisement(self, adv: BluetoothLEAdvertisement) -> None:
@@ -48,10 +51,14 @@ class ESPHomeScanner(BaseHaRemoteScanner):
         # does not trigger the debug logging.
         for i in range(len(advertisements)):
             adv = advertisements[i]
+            address_type = adv.address_type
+            if not (details := self._address_type_cache.get(address_type)):
+                details = {"address_type": address_type}
+                self._address_type_cache[address_type] = details
             self._async_on_advertisement(
                 int_to_bluetooth_address(adv.address),
                 adv.rssi,
                 *parse_advertisement_data_tuple((adv.data,)),
-                {"address_type": adv.address_type},
+                details,
                 now,
             )
