@@ -65,7 +65,7 @@ _P = ParamSpec("_P")
 
 
 def api_error_as_bleak_error(
-    func: Callable[Concatenate[_ESPHomeClient, _P], Coroutine[Any, Any, _R]]
+    func: Callable[Concatenate[_ESPHomeClient, _P], Coroutine[Any, Any, _R]],
 ) -> Callable[Concatenate[_ESPHomeClient, _P], Coroutine[Any, Any, _R]]:
     """Define a wrapper throw esphome api errors as BleakErrors."""
 
