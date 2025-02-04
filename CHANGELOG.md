@@ -1,5 +1,13 @@
 # Changelog
 
+## v2.7.1 (2025-02-04)
+
+### Fix
+
+
+- Update poetry to v2 (#93) ([`f1edae5`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/f1edae54bba1320c6f8292e837f14720baa79f13))
+
+
 ## v2.7.0 (2025-02-02)
 
 ### Feature
