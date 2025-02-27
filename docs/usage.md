@@ -31,15 +31,20 @@ ESPHOME_DEVICES: list[ESPHomeDeviceConfig] = [
 ]
 
 
-async def run_application() -> None:
-    """Test application here."""
-    import bleak  # noqa
+async def example_app() -> None:
+    """Example application here."""
+    import bleak
 
     # Use bleak normally here
+    devices = await bleak.BleakScanner.discover(return_adv=True)
+    for d, a in devices.values():
+        print()
+        print(d)
+        print("-" * len(str(d)))
+        print(a)
 
     # Wait forever
-    event = asyncio.Event()
-    await event.wait()
+    await asyncio.Event().wait()
 
 
 async def run() -> None:
@@ -51,7 +56,7 @@ async def run() -> None:
             (asyncio.create_task(conn.start()) for conn in connections),
             timeout=CONNECTION_TIMEOUT,
         )
-        await run_application()
+        await example_app()
     finally:
         await asyncio.gather(*(conn.stop() for conn in connections))
 
