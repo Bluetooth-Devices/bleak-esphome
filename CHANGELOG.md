@@ -1,5 +1,13 @@
 # Changelog
 
+## v2.9.0 (2025-02-27)
+
+### Feature
+
+
+- Use bluetooth_mac_address for the source if available (#100) ([`df7f72c`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/df7f72c18234ab95f2fcdc4322bab35d2065294c))
+
+
 ## v2.8.0 (2025-02-27)
 
 ### Feature
