@@ -22,7 +22,7 @@ class APIConnectionManager:
 
     def __init__(self, config: ESPHomeDeviceConfig) -> None:
         """Initialize the API connection manager."""
-        self._address = config
+        self._address = config["address"]
         self._noise_psk = config["noise_psk"]
         self._cli: APIClient = APIClient(
             address=self._address, port=6053, password=None, noise_psk=self._noise_psk
