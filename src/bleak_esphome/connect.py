@@ -52,7 +52,7 @@ def connect_scanner(
     with its own set. If it does so, it must do so before calling
     ESPHomeClientData.scanner.async_setup().
     """
-    source = device_info.mac_address
+    source = device_info.bluetooth_mac_address or device_info.mac_address
     name = device_info.name
     if TYPE_CHECKING:
         assert cli.api_version is not None
