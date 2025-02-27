@@ -35,6 +35,8 @@ async def example_app() -> None:
     """Example application here."""
     import bleak
 
+    await asyncio.sleep(5) # Give time for advertisements to be received
+
     # Use bleak normally here
     devices = await bleak.BleakScanner.discover(return_adv=True)
     for d, a in devices.values():
