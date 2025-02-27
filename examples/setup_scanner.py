@@ -5,12 +5,12 @@ import logging
 
 import habluetooth
 
-import bleak_esphome
+from bleak_esphome import APIConnectionManager, ESPHomeDeviceConfig
 
 CONNECTION_TIMEOUT = 5
 
 # An unlimited number of devices can be added here
-ESPHOME_DEVICES: list[bleak_esphome.ESPHomeDeviceConfig] = [
+ESPHOME_DEVICES: list[ESPHomeDeviceConfig] = [
     {
         "address": "XXXX.local.",
         "noise_psk": None,
@@ -35,11 +35,9 @@ async def run_application() -> None:
 
 async def run() -> None:
     """Run the main application."""
-    connections = [
-        bleak_esphome.APIConnectionManager(device) for device in ESPHOME_DEVICES
-    ]
+    connections = [APIConnectionManager(device) for device in ESPHOME_DEVICES]
+    await habluetooth.BluetoothManager().async_setup()
     try:
-        await habluetooth.BluetoothManager().async_setup()
         await asyncio.wait(
             (asyncio.create_task(conn.start()) for conn in connections),
             timeout=CONNECTION_TIMEOUT,
