@@ -1,5 +1,13 @@
 # Changelog
 
+## v2.8.0 (2025-02-27)
+
+### Feature
+
+
+- Simplify examples (#99) ([`c67c856`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/c67c856207724f7ea81fd2f924a3f9940ddd58d8))
+
+
 ## v2.7.1 (2025-02-04)
 
 ### Fix
