@@ -58,9 +58,7 @@ def connect_scanner(
         assert cli.api_version is not None
     feature_flags = device_info.bluetooth_proxy_feature_flags_compat(cli.api_version)
     connectable = bool(feature_flags & BluetoothProxyFeature.ACTIVE_CONNECTIONS)
-    bluetooth_device = ESPHomeBluetoothDevice(
-        name, device_info.mac_address, available=available
-    )
+    bluetooth_device = ESPHomeBluetoothDevice(name, source, available=available)
     bluetooth_device.async_subscribe_connection_slots(
         get_manager().async_on_allocation_changed
     )
