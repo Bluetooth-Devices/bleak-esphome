@@ -101,7 +101,7 @@ jobs:
       contents: write
     outputs:
       released: ${{ steps.release.outputs.released }}
-      newest_release_tag: ${{ steps.release_tag.outputs.newest_release_tag }}
+      newest_release_tag: ${{ steps.release.outputs.tag }}
 
     steps:
       - uses: actions/checkout@v4
@@ -133,15 +133,6 @@ jobs:
         if: steps.release.outputs.released == 'true'
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Install python-semantic-release
-        run: python3 -m pip install python-semantic-release==7.34.6
-
-      - name: Get Release Tag
-        id: release_tag
-        shell: bash
-        run: |
-          echo "newest_release_tag=$(semantic-release print-version --current)" >> $GITHUB_OUTPUT
 
   build_wheels:
     needs: [release]
@@ -184,7 +175,7 @@ jobs:
         run: python -m cibuildwheel --output-dir wheelhouse
         # to supply options, put them in 'env', like:
         env:
-          CIBW_SKIP: cp36-* cp37-* cp38-* cp39-* cp310-* pp36-* pp37-* pp38-* pp39-* pp310-*  ${{ matrix.musl == 'musllinux' && '*manylinux*' || '*musllinux*' }}
+          CIBW_SKIP: cp36-* cp37-* cp38-* cp39-* cp310-* pp* ${{ matrix.musl == 'musllinux' && '*manylinux*' || '*musllinux*' }}
           CIBW_BEFORE_ALL_LINUX: apt-get install -y gcc || yum install -y gcc || apk add gcc
           CIBW_BUILD_VERBOSITY: 3
           REQUIRE_CYTHON: 1
@@ -199,6 +190,10 @@ jobs:
     needs: [build_wheels]
     runs-on: ubuntu-latest
     environment: release
+
+    permissions:
+      id-token: write
+      contents: write
 
     steps:
       - uses: actions/download-artifact@v4
