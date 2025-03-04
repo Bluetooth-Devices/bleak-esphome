@@ -1,5 +1,13 @@
 # Changelog
 
+## v2.10.2 (2025-03-04)
+
+### Bug fixes
+
+
+- Wheel builds (#104) ([`aa11ec3`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/aa11ec370e58572d79dda34e397013b0006d8ca7))
+
+
 ## v2.10.1 (2025-03-04)
 
 ### Bug fixes
