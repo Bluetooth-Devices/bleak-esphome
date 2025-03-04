@@ -159,7 +159,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: "v${{ needs.release.outputs.newest_release_tag }}"
+          ref: ${{ needs.release.outputs.newest_release_tag }}
           fetch-depth: 0
 
       # Used to host cibuildwheel
@@ -176,8 +176,6 @@ jobs:
         # to supply options, put them in 'env', like:
         env:
           CIBW_SKIP: cp36-* cp37-* cp38-* cp39-* cp310-* pp* ${{ matrix.musl == 'musllinux' && '*manylinux*' || '*musllinux*' }}
-          CIBW_BEFORE_ALL_LINUX: apt-get install -y gcc || yum install -y gcc || apk add gcc
-          CIBW_BUILD_VERBOSITY: 3
           REQUIRE_CYTHON: 1
           CIBW_ARCHS_LINUX: ${{ matrix.os == 'ubuntu-24.04-arm' && 'aarch64' || 'auto' }}
 
