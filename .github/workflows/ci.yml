@@ -184,7 +184,7 @@ jobs:
         run: python -m cibuildwheel --output-dir wheelhouse
         # to supply options, put them in 'env', like:
         env:
-          CIBW_SKIP: cp36-* cp37-* cp38-* cp39-* cp310-* pp36-* pp37-* pp38-* pp39-* pp310-*  ${{ matrix.musl == 'musllinux' && '*manylinux*' || '*musllinux*' }}
+          CIBW_SKIP: cp36-* cp37-* cp38-* cp39-* cp310-* pp* ${{ matrix.musl == 'musllinux' && '*manylinux*' || '*musllinux*' }}
           CIBW_BEFORE_ALL_LINUX: apt-get install -y gcc || yum install -y gcc || apk add gcc
           CIBW_BUILD_VERBOSITY: 3
           REQUIRE_CYTHON: 1
@@ -199,6 +199,10 @@ jobs:
     needs: [build_wheels]
     runs-on: ubuntu-latest
     environment: release
+
+    permissions:
+      id-token: write
+      contents: write
 
     steps:
       - uses: actions/download-artifact@v4
