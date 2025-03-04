@@ -1,5 +1,13 @@
 # Changelog
 
+## v2.10.1 (2025-03-04)
+
+### Bug fixes
+
+
+- Add missing permissions to upload wheels (#103) ([`12b396f`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/12b396f8857b89b23ed978202eca37be33b7cf38))
+
+
 ## v2.10.0 (2025-03-04)
 
 ### Features
