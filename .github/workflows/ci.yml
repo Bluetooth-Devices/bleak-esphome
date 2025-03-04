@@ -41,6 +41,11 @@ jobs:
           - "3.13"
         os:
           - ubuntu-latest
+          - macOS-latest
+          - windows-latest
+        extension:
+          - "skip_cython"
+          - "use_cython"
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -50,7 +55,12 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - uses: snok/install-poetry@v1.4.1
       - name: Install Dependencies
-        run: poetry install
+        run: |
+          if [ "${{ matrix.extension }}" = "skip_cython" ]; then
+            SKIP_CYTHON=1 poetry install --only=main,dev
+          else
+            REQUIRE_CYTHON=1 poetry install --only=main,dev
+          fi
         shell: bash
       - name: Test with Pytest
         run: poetry run pytest --cov-report=xml
@@ -60,24 +70,24 @@ jobs:
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
 
-  benchmarks:
-    name: Run benchmarks
-    runs-on: ubuntu-22.04
+  benchmark:
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - name: Setup Python 3.13
+        uses: actions/setup-python@v5
         with:
-          python-version: "3.13"
-          cache: "pip" # caching pip dependencies
+          python-version: 3.13
       - uses: snok/install-poetry@v1.4.1
       - name: Install Dependencies
-        run: poetry install
+        run: |
+          REQUIRE_CYTHON=1 poetry install --only=main,dev
         shell: bash
       - name: Run benchmarks
         uses: CodSpeedHQ/action@v3
         with:
           token: ${{ secrets.CODSPEED_TOKEN }}
-          run: poetry run pytest --no-cov tests/ --codspeed
+          run: poetry run pytest --no-cov -vvvvv --codspeed
 
   release:
     needs:
@@ -91,6 +101,9 @@ jobs:
     permissions:
       id-token: write
       contents: write
+    outputs:
+      released: ${{ steps.release.outputs.released }}
+      newest_release_tag: ${{ steps.release_tag.outputs.newest_release_tag }}
 
     steps:
       - uses: actions/checkout@v4
@@ -100,14 +113,14 @@ jobs:
 
       # Do a dry run of PSR
       - name: Test release
-        uses: bluetooth-devices/python-semantic-release@311
+        uses: python-semantic-release/python-semantic-release@v9.21.0
         if: github.ref_name != 'main'
         with:
           root_options: --noop
 
       # On main branch: actual PSR + upload to PyPI & GitHub
       - name: Release
-        uses: bluetooth-devices/python-semantic-release@311
+        uses: python-semantic-release/python-semantic-release@v9.21.0
         id: release
         if: github.ref_name == 'main'
         with:
@@ -122,3 +135,82 @@ jobs:
         if: steps.release.outputs.released == 'true'
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install python-semantic-release
+        run: python3 -m pip install python-semantic-release==7.34.6
+
+      - name: Get Release Tag
+        id: release_tag
+        shell: bash
+        run: |
+          echo "newest_release_tag=$(semantic-release print-version --current)" >> $GITHUB_OUTPUT
+
+  build_wheels:
+    needs: [release]
+    if: needs.release.outputs.released == 'true'
+
+    name: Build wheels on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os:
+          - ubuntu-24.04-arm
+          - macos-latest
+          - ubuntu-latest
+          - windows-latest
+        musl: ["", "musllinux"]
+        exclude:
+          - os: windows-latest
+            musl: "musllinux"
+          - os: macos-latest
+            musl: "musllinux"
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: "v${{ needs.release.outputs.newest_release_tag }}"
+          fetch-depth: 0
+
+      # Used to host cibuildwheel
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install cibuildwheel
+        run: python -m pip install cibuildwheel==2.23.0
+
+      - name: Build wheels
+        run: python -m cibuildwheel --output-dir wheelhouse
+        # to supply options, put them in 'env', like:
+        env:
+          CIBW_SKIP: cp36-* cp37-* cp38-* cp39-* cp310-* pp36-* pp37-* pp38-* pp39-* pp310-*  ${{ matrix.musl == 'musllinux' && '*manylinux*' || '*musllinux*' }}
+          CIBW_BEFORE_ALL_LINUX: apt-get install -y gcc || yum install -y gcc || apk add gcc
+          CIBW_BUILD_VERBOSITY: 3
+          REQUIRE_CYTHON: 1
+          CIBW_ARCHS_LINUX: ${{ matrix.os == 'ubuntu-24.04-arm' && 'aarch64' || 'auto' }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          path: ./wheelhouse/*.whl
+          name: wheels-${{ matrix.os }}-${{ matrix.musl }}
+
+  upload_pypi:
+    needs: [build_wheels]
+    runs-on: ubuntu-latest
+    environment: release
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          # unpacks default artifact into dist/
+          # if `name: artifact` is omitted, the action will create extra parent dir
+          path: dist
+          pattern: wheels-*
+          merge-multiple: true
+
+      - uses: pypa/gh-action-pypi-publish@v1.12.4
+        with:
+          user: __token__
+
+          # To test: repository_url: https://test.pypi.org/legacy/
