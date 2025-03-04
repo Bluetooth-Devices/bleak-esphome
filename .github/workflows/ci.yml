@@ -159,7 +159,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: "v${{ needs.release.outputs.newest_release_tag }}"
+          ref: ${{ needs.release.outputs.newest_release_tag }}
           fetch-depth: 0
 
       # Used to host cibuildwheel
