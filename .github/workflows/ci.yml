@@ -101,7 +101,7 @@ jobs:
       contents: write
     outputs:
       released: ${{ steps.release.outputs.released }}
-      newest_release_tag: ${{ steps.release_tag.outputs.newest_release_tag }}
+      newest_release_tag: ${{ steps.release.outputs.tag }}
 
     steps:
       - uses: actions/checkout@v4
@@ -133,15 +133,6 @@ jobs:
         if: steps.release.outputs.released == 'true'
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Install python-semantic-release
-        run: python3 -m pip install python-semantic-release==7.34.6
-
-      - name: Get Release Tag
-        id: release_tag
-        shell: bash
-        run: |
-          echo "newest_release_tag=$(semantic-release print-version --current)" >> $GITHUB_OUTPUT
 
   build_wheels:
     needs: [release]
