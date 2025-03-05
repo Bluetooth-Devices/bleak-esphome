@@ -5,6 +5,25 @@ import os
 from distutils.command.build_ext import build_ext
 from typing import Any
 
+try:
+    from setuptools import Extension
+except ImportError:
+    from distutils.core import Extension
+
+
+TO_CYTHONIZE = ["src/bleak_esphome/backend/scanner.py"]
+
+EXTENSIONS = [
+    Extension(
+        ext.removeprefix("src/").removesuffix(".py").replace("/", "."),
+        [ext],
+        language="c",
+        extra_compile_args=["-O3", "-g0"],
+    )
+    for ext in TO_CYTHONIZE
+]
+
+
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -30,9 +49,7 @@ def build(setup_kwargs: Any) -> None:
         setup_kwargs.update(
             {
                 "ext_modules": cythonize(
-                    [
-                        "src/bleak_esphome/backend/scanner.py",
-                    ],
+                    EXTENSIONS,
                     compiler_directives={"language_level": "3"},  # Python 3
                 ),
                 "cmdclass": {"build_ext": BuildExt},
