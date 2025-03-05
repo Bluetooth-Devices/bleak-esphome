@@ -7,7 +7,7 @@
 project = "bleak-esphome"
 copyright = "2023, J. Nick Koston"
 author = "J. Nick Koston"
-release = "2.10.2"
+release = "2.11.0"
 
 # General configuration
 extensions = [

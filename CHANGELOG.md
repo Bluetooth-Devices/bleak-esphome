@@ -1,5 +1,13 @@
 # Changelog
 
+## v2.11.0 (2025-03-05)
+
+### Features
+
+
+- Reduce size of wheels (#105) ([`a52ad36`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/a52ad36a8838a8516b7d533f0a5080c50ad9db7e))
+
+
 ## v2.10.2 (2025-03-04)
 
 ### Bug fixes
