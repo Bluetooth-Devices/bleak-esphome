@@ -39,6 +39,7 @@ class ESPHomeScanner(BaseHaRemoteScanner):
         """Call the registered callback."""
         now = MONOTONIC_TIME()
         advertisements = raw.advertisements
+        async_on_advertisement = self._async_on_advertisement
         # We avoid __iter__ on the protobuf object because
         # the the protobuf library has an expensive internal
         # debug logging when it reaches the end of a repeated field.
@@ -49,7 +50,7 @@ class ESPHomeScanner(BaseHaRemoteScanner):
         for i in range(len(advertisements)):
             adv = advertisements[i]
             parsed: tuple = parse_advertisement_data_tuple((adv.data,))  # type: ignore[type-arg]
-            self._async_on_advertisement(
+            async_on_advertisement(
                 int_to_bluetooth_address(adv.address),
                 adv.rssi,
                 parsed[0],
