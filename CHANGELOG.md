@@ -1,5 +1,13 @@
 # Changelog
 
+## v2.12.0 (2025-03-13)
+
+### Features
+
+
+- Only look up _async_on_advertisement once per advertisement group (#108) ([`f7a001d`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/f7a001d4288d0fec56a7467ebb6759c2658c40dd))
+
+
 ## v2.11.0 (2025-03-05)
 
 ### Features

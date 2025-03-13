@@ -1,6 +1,6 @@
 [project]
 name = "bleak-esphome"
-version = "2.11.0"
+version = "2.12.0"
 description = "Bleak backend of ESPHome"
 authors = [{ name = "J. Nick Koston", email = "bluetooth@koston.org" }]
 license.text = "MIT"
