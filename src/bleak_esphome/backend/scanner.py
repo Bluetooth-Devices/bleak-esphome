@@ -38,8 +38,7 @@ class ESPHomeScanner(BaseHaRemoteScanner):
     ) -> None:
         """Call the registered callback."""
         now = MONOTONIC_TIME()
-        fields = raw.ListFields()
-        advertisements = raw.advertisements
+        advertisements = raw.ListFields()[0][1]
         async_on_advertisement = self._async_on_advertisement
         # We avoid __iter__ on the protobuf object because
         # the the protobuf library has an expensive internal
