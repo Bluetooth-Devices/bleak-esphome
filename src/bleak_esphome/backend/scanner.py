@@ -38,7 +38,7 @@ class ESPHomeScanner(BaseHaRemoteScanner):
     ) -> None:
         """Call the registered callback."""
         now = MONOTONIC_TIME()
-        advertisements = raw.ListFields()[0][1]
+        advertisements = raw.advertisements
         async_on_advertisement = self._async_on_advertisement
         # We avoid __iter__ on the protobuf object because
         # the the protobuf library has an expensive internal
@@ -48,16 +48,26 @@ class ESPHomeScanner(BaseHaRemoteScanner):
         # the repeated field since `PyUpb_RepeatedContainer_Subscript`
         # does not trigger the debug logging.
         for i in range(len(advertisements)):
-            adv = advertisements[i]
-            parsed: tuple = parse_advertisement_data_tuple((adv.data,))  # type: ignore[type-arg]
+            adv = advertisements[i].ListFields()
+            for field_value in adv:
+                field = field_value[0]
+                if field.name == "data":
+                    data = field_value[1]
+                elif field.name == "address":
+                    address = field_value[1]
+                elif field.name == "address_type":
+                    address_type = field_value[1]
+                elif field.name == "rssi":
+                    rssi = field_value[1]
+            parsed: tuple = parse_advertisement_data_tuple((data,))  # type: ignore[type-arg]
             async_on_advertisement(
-                int_to_bluetooth_address(adv.address),
-                adv.rssi,
+                int_to_bluetooth_address(address),
+                rssi,
                 parsed[0],
                 parsed[1],
                 parsed[2],
                 parsed[3],
                 parsed[4],
-                {"address_type": adv.address_type},
+                {"address_type": address_type},
                 now,
             )
