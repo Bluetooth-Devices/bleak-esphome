@@ -5,7 +5,6 @@ from __future__ import annotations
 from aioesphomeapi import BluetoothLEAdvertisement, BluetoothLERawAdvertisementsResponse
 from bluetooth_data_tools import (
     int_to_bluetooth_address,
-    parse_advertisement_data_tuple,
 )
 from bluetooth_data_tools import (
     monotonic_time_coarse as MONOTONIC_TIME,
@@ -37,9 +36,7 @@ class ESPHomeScanner(BaseHaRemoteScanner):
         self, raw: BluetoothLERawAdvertisementsResponse
     ) -> None:
         """Call the registered callback."""
-        now = MONOTONIC_TIME()
         advertisements = raw.advertisements
-        async_on_advertisement = self._async_on_advertisement
         # We avoid __iter__ on the protobuf object because
         # the the protobuf library has an expensive internal
         # debug logging when it reaches the end of a repeated field.
@@ -47,17 +44,10 @@ class ESPHomeScanner(BaseHaRemoteScanner):
         # To work around this we use a for loop to iterate over
         # the repeated field since `PyUpb_RepeatedContainer_Subscript`
         # does not trigger the debug logging.
-        for i in range(len(advertisements)):
-            adv = advertisements[i]
-            parsed: tuple = parse_advertisement_data_tuple((adv.data,))  # type: ignore[type-arg]
-            async_on_advertisement(
-                int_to_bluetooth_address(adv.address),
-                adv.rssi,
-                parsed[0],
-                parsed[1],
-                parsed[2],
-                parsed[3],
-                parsed[4],
-                {"address_type": adv.address_type},
-                now,
-            )
+        self._async_on_raw_advertisement(
+            [
+                (adv.address, adv.rssi, (adv.data,), {"address_type": adv.address_type})
+                for i in range(len(advertisements))
+                if (adv := advertisements[i]) is not None
+            ]
+        )
