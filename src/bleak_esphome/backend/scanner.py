@@ -44,7 +44,7 @@ class ESPHomeScanner(BaseHaRemoteScanner):
         # To work around this we use a for loop to iterate over
         # the repeated field since `PyUpb_RepeatedContainer_Subscript`
         # does not trigger the debug logging.
-        self._async_on_raw_advertisement(
+        self._async_on_raw_advertisements(
             [
                 (
                     int_to_bluetooth_address(adv.address),

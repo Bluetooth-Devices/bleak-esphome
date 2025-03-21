@@ -845,14 +845,14 @@ files = [
 
 [[package]]
 name = "habluetooth"
-version = "3.33.0"
+version = "3.34.0"
 description = "High availability Bluetooth"
 optional = false
 python-versions = ">=3.11"
 groups = ["main"]
 files = [
-    {file = "habluetooth-3.33.0-cp313-cp313-manylinux_2_36_x86_64.whl", hash = "sha256:8b21d9ca464a2367344490b518c10db784bdfb38752635ec4fe05c7103be3f2e"},
-    {file = "habluetooth-3.33.0.tar.gz", hash = "sha256:7e26fba771bd213043dcf7a6158d260291fde4acc5a7ab7635b8f980e2e7dae7"},
+    {file = "habluetooth-3.34.0-cp313-cp313-manylinux_2_36_x86_64.whl", hash = "sha256:fe576fad252d0d0653603f703b760f077a7bb71d98baeac0ba2e07b0a5daa5a0"},
+    {file = "habluetooth-3.34.0.tar.gz", hash = "sha256:e50d4376792ea0ee8ffcfa6b8f8bff9c46b55fbe30ea4e324c73ff32f9e83f10"},
 ]
 
 [package.dependencies]
@@ -2381,4 +2381,4 @@ ifaddr = ">=0.1.7"
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.11,<3.14"
-content-hash = "13e44180c6d104143bd97c10c0e48536ee0932ad58f0e66154cc4ac582529879"
+content-hash = "9606f34c988aab730a692d31fff966c4c74c4ccb98f517d01ece1726ea1effc9"
