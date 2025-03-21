@@ -46,7 +46,12 @@ class ESPHomeScanner(BaseHaRemoteScanner):
         # does not trigger the debug logging.
         self._async_on_raw_advertisement(
             [
-                (adv.address, adv.rssi, (adv.data,), {"address_type": adv.address_type})
+                (
+                    int_to_bluetooth_address(adv.address),
+                    adv.rssi,
+                    (adv.data,),
+                    {"address_type": adv.address_type},
+                )
                 for i in range(len(advertisements))
                 if (adv := advertisements[i]) is not None
             ]
