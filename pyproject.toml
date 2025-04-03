@@ -36,7 +36,7 @@ python = ">=3.11,<3.14"
 aioesphomeapi = ">=29.3.1"
 bleak = ">=0.21.1"
 bluetooth-data-tools = ">=1.18.0"
-habluetooth = ">=3.24.1"
+habluetooth = ">=3.24.1,<4"
 lru-dict = ">=1.2.0"
 bleak-retry-connector = ">=3.8.0"
 
@@ -160,5 +160,5 @@ module = "docs.*"
 ignore_errors = true
 
 [build-system]
-requires = ['setuptools>=75.8.2', 'Cython>=3', "poetry-core>=2.0.0"]
+requires = ['setuptools>=75.8.2', 'Cython>=3', "poetry-core>=2.0.0", "habluetooth"]
 build-backend = "poetry.core.masonry.api"
