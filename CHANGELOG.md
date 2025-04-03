@@ -1,5 +1,13 @@
 # Changelog
 
+## v2.13.1 (2025-04-03)
+
+### Bug fixes
+
+
+- Disable 32bit wheels on linux to fix builds (#123) ([`4d922b8`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/4d922b82b073073e710a50da8b1b80be99166d2d))
+
+
 ## v2.13.0 (2025-04-03)
 
 ### Features
