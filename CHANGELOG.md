@@ -1,5 +1,13 @@
 # Changelog
 
+## v2.13.0 (2025-04-03)
+
+### Features
+
+
+- Improve performance by cimporting base_scanner (#119) ([`a69de13`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/a69de13dce134108cb018c4197aaeef1a07cfda2))
+
+
 ## v2.12.0 (2025-03-13)
 
 ### Features
