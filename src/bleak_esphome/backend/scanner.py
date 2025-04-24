@@ -1,7 +1,7 @@
 """Bluetooth scanner for esphome."""
 
 from __future__ import annotations
-from google.protobuf import message
+
 from aioesphomeapi import BluetoothLEAdvertisement, BluetoothLERawAdvertisementsResponse
 from bluetooth_data_tools import (
     int_to_bluetooth_address,
