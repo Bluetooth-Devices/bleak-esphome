@@ -39,6 +39,7 @@ bluetooth-data-tools = ">=1.18.0"
 habluetooth = ">=3.24.1,<4"
 lru-dict = ">=1.2.0"
 bleak-retry-connector = ">=3.8.0"
+protobuf = ">=5"
 
 [tool.poetry.group.dev.dependencies]
 pytest = ">=7,<9"
