@@ -1,7 +1,9 @@
 """Bluetooth scanner for esphome."""
 
 from __future__ import annotations
-from google.protobuf import message
+
+from typing import Any
+
 from aioesphomeapi import BluetoothLEAdvertisement, BluetoothLERawAdvertisementsResponse
 from bluetooth_data_tools import (
     int_to_bluetooth_address,
@@ -48,8 +50,10 @@ class ESPHomeScanner(BaseHaRemoteScanner):
         # does not trigger the debug logging.
         for i in range(len(advertisements)):
             adv = advertisements[i]
-            fields: list = adv.ListFields()
-            for desc, val in fields:
+            fields: list[tuple[Any, Any]] = adv.ListFields()
+            for field in fields:
+                desc = field[0]
+                val = field[1]
                 if desc.name == "rssi":
                     rssi = val
                 elif desc.name == "address":
