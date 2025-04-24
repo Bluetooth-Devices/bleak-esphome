@@ -48,6 +48,9 @@ class ESPHomeScanner(BaseHaRemoteScanner):
         # does not trigger the debug logging.
         for i in range(len(advertisements)):
             adv = advertisements[i]
+            fields: list = adv.ListFields()
+            if len(fields) == 0:
+                continue
             parsed: tuple = parse_advertisement_data_tuple((adv.data,))  # type: ignore[type-arg]
             self._async_on_advertisement(
                 int_to_bluetooth_address(adv.address),
