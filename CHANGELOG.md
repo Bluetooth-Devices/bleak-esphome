@@ -1,5 +1,13 @@
 # Changelog
 
+## v2.14.0 (2025-04-27)
+
+### Features
+
+
+- Switch to using the _async_on_raw_advertisement api (#131) ([`eb62775`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/eb6277517fb74955cffabfb162abf3a4815f02e3))
+
+
 ## v2.13.1 (2025-04-03)
 
 ### Bug fixes
