@@ -5,7 +5,6 @@ from __future__ import annotations
 from aioesphomeapi import BluetoothLEAdvertisement, BluetoothLERawAdvertisementsResponse
 from bluetooth_data_tools import (
     int_to_bluetooth_address,
-    parse_advertisement_data_tuple,
 )
 from bluetooth_data_tools import (
     monotonic_time_coarse as MONOTONIC_TIME,
@@ -48,15 +47,10 @@ class ESPHomeScanner(BaseHaRemoteScanner):
         # does not trigger the debug logging.
         for i in range(len(advertisements)):
             adv = advertisements[i]
-            parsed: tuple = parse_advertisement_data_tuple((adv.data,))  # type: ignore[type-arg]
-            self._async_on_advertisement(
+            self._async_on_raw_advertisement(
                 int_to_bluetooth_address(adv.address),
                 adv.rssi,
-                parsed[0],
-                parsed[1],
-                parsed[2],
-                parsed[3],
-                parsed[4],
+                adv.data,
                 {"address_type": adv.address_type},
                 now,
             )
