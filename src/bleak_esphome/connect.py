@@ -95,7 +95,7 @@ def connect_scanner(
             bluetooth_device.async_update_ble_connection_limits
         )
 
-    if feature_flags & BluetoothProxyFeature.FEATURE_STATE_AND_MODELS:
+    if feature_flags & BluetoothProxyFeature.FEATURE_STATE_AND_MODE:
         cli.subscribe_bluetooth_scanner_state(scanner._async_update_scanner_state)
 
     if feature_flags & BluetoothProxyFeature.RAW_ADVERTISEMENTS:
