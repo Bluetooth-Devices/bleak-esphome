@@ -23,14 +23,17 @@ class ESPHomeScanner(BaseHaRemoteScanner):
 
     __slots__ = ()
 
-    def _async_update_scanner_state(self, state: BluetoothScannerStateResponse) -> None:
+    def async_update_scanner_state(self, state: BluetoothScannerStateResponse) -> None:
         """Update the scanner state."""
         if state.mode == BluetoothScannerMode.ACTIVE:
             self.current_mode = BluetoothScanningMode.ACTIVE  # type: ignore[misc]
+            self.requested_mode = BluetoothScanningMode.ACTIVE  # type: ignore[misc]
         elif state.mode == BluetoothScannerMode.PASSIVE:
             self.current_mode = BluetoothScanningMode.PASSIVE
+            self.requested_mode = BluetoothScanningMode.PASSIVE
         else:
             self.current_mode = None
+            self.requested_mode = None
 
     def async_on_advertisement(self, adv: BluetoothLEAdvertisement) -> None:
         """Call the registered callback."""
