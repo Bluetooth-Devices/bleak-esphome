@@ -1,5 +1,13 @@
 # Changelog
 
+## v2.15.0 (2025-04-29)
+
+### Features
+
+
+- Bump aioesphomeapi requirement to 30.1.0+ (#140) ([`4430f0c`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/4430f0c716804743247ba7a3b4efe593d6d2952f))
+
+
 ## v2.14.0 (2025-04-27)
 
 ### Features
