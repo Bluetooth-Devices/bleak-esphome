@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
-from aioesphomeapi import BluetoothLEAdvertisement, BluetoothLERawAdvertisementsResponse
+from aioesphomeapi import (
+    BluetoothLEAdvertisement,
+    BluetoothLERawAdvertisementsResponse,
+    BluetoothScannerModeModel,
+    BluetoothScannerStateResponseModel,
+)
 from bluetooth_data_tools import (
     int_to_bluetooth_address,
 )
 from bluetooth_data_tools import (
     monotonic_time_coarse as MONOTONIC_TIME,
 )
+from habluetooth import BluetoothScanningMode
 from habluetooth.base_scanner import BaseHaRemoteScanner
 
 
@@ -16,6 +22,17 @@ class ESPHomeScanner(BaseHaRemoteScanner):
     """Scanner for esphome."""
 
     __slots__ = ()
+
+    def _async_update_scanner_state(
+        self, state: BluetoothScannerStateResponseModel
+    ) -> None:
+        """Update the scanner state."""
+        if state.mode == BluetoothScannerModeModel.ACTIVE:
+            self.current_mode = BluetoothScanningMode.ACTIVE  # type: ignore[misc]
+        elif state.mode == BluetoothScannerModeModel.PASSIVE:
+            self.current_mode = BluetoothScanningMode.PASSIVE
+        else:
+            self.current_mode = None
 
     def async_on_advertisement(self, adv: BluetoothLEAdvertisement) -> None:
         """Call the registered callback."""
