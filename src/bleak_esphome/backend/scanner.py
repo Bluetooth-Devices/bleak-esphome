@@ -5,8 +5,8 @@ from __future__ import annotations
 from aioesphomeapi import (
     BluetoothLEAdvertisement,
     BluetoothLERawAdvertisementsResponse,
-    BluetoothScannerModeModel,
-    BluetoothScannerStateResponseModel,
+    BluetoothScannerMode,
+    BluetoothScannerStateResponse,
 )
 from bluetooth_data_tools import (
     int_to_bluetooth_address,
@@ -23,13 +23,11 @@ class ESPHomeScanner(BaseHaRemoteScanner):
 
     __slots__ = ()
 
-    def _async_update_scanner_state(
-        self, state: BluetoothScannerStateResponseModel
-    ) -> None:
+    def _async_update_scanner_state(self, state: BluetoothScannerStateResponse) -> None:
         """Update the scanner state."""
-        if state.mode == BluetoothScannerModeModel.ACTIVE:
+        if state.mode == BluetoothScannerMode.ACTIVE:
             self.current_mode = BluetoothScanningMode.ACTIVE  # type: ignore[misc]
-        elif state.mode == BluetoothScannerModeModel.PASSIVE:
+        elif state.mode == BluetoothScannerMode.PASSIVE:
             self.current_mode = BluetoothScanningMode.PASSIVE
         else:
             self.current_mode = None
