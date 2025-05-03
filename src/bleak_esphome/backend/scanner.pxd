@@ -1,5 +1,4 @@
 
-from habluetooth.base_scanner cimport BaseHaRemoteScanner
 
 
 from ..time import USE_COARSE_MONOTONIC_TIME
@@ -13,6 +12,3 @@ else:
 cdef object MONOTONIC_TIME
 cdef object int_to_bluetooth_address
 cdef object parse_advertisement_data_tuple
-
-cdef class ESPHomeScanner(BaseHaRemoteScanner):
-    pass
