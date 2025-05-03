@@ -11,6 +11,16 @@ from bluetooth_data_tools import (
 )
 from habluetooth.base_scanner import BaseHaRemoteScanner
 
+from ..time import USE_COARSE_MONOTONIC_TIME
+
+try:
+    if USE_COARSE_MONOTONIC_TIME:
+        from .._time_impl import _monotonic_time_coarse as MONOTONIC_TIME
+    else:
+        from .._time_impl import _monotonic_time as MONOTONIC_TIME
+except ImportError:
+    from ..time import monotonic_time_coarse as MONOTONIC_TIME
+
 
 class ESPHomeScanner(BaseHaRemoteScanner):
     """Scanner for esphome."""

@@ -3,6 +3,7 @@
 import logging
 import os
 from distutils.command.build_ext import build_ext
+from os.path import join
 from typing import Any
 
 try:
@@ -13,6 +14,16 @@ except ImportError:
 
 TO_CYTHONIZE = ["src/bleak_esphome/backend/scanner.py"]
 
+time_module = Extension(
+    "bleak_esphome._time_impl",
+    [
+        join("src", "bleak_esphome", "_time_impl.pyx"),
+    ],
+    language="c",
+    extra_compile_args=["-O3", "-g0"],
+)
+
+
 EXTENSIONS = [
     Extension(
         ext.removeprefix("src/").removesuffix(".py").replace("/", "."),
@@ -22,7 +33,7 @@ EXTENSIONS = [
     )
     for ext in TO_CYTHONIZE
 ]
-
+EXTENSIONS.append(time_module)
 
 _LOGGER = logging.getLogger(__name__)
 
