@@ -1,5 +1,13 @@
 # Changelog
 
+## v2.15.1 (2025-05-03)
+
+### Bug fixes
+
+
+- Revert to using python api for scanner (#141) ([`0cc7e99`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/0cc7e9962f380aa8064608a64c774f074a110fab))
+
+
 ## v2.15.0 (2025-04-29)
 
 ### Features
