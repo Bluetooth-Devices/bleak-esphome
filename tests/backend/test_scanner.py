@@ -1,9 +1,18 @@
+import pytest
 from aioesphomeapi import (
+    APIClient,
     BluetoothLERawAdvertisement,
     BluetoothLERawAdvertisementsResponse,
+    BluetoothScannerMode,
+    BluetoothScannerStateResponse,
 )
 from bluetooth_data_tools import int_to_bluetooth_address
-from habluetooth import BaseHaRemoteScanner, HaBluetoothConnector, get_manager
+from habluetooth import (
+    BaseHaRemoteScanner,
+    BluetoothScanningMode,
+    HaBluetoothConnector,
+    get_manager,
+)
 
 from bleak_esphome.backend.client import ESPHomeClientData
 from bleak_esphome.backend.scanner import ESPHomeScanner
@@ -12,15 +21,18 @@ ESP_MAC_ADDRESS = "AA:BB:CC:DD:EE:FF"
 ESP_NAME = "proxy"
 
 
-def test_scanner() -> None:
+@pytest.fixture
+def scanner() -> ESPHomeScanner:
+    """Fixture to create an ESPHomeScanner instance."""
     connector = HaBluetoothConnector(ESPHomeClientData, ESP_MAC_ADDRESS, lambda: True)
-    scanner = ESPHomeScanner(ESP_MAC_ADDRESS, ESP_NAME, connector, True)
+    return ESPHomeScanner(ESP_MAC_ADDRESS, ESP_NAME, connector, True)
+
+
+def test_scanner(scanner: ESPHomeScanner) -> None:
     assert isinstance(scanner, BaseHaRemoteScanner)
 
 
-def test_scanner_async_on_advertisement() -> None:
-    connector = HaBluetoothConnector(ESPHomeClientData, ESP_MAC_ADDRESS, lambda: True)
-    scanner = ESPHomeScanner(ESP_MAC_ADDRESS, ESP_NAME, connector, True)
+def test_scanner_async_on_advertisement(scanner: ESPHomeScanner) -> None:
     adv = BluetoothLERawAdvertisementsResponse(
         advertisements=[
             BluetoothLERawAdvertisement(
@@ -45,3 +57,26 @@ def test_scanner_async_on_advertisement() -> None:
     assert manager.async_last_service_info(
         int_to_bluetooth_address(246965243285491), True
     )
+
+
+def test_scanner_async_update_scanner_state(
+    scanner: ESPHomeScanner, mock_client: APIClient
+) -> None:
+    mock_client.subscribe_bluetooth_scanner_state(scanner.async_update_scanner_state)
+    scanner.async_update_scanner_state(
+        BluetoothScannerStateResponse(
+            mode=BluetoothScannerMode.ACTIVE,
+        )
+    )
+    assert scanner.current_mode == BluetoothScanningMode.ACTIVE
+    assert scanner.requested_mode == BluetoothScanningMode.ACTIVE
+    scanner.async_update_scanner_state(
+        BluetoothScannerStateResponse(
+            mode=BluetoothScannerMode.PASSIVE,
+        )
+    )
+    assert scanner.current_mode == BluetoothScanningMode.PASSIVE
+    assert scanner.requested_mode == BluetoothScanningMode.PASSIVE
+    scanner.async_update_scanner_state(BluetoothScannerStateResponse(mode=None))
+    assert scanner.current_mode is None
+    assert scanner.requested_mode is None
