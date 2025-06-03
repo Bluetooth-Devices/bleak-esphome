@@ -1,5 +1,13 @@
 # Changelog
 
+## v2.16.0 (2025-06-03)
+
+### Features
+
+
+- Update scanner mode from callback (#137) ([`9c093b5`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/9c093b59885e0f3d7c68f8b1b5aa24ab76da4d49))
+
+
 ## v2.15.1 (2025-05-03)
 
 ### Bug fixes
