@@ -32,6 +32,7 @@ def mock_device_info() -> DeviceInfo:
         legacy_bluetooth_proxy_version=0,
         # ESPHome mac addresses are UPPER case
         mac_address="11:22:33:44:55:AA",
+        bluetooth_mac_address="11:22:33:44:55:AC",
         esphome_version="1.0.0",
     )
 
