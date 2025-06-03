@@ -4,6 +4,7 @@ import pytest
 from aioesphomeapi import (
     APIClient,
     APIVersion,
+    BluetoothProxyFeature,
     DeviceInfo,
     ReconnectLogic,
 )
@@ -33,6 +34,13 @@ def mock_device_info() -> DeviceInfo:
         # ESPHome mac addresses are UPPER case
         mac_address="11:22:33:44:55:AA",
         bluetooth_mac_address="11:22:33:44:55:AC",
+        bluetooth_proxy_feature_flags=BluetoothProxyFeature.PASSIVE_SCAN
+        | BluetoothProxyFeature.ACTIVE_CONNECTIONS
+        | BluetoothProxyFeature.REMOTE_CACHING
+        | BluetoothProxyFeature.PAIRING
+        | BluetoothProxyFeature.CACHE_CLEARING
+        | BluetoothProxyFeature.RAW_ADVERTISEMENTS
+        | BluetoothProxyFeature.FEATURE_STATE_AND_MODE,
         esphome_version="1.0.0",
     )
 
