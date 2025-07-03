@@ -1,5 +1,13 @@
 # Changelog
 
+## v3.1.0 (2025-07-03)
+
+### Features
+
+
+- Add auto pair support for bleak 1.x ([`0d538e8`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/0d538e8481b0e351b68bd977d431e2b29a38b381))
+
+
 ## v3.0.1 (2025-07-03)
 
 ### Bug fixes
