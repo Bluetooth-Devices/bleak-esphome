@@ -264,20 +264,30 @@ class ESPHomeClient(BaseBleakClient):
 
     @api_error_as_bleak_error
     async def connect(
-        self, dangerous_use_bleak_cache: bool = False, **kwargs: Any
+        self, pair: bool = False, dangerous_use_bleak_cache: bool = False, **kwargs: Any
     ) -> bool:
         """
         Connect to a specified Peripheral.
 
-        **kwargs:
-            timeout (float): Timeout for required
-                ``BleakScanner.find_device_by_address`` call. Defaults to 10.0.
+        Args:
+            pair: If True, attempt to pair with the device after connecting.
+                  Note: Explicit pairing during connect is not available in ESPHome.
+                  Use the pair() method after connecting if pairing is needed.
+            dangerous_use_bleak_cache: Use cached services if available.
+            **kwargs:
+                timeout (float): Timeout for required
+                    ``BleakScanner.find_device_by_address`` call. Defaults to 10.0.
 
-        Returns
+        Returns:
         -------
             Boolean representing connection status.
 
         """
+        if pair:
+            _LOGGER.warning(
+                "Explicit pairing during connect is not available in ESPHome. "
+                "Use the pair() method after connecting if needed."
+            )
         await self._wait_for_free_connection_slot(CONNECT_FREE_SLOT_TIMEOUT)
         cache = self._cache
 
