@@ -599,7 +599,7 @@ async def test_bleak_client_connect_with_pair_parameter(
     esphome_bluetooth_gatt_services: ESPHomeBluetoothGATTServices,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Test connect with pair=True logs a warning."""
+    """Test connect with pair=True calls pair method."""
     ble_device = generate_ble_device(
         "CC:BB:AA:DD:EE:FF", details={"source": ESP_MAC_ADDRESS, "address_type": 1}
     )
@@ -619,6 +619,10 @@ async def test_bleak_client_connect_with_pair_parameter(
             "bluetooth_gatt_get_services",
             return_value=esphome_bluetooth_gatt_services,
         ),
+        patch.object(
+            client,
+            "_pair",
+        ) as mock_pair,
     ):
         # Test with pair=True
         task = asyncio.create_task(bleak_client.connect())
@@ -629,8 +633,7 @@ async def test_bleak_client_connect_with_pair_parameter(
         await task
 
     assert client.is_connected
-    assert "Explicit pairing during connect is not available in ESPHome" in caplog.text
-    assert "Use the pair() method after connecting if needed" in caplog.text
+    mock_pair.assert_called_once()
 
     with patch.object(
         client._client,
