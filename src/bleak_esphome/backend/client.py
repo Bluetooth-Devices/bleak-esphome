@@ -282,11 +282,6 @@ class ESPHomeClient(BaseBleakClient):
             Boolean representing connection status.
 
         """
-        if pair:
-            _LOGGER.warning(
-                "Explicit pairing during connect is not available in ESPHome. "
-                "Use the pair() method after connecting if needed."
-            )
         await self._wait_for_free_connection_slot(CONNECT_FREE_SLOT_TIMEOUT)
         cache = self._cache
 
@@ -334,6 +329,9 @@ class ESPHomeClient(BaseBleakClient):
                 connected_future.cancel(f"Unhandled exception in connect call: {ex}")
                 raise
             await connected_future
+
+        if pair:
+            await self.pair()
 
         try:
             await self._get_services(
