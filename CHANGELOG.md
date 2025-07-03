@@ -1,5 +1,13 @@
 # Changelog
 
+## v3.0.1 (2025-07-03)
+
+### Bug fixes
+
+
+- Use characteristic_properties ([`6bba94a`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/6bba94aebc789fa7b40c46d41773bd74a054b9b0))
+
+
 ## v3.0.0 (2025-07-03)
 
 ### Features
