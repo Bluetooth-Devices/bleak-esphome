@@ -31,6 +31,7 @@ from aioesphomeapi.core import (
     BluetoothGATTAPIError,
     TimeoutAPIError,
 )
+from bleak.assigned_numbers import CHARACTERISTIC_PROPERTIES
 from bleak.backends.characteristic import BleakGATTCharacteristic
 from bleak.backends.client import BaseBleakClient, NotifyCallback
 from bleak.backends.descriptor import BleakGATTDescriptor
@@ -54,20 +55,6 @@ CCCD_NOTIFY_BYTES = b"\x01\x00"
 CCCD_INDICATE_BYTES = b"\x02\x00"
 
 DEFAULT_MAX_WRITE_WITHOUT_RESPONSE = DEFAULT_MTU - GATT_HEADER_SIZE
-
-# BLE characteristic property bit masks
-PROPERTY_MASKS = {
-    1: "broadcast",
-    2: "read",
-    4: "write-without-response",
-    8: "write",
-    16: "notify",
-    32: "indicate",
-    64: "authenticated-signed-writes",
-    128: "extended-properties",
-    256: "reliable-writes",
-    512: "writable-auxiliaries",
-}
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -458,7 +445,9 @@ class ESPHomeClient(BaseBleakClient):
                 # Extract properties for the characteristic
                 char_props = characteristic.properties
                 props = [
-                    prop for mask, prop in PROPERTY_MASKS.items() if char_props & mask
+                    prop
+                    for mask, prop in CHARACTERISTIC_PROPERTIES.items()
+                    if char_props & mask
                 ]
 
                 # Create BleakGATTCharacteristic with the Bleak 1.0 signature
