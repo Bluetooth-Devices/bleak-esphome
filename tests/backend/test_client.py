@@ -605,7 +605,7 @@ async def test_bleak_client_connect_with_pair_parameter(
     )
 
     bleak_client = BleakClient(
-        ble_device, backend=partial(ESPHomeClient, client_data=client_data)
+        ble_device, backend=partial(ESPHomeClient, client_data=client_data), pair=True
     )
     client: ESPHomeClient = bleak_client._backend
     client._bluetooth_device.ble_connections_free = 10
@@ -621,7 +621,7 @@ async def test_bleak_client_connect_with_pair_parameter(
         ),
     ):
         # Test with pair=True
-        task = asyncio.create_task(bleak_client.connect(pair=True))
+        task = asyncio.create_task(bleak_client.connect())
         await asyncio.sleep(0)
         callback = mock_connect.call_args_list[0][0][1]
         # Mock connected with MTU of 23 and error code 0
