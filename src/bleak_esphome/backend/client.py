@@ -34,16 +34,14 @@ from aioesphomeapi.core import (
 )
 from bleak.backends.characteristic import BleakGATTCharacteristic
 from bleak.backends.client import BaseBleakClient, NotifyCallback
+from bleak.backends.descriptor import BleakGATTDescriptor
 from bleak.backends.device import BLEDevice
-from bleak.backends.service import BleakGATTServiceCollection
+from bleak.backends.service import BleakGATTService, BleakGATTServiceCollection
 from bleak.exc import BleakError
 from bluetooth_data_tools import mac_to_int
 
-from .characteristic import BleakGATTCharacteristicESPHome
-from .descriptor import BleakGATTDescriptorESPHome
 from .device import ESPHomeBluetoothDevice
 from .scanner import ESPHomeScanner
-from .service import BleakGATTServiceESPHome
 
 DEFAULT_MTU = 23
 GATT_HEADER_SIZE = 3
@@ -57,6 +55,21 @@ CCCD_NOTIFY_BYTES = b"\x01\x00"
 CCCD_INDICATE_BYTES = b"\x02\x00"
 
 DEFAULT_MAX_WRITE_WITHOUT_RESPONSE = DEFAULT_MTU - GATT_HEADER_SIZE
+
+# BLE characteristic property bit masks
+PROPERTY_MASKS = {
+    1: "broadcast",
+    2: "read",
+    4: "write-without-response",
+    8: "write",
+    16: "notify",
+    32: "indicate",
+    64: "authenticated-signed-writes",
+    128: "extended-properties",
+    256: "reliable-writes",
+    512: "writable-auxiliaries",
+}
+
 _LOGGER = logging.getLogger(__name__)
 
 _ESPHomeClient = TypeVar("_ESPHomeClient", bound="ESPHomeClient")
@@ -264,7 +277,7 @@ class ESPHomeClient(BaseBleakClient):
 
     @api_error_as_bleak_error
     async def connect(
-        self, pair: bool = False, dangerous_use_bleak_cache: bool = False, **kwargs: Any
+        self, pair: bool, *, dangerous_use_bleak_cache: bool = False, **kwargs: Any
     ) -> bool:
         """
         Connect to a specified Peripheral.
@@ -465,24 +478,34 @@ class ESPHomeClient(BaseBleakClient):
         max_write_without_response = self.mtu_size - GATT_HEADER_SIZE
         services = BleakGATTServiceCollection()
         for service in esphome_services.services:
-            services.add_service(BleakGATTServiceESPHome(service))
+            # Create BleakGATTService with the Bleak 1.0 signature
+            bleak_service = BleakGATTService(service, service.handle, service.uuid)
+            services.add_service(bleak_service)
+
             for characteristic in service.characteristics:
-                services.add_characteristic(
-                    BleakGATTCharacteristicESPHome(
-                        characteristic,
-                        max_write_without_response,
-                        service.uuid,
-                        service.handle,
-                    )
+                # Extract properties for the characteristic
+                char_props = characteristic.properties
+                props = [
+                    prop for mask, prop in PROPERTY_MASKS.items() if char_props & mask
+                ]
+
+                # Create BleakGATTCharacteristic with the Bleak 1.0 signature
+                bleak_char = BleakGATTCharacteristic(
+                    characteristic,
+                    characteristic.handle,
+                    characteristic.uuid,
+                    props,
+                    lambda mtu=max_write_without_response: mtu,
+                    bleak_service,
                 )
+                services.add_characteristic(bleak_char)
+
                 for descriptor in characteristic.descriptors:
-                    services.add_descriptor(
-                        BleakGATTDescriptorESPHome(
-                            descriptor,
-                            characteristic.uuid,
-                            characteristic.handle,
-                        )
+                    # Create BleakGATTDescriptor with the Bleak 1.0 signature
+                    bleak_desc = BleakGATTDescriptor(
+                        descriptor, descriptor.handle, descriptor.uuid, bleak_char
                     )
+                    services.add_descriptor(bleak_desc)
 
         if not esphome_services.services:
             # If we got no services, we must have disconnected

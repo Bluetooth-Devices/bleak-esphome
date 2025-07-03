@@ -330,9 +330,11 @@ async def test_bleak_client_get_services_and_read_write(
         "bluetooth_gatt_get_services",
         return_value=esphome_bluetooth_gatt_services,
     ):
-        services = await bleak_client.get_services()
+        # In Bleak 1.0, services are available as a property after connect
+        # We need to manually trigger the service discovery since we're mocking
+        await client.get_services()
 
-    assert services is not None
+    assert bleak_client.services is not None
 
     char2 = bleak_client.services.get_characteristic(
         "090b7847-e12b-09a8-b04b-8e0922a9abab"
@@ -401,11 +403,15 @@ async def test_bleak_client_cached_get_services_and_read_write(
         "bluetooth_gatt_get_services",
         return_value=esphome_bluetooth_gatt_services,
     ):
-        services = await bleak_client.get_services(dangerous_use_bleak_cache=True)
+        # In Bleak 1.0, services are discovered during connect
+        # We need to manually trigger the service discovery since we're mocking
+        await client.get_services(dangerous_use_bleak_cache=True)
+        services = bleak_client.services
 
     assert services is not None
 
-    services2 = await bleak_client.get_services(dangerous_use_bleak_cache=True)
+    await client.get_services(dangerous_use_bleak_cache=True)
+    services2 = bleak_client.services
     assert services2 is not None
     assert services2 == services
 
@@ -655,8 +661,8 @@ async def test_esphome_client_connect_with_pair_false(
             return_value=esphome_bluetooth_gatt_services,
         ),
     ):
-        # Test with pair=False (default)
-        task = asyncio.create_task(client.connect())
+        # Test with pair=False
+        task = asyncio.create_task(client.connect(False))
         await asyncio.sleep(0)
         callback = mock_connect.call_args_list[0][0][1]
         # Mock connected with MTU of 23 and error code 0
