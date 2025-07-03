@@ -277,8 +277,8 @@ class ESPHomeClient(BaseBleakClient):
 
     @api_error_as_bleak_error
     async def connect(
-        self, pair: bool, *, dangerous_use_bleak_cache: bool = False, **kwargs: Any
-    ) -> bool:
+        self, pair: bool, dangerous_use_bleak_cache: bool = False, **kwargs: Any
+    ) -> None:
         """
         Connect to a specified Peripheral.
 
@@ -363,8 +363,6 @@ class ESPHomeClient(BaseBleakClient):
         except Exception:
             await self._disconnect()
             raise
-
-        return True
 
     @api_error_as_bleak_error
     async def disconnect(self) -> bool:
