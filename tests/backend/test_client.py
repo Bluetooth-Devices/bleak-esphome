@@ -273,7 +273,9 @@ async def test_client_get_services_and_read_write(
 
     assert services is not None
 
-    char = bleak_client.services.get_characteristic("090b7847-e12b-09a8-b04b-8e0922a9abab")
+    char = bleak_client.services.get_characteristic(
+        "090b7847-e12b-09a8-b04b-8e0922a9abab"
+    )
     assert char is not None
     assert char.uuid == "090b7847-e12b-09a8-b04b-8e0922a9abab"
     assert char.properties == ["read", "write"]
@@ -356,7 +358,9 @@ async def test_bleak_client_get_services_and_read_write(
     assert char3.properties == ["read", "write"]
     assert char3.handle == 20
 
-    char = bleak_client.services.get_characteristic("090b7847-e12b-09a8-b04b-8e0922a9abab")
+    char = bleak_client.services.get_characteristic(
+        "090b7847-e12b-09a8-b04b-8e0922a9abab"
+    )
     assert char is not None
     assert char.uuid == "090b7847-e12b-09a8-b04b-8e0922a9abab"
     assert char.properties == ["read", "write"]
@@ -379,7 +383,7 @@ async def test_bleak_client_get_services_and_read_write(
         "bluetooth_gatt_read",
     ) as mock_read:
         await bleak_client.read_gatt_char(
-            "090b7847-e12b-09a8-b04b-8e0922a9abab",
+            char,
         )
 
     mock_read.assert_called_once_with(225106397622015, 20, 30)
@@ -433,7 +437,9 @@ async def test_bleak_client_cached_get_services_and_read_write(
     assert char3.properties == ["read", "write"]
     assert char3.handle == 20
 
-    char = bleak_client.services.get_characteristic("090b7847-e12b-09a8-b04b-8e0922a9abab")
+    char = bleak_client.services.get_characteristic(
+        "090b7847-e12b-09a8-b04b-8e0922a9abab"
+    )
     assert char is not None
     assert char.uuid == "090b7847-e12b-09a8-b04b-8e0922a9abab"
     assert char.properties == ["read", "write"]
@@ -456,7 +462,7 @@ async def test_bleak_client_cached_get_services_and_read_write(
         "bluetooth_gatt_read",
     ) as mock_read:
         await bleak_client.read_gatt_char(
-            "090b7847-e12b-09a8-b04b-8e0922a9abab",
+            char,
         )
 
     mock_read.assert_called_once_with(225106397622015, 20, 30)
