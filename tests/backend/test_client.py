@@ -7,6 +7,8 @@ import pytest
 from aioesphomeapi import (
     APIClient,
     APIVersion,
+    BluetoothDevicePairing,
+    BluetoothDeviceUnpairing,
     BluetoothGATTCharacteristic,
     BluetoothGATTDescriptor,
     BluetoothGATTService,
@@ -688,3 +690,209 @@ async def test_esphome_client_connect_with_pair_false(
         await client.disconnect()
 
     mock_disconnect.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_pair_success(
+    client_data: ESPHomeClientData,
+) -> None:
+    """Test successful pairing."""
+    ble_device = generate_ble_device(
+        "CC:BB:AA:DD:EE:FF", details={"source": ESP_MAC_ADDRESS, "address_type": 1}
+    )
+
+    client = ESPHomeClient(ble_device, client_data=client_data)
+    # Simulate connection
+    client._is_connected = True
+
+    # Enable pairing feature flag
+    client._feature_flags |= BluetoothProxyFeature.PAIRING.value
+
+    with patch.object(
+        client._client,
+        "bluetooth_device_pair",
+        return_value=BluetoothDevicePairing(
+            address=client._address_as_int,
+            paired=True,
+            error=0,
+        ),
+    ) as mock_pair:
+        await client.pair()
+
+    mock_pair.assert_called_once_with(client._address_as_int)
+
+
+@pytest.mark.asyncio
+async def test_pair_failure(
+    client_data: ESPHomeClientData,
+) -> None:
+    """Test pairing failure."""
+    ble_device = generate_ble_device(
+        "CC:BB:AA:DD:EE:FF", details={"source": ESP_MAC_ADDRESS, "address_type": 1}
+    )
+
+    client = ESPHomeClient(ble_device, client_data=client_data)
+    # Simulate connection
+    client._is_connected = True
+
+    # Enable pairing feature flag
+    client._feature_flags |= BluetoothProxyFeature.PAIRING.value
+
+    with patch.object(
+        client._client,
+        "bluetooth_device_pair",
+        return_value=BluetoothDevicePairing(
+            address=client._address_as_int,
+            paired=False,
+            error=1,
+        ),
+    ):
+        with pytest.raises(BleakError) as exc_info:
+            await client.pair()
+        assert "Pairing failed due to error: 1" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_pair_not_connected(
+    client_data: ESPHomeClientData,
+) -> None:
+    """Test pairing when not connected."""
+    ble_device = generate_ble_device(
+        "CC:BB:AA:DD:EE:FF", details={"source": ESP_MAC_ADDRESS, "address_type": 1}
+    )
+
+    client = ESPHomeClient(ble_device, client_data=client_data)
+    # Device is not connected
+    client._is_connected = False
+
+    # Enable pairing feature flag
+    client._feature_flags |= BluetoothProxyFeature.PAIRING.value
+
+    with pytest.raises(BleakError) as exc_info:
+        await client.pair()
+    assert "is not connected" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_pair_feature_not_supported(
+    client_data: ESPHomeClientData,
+) -> None:
+    """Test pairing when feature is not supported."""
+    ble_device = generate_ble_device(
+        "CC:BB:AA:DD:EE:FF", details={"source": ESP_MAC_ADDRESS, "address_type": 1}
+    )
+
+    client = ESPHomeClient(ble_device, client_data=client_data)
+    # Simulate connection
+    client._is_connected = True
+
+    # Disable pairing feature flag
+    client._feature_flags &= ~BluetoothProxyFeature.PAIRING.value
+
+    with pytest.raises(NotImplementedError) as exc_info:
+        await client.pair()
+    assert "Pairing is not available in this version ESPHome" in str(exc_info.value)
+    assert client._device_info.name in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_unpair_success(
+    client_data: ESPHomeClientData,
+) -> None:
+    """Test successful unpairing."""
+    ble_device = generate_ble_device(
+        "CC:BB:AA:DD:EE:FF", details={"source": ESP_MAC_ADDRESS, "address_type": 1}
+    )
+
+    client = ESPHomeClient(ble_device, client_data=client_data)
+    # Simulate connection
+    client._is_connected = True
+
+    # Enable pairing feature flag
+    client._feature_flags |= BluetoothProxyFeature.PAIRING.value
+
+    with patch.object(
+        client._client,
+        "bluetooth_device_unpair",
+        return_value=BluetoothDeviceUnpairing(
+            address=client._address_as_int,
+            success=True,
+            error=0,
+        ),
+    ) as mock_unpair:
+        await client.unpair()
+
+    mock_unpair.assert_called_once_with(client._address_as_int)
+
+
+@pytest.mark.asyncio
+async def test_unpair_failure(
+    client_data: ESPHomeClientData,
+) -> None:
+    """Test unpairing failure."""
+    ble_device = generate_ble_device(
+        "CC:BB:AA:DD:EE:FF", details={"source": ESP_MAC_ADDRESS, "address_type": 1}
+    )
+
+    client = ESPHomeClient(ble_device, client_data=client_data)
+    # Simulate connection
+    client._is_connected = True
+
+    # Enable pairing feature flag
+    client._feature_flags |= BluetoothProxyFeature.PAIRING.value
+
+    with patch.object(
+        client._client,
+        "bluetooth_device_unpair",
+        return_value=BluetoothDeviceUnpairing(
+            address=client._address_as_int,
+            success=False,
+            error=2,
+        ),
+    ):
+        with pytest.raises(BleakError) as exc_info:
+            await client.unpair()
+        assert "Unpairing failed due to error: 2" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_unpair_not_connected(
+    client_data: ESPHomeClientData,
+) -> None:
+    """Test unpairing when not connected."""
+    ble_device = generate_ble_device(
+        "CC:BB:AA:DD:EE:FF", details={"source": ESP_MAC_ADDRESS, "address_type": 1}
+    )
+
+    client = ESPHomeClient(ble_device, client_data=client_data)
+    # Device is not connected
+    client._is_connected = False
+
+    # Enable pairing feature flag
+    client._feature_flags |= BluetoothProxyFeature.PAIRING.value
+
+    with pytest.raises(BleakError) as exc_info:
+        await client.unpair()
+    assert "is not connected" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_unpair_feature_not_supported(
+    client_data: ESPHomeClientData,
+) -> None:
+    """Test unpairing when feature is not supported."""
+    ble_device = generate_ble_device(
+        "CC:BB:AA:DD:EE:FF", details={"source": ESP_MAC_ADDRESS, "address_type": 1}
+    )
+
+    client = ESPHomeClient(ble_device, client_data=client_data)
+    # Simulate connection
+    client._is_connected = True
+
+    # Disable pairing feature flag
+    client._feature_flags &= ~BluetoothProxyFeature.PAIRING.value
+
+    with pytest.raises(NotImplementedError) as exc_info:
+        await client.unpair()
+    assert "Unpairing is not available in this version ESPHome" in str(exc_info.value)
+    assert client._device_info.name in str(exc_info.value)
