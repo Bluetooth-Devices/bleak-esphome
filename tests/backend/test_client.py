@@ -243,7 +243,13 @@ async def test_client_usage_while_not_connected(client_data: ESPHomeClientData) 
     with pytest.raises(
         BleakError, match=f"{ESP_NAME}.*{ESP_MAC_ADDRESS}.*not connected"
     ):
-        await client.write_gatt_char("test", b"test")
+        # Try to write without a proper characteristic object
+        # This should fail since we're not connected
+        from bleak.backends.characteristic import BleakGATTCharacteristic
+
+        # Create a mock characteristic
+        char = BleakGATTCharacteristic(None, 1, "test", [], lambda: 20, None)
+        await client.write_gatt_char(char, b"test", False)
 
 
 @pytest.mark.asyncio
@@ -263,13 +269,11 @@ async def test_client_get_services_and_read_write(
         "bluetooth_gatt_get_services",
         return_value=esphome_bluetooth_gatt_services,
     ):
-        services = await client.get_services()
+        services = await client._get_services()
 
     assert services is not None
 
-    char = client._resolve_characteristic(
-        char_specifier="090b7847-e12b-09a8-b04b-8e0922a9abab",
-    )
+    char = services.get_characteristic("090b7847-e12b-09a8-b04b-8e0922a9abab")
     assert char is not None
     assert char.uuid == "090b7847-e12b-09a8-b04b-8e0922a9abab"
     assert char.properties == ["read", "write"]
@@ -332,7 +336,7 @@ async def test_bleak_client_get_services_and_read_write(
     ):
         # In Bleak 1.0, services are available as a property after connect
         # We need to manually trigger the service discovery since we're mocking
-        await client.get_services()
+        await client._get_services()
 
     assert bleak_client.services is not None
 
@@ -352,9 +356,7 @@ async def test_bleak_client_get_services_and_read_write(
     assert char3.properties == ["read", "write"]
     assert char3.handle == 20
 
-    char = client._resolve_characteristic(
-        char_specifier="090b7847-e12b-09a8-b04b-8e0922a9abab",
-    )
+    char = services.get_characteristic("090b7847-e12b-09a8-b04b-8e0922a9abab")
     assert char is not None
     assert char.uuid == "090b7847-e12b-09a8-b04b-8e0922a9abab"
     assert char.properties == ["read", "write"]
@@ -405,12 +407,12 @@ async def test_bleak_client_cached_get_services_and_read_write(
     ):
         # In Bleak 1.0, services are discovered during connect
         # We need to manually trigger the service discovery since we're mocking
-        await client.get_services(dangerous_use_bleak_cache=True)
+        await client._get_services(dangerous_use_bleak_cache=True)
         services = bleak_client.services
 
     assert services is not None
 
-    await client.get_services(dangerous_use_bleak_cache=True)
+    await client._get_services(dangerous_use_bleak_cache=True)
     services2 = bleak_client.services
     assert services2 is not None
     assert services2 == services
@@ -431,9 +433,7 @@ async def test_bleak_client_cached_get_services_and_read_write(
     assert char3.properties == ["read", "write"]
     assert char3.handle == 20
 
-    char = client._resolve_characteristic(
-        char_specifier="090b7847-e12b-09a8-b04b-8e0922a9abab",
-    )
+    char = services.get_characteristic("090b7847-e12b-09a8-b04b-8e0922a9abab")
     assert char is not None
     assert char.uuid == "090b7847-e12b-09a8-b04b-8e0922a9abab"
     assert char.properties == ["read", "write"]
