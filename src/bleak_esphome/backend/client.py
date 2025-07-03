@@ -331,7 +331,7 @@ class ESPHomeClient(BaseBleakClient):
             await connected_future
 
         if pair:
-            await self.pair()
+            await self._pair()
 
         try:
             await self._get_services(
@@ -382,7 +382,16 @@ class ESPHomeClient(BaseBleakClient):
 
     @api_error_as_bleak_error
     async def pair(self, *args: Any, **kwargs: Any) -> None:
-        """Attempt to pair."""
+        """
+        Attempt to pair with the device.
+
+        Note: Pairing is not available in ESPHome versions < 2024.3.0.
+        Use the `pair()` method after connecting if pairing is needed.
+        """
+        await self._pair()
+
+    async def _pair(self) -> None:
+        """Attempt to pair with the device."""
         if not self._feature_flags & BluetoothProxyFeature.PAIRING.value:
             raise NotImplementedError(
                 "Pairing is not available in this version ESPHome; "
