@@ -45,7 +45,7 @@ pytest = ">=7,<9"
 pytest-cov = ">=3,<7"
 pytest-codspeed = "^3.1.0"
 zeroconf = ">=0.136.2,<0.148.0"
-pytest-asyncio = "^1.0.0"
+pytest-asyncio = "^1.1.0"
 
 [tool.poetry.group.docs]
 optional = true
