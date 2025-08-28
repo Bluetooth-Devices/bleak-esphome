@@ -1,5 +1,13 @@
 # Changelog
 
+## v3.2.0 (2025-08-28)
+
+### Features
+
+
+- Use set_*_mode helpers instead of setting mode directly ([`baa0b4c`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/baa0b4c7edda076b9f0e496eafdd328fe2a426fe))
+
+
 ## v3.1.0 (2025-07-03)
 
 ### Features
