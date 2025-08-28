@@ -36,7 +36,7 @@ python = ">=3.11,<3.14"
 aioesphomeapi = ">=30.1.0"
 bleak = ">=1"
 bluetooth-data-tools = ">=1.18.0"
-habluetooth = ">=4"
+habluetooth = ">=5.2.0"
 lru-dict = ">=1.2.0"
 bleak-retry-connector = ">=3.8.0"
 
