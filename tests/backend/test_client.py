@@ -31,16 +31,11 @@ ESP_MAC_ADDRESS = "AA:BB:CC:DD:EE:FF"
 ESP_NAME = "proxy"
 
 
-def split_uuid(uuid: str) -> list[int]:
-    int_128 = UUID(uuid).int
-    return [int_128 >> 64, int_128 & 0xFFFFFFFFFFFFFFFF]
-
-
 @pytest.fixture
 def esphome_bluetooth_gatt_services() -> ESPHomeBluetoothGATTServices:
 
     service1 = BluetoothGATTService(
-        uuid=split_uuid("00001800-0000-1000-8000-00805f9b34fb"),
+        uuid="00001800-0000-1000-8000-00805f9b34fb",
         handle=1,
         characteristics=[],
     )
@@ -49,13 +44,13 @@ def esphome_bluetooth_gatt_services() -> ESPHomeBluetoothGATTServices:
         "characteristics",
         [
             BluetoothGATTCharacteristic(
-                uuid=split_uuid("00002a00-0000-1000-8000-00805f9b34fb"),
+                uuid="00002a00-0000-1000-8000-00805f9b34fb",
                 handle=3,
                 properties=2,
                 descriptors=[],
             ),
             BluetoothGATTCharacteristic(
-                uuid=split_uuid("00002a01-0000-1000-8000-00805f9b34fb"),
+                uuid="00002a01-0000-1000-8000-00805f9b34fb",
                 handle=5,
                 properties=2,
                 descriptors=[],
@@ -63,25 +58,25 @@ def esphome_bluetooth_gatt_services() -> ESPHomeBluetoothGATTServices:
         ],
     )
     service2 = BluetoothGATTService(
-        uuid=split_uuid("00001801-0000-1000-8000-00805f9b34fb"),
+        uuid="00001801-0000-1000-8000-00805f9b34fb",
         handle=6,
         characteristics=[],
     )
     service2_chars = [
         BluetoothGATTCharacteristic(
-            uuid=split_uuid("00002a05-0000-1000-8000-00805f9b34fb"),
+            uuid="00002a05-0000-1000-8000-00805f9b34fb",
             handle=8,
             properties=32,
             descriptors=[],
         ),
         BluetoothGATTCharacteristic(
-            uuid=split_uuid("00002b3a-0000-1000-8000-00805f9b34fb"),
+            uuid="00002b3a-0000-1000-8000-00805f9b34fb",
             handle=11,
             properties=2,
             descriptors=[],
         ),
         BluetoothGATTCharacteristic(
-            uuid=split_uuid("00002b29-0000-1000-8000-00805f9b34fb"),
+            uuid="00002b29-0000-1000-8000-00805f9b34fb",
             handle=13,
             properties=10,
             descriptors=[],
@@ -92,7 +87,7 @@ def esphome_bluetooth_gatt_services() -> ESPHomeBluetoothGATTServices:
         "descriptors",
         [
             BluetoothGATTDescriptor(
-                uuid=split_uuid("00002902-0000-1000-8000-00805f9b34fb"),
+                uuid="00002902-0000-1000-8000-00805f9b34fb",
                 handle=9,
             )
         ],
@@ -100,43 +95,43 @@ def esphome_bluetooth_gatt_services() -> ESPHomeBluetoothGATTServices:
     object.__setattr__(service2, "characteristics", service2_chars)
 
     service3 = BluetoothGATTService(
-        uuid=split_uuid("d30a7847-e12b-09a8-b04b-8e0922a9abab"),
+        uuid="d30a7847-e12b-09a8-b04b-8e0922a9abab",
         handle=14,
         characteristics=[],
     )
     service3_chars = [
         BluetoothGATTCharacteristic(
-            uuid=split_uuid("030b7847-e12b-09a8-b04b-8e0922a9abab"),
+            uuid="030b7847-e12b-09a8-b04b-8e0922a9abab",
             handle=16,
             properties=2,
             descriptors=[],
         ),
         BluetoothGATTCharacteristic(
-            uuid=split_uuid("040b7847-e12b-09a8-b04b-8e0922a9abab"),
+            uuid="040b7847-e12b-09a8-b04b-8e0922a9abab",
             handle=18,
             properties=2,
             descriptors=[],
         ),
         BluetoothGATTCharacteristic(
-            uuid=split_uuid("090b7847-e12b-09a8-b04b-8e0922a9abab"),
+            uuid="090b7847-e12b-09a8-b04b-8e0922a9abab",
             handle=20,
             properties=10,
             descriptors=[],
         ),
         BluetoothGATTCharacteristic(
-            uuid=split_uuid("050b7847-e12b-09a8-b04b-8e0922a9abab"),
+            uuid="050b7847-e12b-09a8-b04b-8e0922a9abab",
             handle=22,
             properties=10,
             descriptors=[],
         ),
         BluetoothGATTCharacteristic(
-            uuid=split_uuid("060b7847-e12b-09a8-b04b-8e0922a9abab"),
+            uuid="060b7847-e12b-09a8-b04b-8e0922a9abab",
             handle=24,
             properties=8,
             descriptors=[],
         ),
         BluetoothGATTCharacteristic(
-            uuid=split_uuid("070b7847-e12b-09a8-b04b-8e0922a9abab"),
+            uuid="070b7847-e12b-09a8-b04b-8e0922a9abab",
             handle=26,
             properties=8,
             descriptors=[],
@@ -144,55 +139,55 @@ def esphome_bluetooth_gatt_services() -> ESPHomeBluetoothGATTServices:
     ]
     object.__setattr__(service3, "characteristics", service3_chars)
     service4 = BluetoothGATTService(
-        uuid=split_uuid("0000180a-0000-1000-8000-00805f9b34fb"),
+        uuid="0000180a-0000-1000-8000-00805f9b34fb",
         handle=27,
         characteristics=[],
     )
     service4_chars = [
         BluetoothGATTCharacteristic(
-            uuid=split_uuid("00002a29-0000-1000-8000-00805f9b34fb"),
+            uuid="00002a29-0000-1000-8000-00805f9b34fb",
             handle=29,
             properties=2,
             descriptors=[],
         ),
         BluetoothGATTCharacteristic(
-            uuid=split_uuid("00002a24-0000-1000-8000-00805f9b34fb"),
+            uuid="00002a24-0000-1000-8000-00805f9b34fb",
             handle=31,
             properties=2,
             descriptors=[],
         ),
         BluetoothGATTCharacteristic(
-            uuid=split_uuid("00002a25-0000-1000-8000-00805f9b34fb"),
+            uuid="00002a25-0000-1000-8000-00805f9b34fb",
             handle=33,
             properties=2,
             descriptors=[],
         ),
         BluetoothGATTCharacteristic(
-            uuid=split_uuid("00002a26-0000-1000-8000-00805f9b34fb"),
+            uuid="00002a26-0000-1000-8000-00805f9b34fb",
             handle=35,
             properties=2,
             descriptors=[],
         ),
         BluetoothGATTCharacteristic(
-            uuid=split_uuid("00002a27-0000-1000-8000-00805f9b34fb"),
+            uuid="00002a27-0000-1000-8000-00805f9b34fb",
             handle=37,
             properties=2,
             descriptors=[],
         ),
         BluetoothGATTCharacteristic(
-            uuid=split_uuid("00002a28-0000-1000-8000-00805f9b34fb"),
+            uuid="00002a28-0000-1000-8000-00805f9b34fb",
             handle=39,
             properties=2,
             descriptors=[],
         ),
         BluetoothGATTCharacteristic(
-            uuid=split_uuid("0a0b7847-e12b-09a8-b04b-8e0922a9abab"),
+            uuid="0a0b7847-e12b-09a8-b04b-8e0922a9abab",
             handle=41,
             properties=10,
             descriptors=[],
         ),
         BluetoothGATTCharacteristic(
-            uuid=split_uuid("0b0b7847-e12b-09a8-b04b-8e0922a9abab"),
+            uuid="0b0b7847-e12b-09a8-b04b-8e0922a9abab",
             handle=43,
             properties=10,
             descriptors=[],
