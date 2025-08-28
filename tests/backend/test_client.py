@@ -31,11 +31,6 @@ ESP_MAC_ADDRESS = "AA:BB:CC:DD:EE:FF"
 ESP_NAME = "proxy"
 
 
-def split_uuid(uuid: str) -> list[int]:
-    int_128 = UUID(uuid).int
-    return [int_128 >> 64, int_128 & 0xFFFFFFFFFFFFFFFF]
-
-
 @pytest.fixture
 def esphome_bluetooth_gatt_services() -> ESPHomeBluetoothGATTServices:
 
