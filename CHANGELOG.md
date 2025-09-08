@@ -1,5 +1,13 @@
 # Changelog
 
+## v3.3.0 (2025-09-08)
+
+### Features
+
+
+- Implement get_allocations for esphomescanner for thundering heard problem ([`ecd0454`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/ecd04542b7130fb963ca0f99cf04ba85e496783a))
+
+
 ## v3.2.0 (2025-08-28)
 
 ### Features
