@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, Any
+
 from aioesphomeapi import (
     BluetoothLEAdvertisement,
     BluetoothLERawAdvertisementsResponse,
@@ -14,14 +16,47 @@ from bluetooth_data_tools import (
 from bluetooth_data_tools import (
     monotonic_time_coarse as MONOTONIC_TIME,
 )
-from habluetooth import BluetoothScanningMode
+from habluetooth import Allocations, BluetoothScanningMode
 from habluetooth.base_scanner import BaseHaRemoteScanner
+
+if TYPE_CHECKING:
+    from .device import ESPHomeBluetoothDevice
 
 
 class ESPHomeScanner(BaseHaRemoteScanner):
     """Scanner for esphome."""
 
-    __slots__ = ()
+    __slots__ = ("_bluetooth_device",)
+
+    def __init__(self, *args: Any, **kwargs: Any):
+        """Initialize the scanner."""
+        super().__init__(*args, **kwargs)
+        self._bluetooth_device: ESPHomeBluetoothDevice | None = None
+
+    def set_bluetooth_device(self, device: ESPHomeBluetoothDevice) -> None:
+        """Set the bluetooth device for this scanner."""
+        self._bluetooth_device = device
+
+    def get_allocations(self) -> Allocations | None:
+        """
+        Get current connection slot allocations for this ESPHome device.
+
+        Returns:
+            Allocations object with free/limit/allocated info, or None if not available.
+
+        """
+        if not self._bluetooth_device:
+            return None
+
+        # Only return allocations if we have slot info
+        if self._bluetooth_device.ble_connections_limit > 0:
+            return Allocations(
+                adapter=self.source,
+                slots=self._bluetooth_device.ble_connections_limit,
+                free=self._bluetooth_device.ble_connections_free,
+                allocated=list(self._bluetooth_device.ble_allocations),
+            )
+        return None
 
     def async_update_scanner_state(self, state: BluetoothScannerStateResponse) -> None:
         """Update the scanner state."""
