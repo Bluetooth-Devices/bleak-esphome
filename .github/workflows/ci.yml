@@ -86,6 +86,7 @@ jobs:
         with:
           token: ${{ secrets.CODSPEED_TOKEN }}
           run: poetry run pytest --no-cov -vvvvv --codspeed
+          mode: instrumentation
 
   release:
     needs:
