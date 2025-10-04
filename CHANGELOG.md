@@ -1,5 +1,13 @@
 # Changelog
 
+## v3.4.0 (2025-10-04)
+
+### Features
+
+
+- Add wheels for python 3.14 and bump habluetooth min version ([`cfde020`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/cfde020d60fdc4c20c8b5c50d2b7219818794301))
+
+
 ## v3.3.0 (2025-09-08)
 
 ### Features
