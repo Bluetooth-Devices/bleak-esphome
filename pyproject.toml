@@ -44,7 +44,7 @@ bleak-retry-connector = ">=3.8.0"
 pytest = ">=7,<9"
 pytest-cov = ">=3,<8"
 pytest-codspeed = "^4.0.0"
-zeroconf = ">=0.136.2,<0.148.0"
+zeroconf = ">=0.136.2,<0.149.0"
 pytest-asyncio = "^1.2.0"
 
 [tool.poetry.group.docs]
