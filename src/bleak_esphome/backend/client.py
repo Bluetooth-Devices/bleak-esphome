@@ -673,7 +673,7 @@ class ESPHomeClient(BaseBleakClient):
             self._address_as_int,
             cccd_descriptor.handle,
             CCCD_NOTIFY_BYTES if supports_notify else CCCD_INDICATE_BYTES,
-            wait_for_response=False,
+            wait_for_response=True,
         )
 
     @api_error_as_bleak_error
