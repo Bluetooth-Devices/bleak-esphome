@@ -673,8 +673,12 @@ class ESPHomeClient(BaseBleakClient):
             self._address_as_int,
             cccd_descriptor.handle,
             CCCD_NOTIFY_BYTES if supports_notify else CCCD_INDICATE_BYTES,
-            wait_for_response=True,
+            wait_for_response=False,
         )
+        # Give the device time for the CCCD write to reach it and be processed
+        # Some devices are sensitive to commands being sent too quickly after
+        # enabling notifications
+        await asyncio.sleep(0.2)
 
     @api_error_as_bleak_error
     async def stop_notify(self, characteristic: BleakGATTCharacteristic) -> None:
