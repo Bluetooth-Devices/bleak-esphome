@@ -1,5 +1,5 @@
 import asyncio
-from functools import partial
+from typing import Any
 from unittest.mock import patch
 from uuid import UUID
 
@@ -17,6 +17,7 @@ from aioesphomeapi import (
     ESPHomeBluetoothGATTServices,
 )
 from bleak import BleakClient
+from bleak.backends.device import BLEDevice
 from bleak.exc import BleakError
 from habluetooth import BaseHaRemoteScanner, HaBluetoothConnector
 from pytest_asyncio import fixture as aio_fixture
@@ -29,6 +30,27 @@ from .. import generate_ble_device
 
 ESP_MAC_ADDRESS = "AA:BB:CC:DD:EE:FF"
 ESP_NAME = "proxy"
+
+
+def _make_client_backend(
+    client_data: ESPHomeClientData,
+) -> type[ESPHomeClient]:
+    """Create a backend class with client_data bound."""
+
+    class _ESPHomeClientBackend(ESPHomeClient):
+        """ESPHome client backend with bound client_data."""
+
+        __name__ = "ESPHomeClient"
+
+        def __init__(
+            self, address_or_ble_device: BLEDevice | str, *args: Any, **kwargs: Any
+        ) -> None:
+            """Initialize the ESPHomeClient with bound client_data."""
+            super().__init__(
+                address_or_ble_device, *args, client_data=client_data, **kwargs
+            )
+
+    return _ESPHomeClientBackend
 
 
 @pytest.fixture
@@ -321,9 +343,7 @@ async def test_bleak_client_get_services_and_read_write(
         "CC:BB:AA:DD:EE:FF", details={"source": ESP_MAC_ADDRESS, "address_type": 1}
     )
 
-    bleak_client = BleakClient(
-        ble_device, backend=partial(ESPHomeClient, client_data=client_data)
-    )
+    bleak_client = BleakClient(ble_device, backend=_make_client_backend(client_data))
     client: ESPHomeClient = bleak_client._backend
     client._is_connected = True
     with patch.object(
@@ -394,9 +414,7 @@ async def test_bleak_client_cached_get_services_and_read_write(
         "CC:BB:AA:DD:EE:FF", details={"source": ESP_MAC_ADDRESS, "address_type": 1}
     )
 
-    bleak_client = BleakClient(
-        ble_device, backend=partial(ESPHomeClient, client_data=client_data)
-    )
+    bleak_client = BleakClient(ble_device, backend=_make_client_backend(client_data))
     client: ESPHomeClient = bleak_client._backend
     client._is_connected = True
     with patch.object(
@@ -473,9 +491,7 @@ async def test_bleak_client_connect(
         "CC:BB:AA:DD:EE:FF", details={"source": ESP_MAC_ADDRESS, "address_type": 1}
     )
 
-    bleak_client = BleakClient(
-        ble_device, backend=partial(ESPHomeClient, client_data=client_data)
-    )
+    bleak_client = BleakClient(ble_device, backend=_make_client_backend(client_data))
     client: ESPHomeClient = bleak_client._backend
     client._bluetooth_device.ble_connections_free = 10
     with (
@@ -517,9 +533,7 @@ async def test_bleak_client_connect_wait_for_connection_slot(
         "CC:BB:AA:DD:EE:FF", details={"source": ESP_MAC_ADDRESS, "address_type": 1}
     )
 
-    bleak_client = BleakClient(
-        ble_device, backend=partial(ESPHomeClient, client_data=client_data)
-    )
+    bleak_client = BleakClient(ble_device, backend=_make_client_backend(client_data))
     client: ESPHomeClient = bleak_client._backend
     client._bluetooth_device.ble_connections_free = 0
     with (
@@ -564,9 +578,7 @@ async def test_bleak_client_connect_wait_for_connection_slot_timeout(
         "CC:BB:AA:DD:EE:FF", details={"source": ESP_MAC_ADDRESS, "address_type": 1}
     )
 
-    bleak_client = BleakClient(
-        ble_device, backend=partial(ESPHomeClient, client_data=client_data)
-    )
+    bleak_client = BleakClient(ble_device, backend=_make_client_backend(client_data))
     client: ESPHomeClient = bleak_client._backend
     client._bluetooth_device.ble_connections_free = 0
     with (
@@ -602,7 +614,7 @@ async def test_bleak_client_connect_with_pair_parameter(
     )
 
     bleak_client = BleakClient(
-        ble_device, backend=partial(ESPHomeClient, client_data=client_data), pair=True
+        ble_device, backend=_make_client_backend(client_data), pair=True
     )
     client: ESPHomeClient = bleak_client._backend
     client._bluetooth_device.ble_connections_free = 10
