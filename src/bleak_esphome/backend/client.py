@@ -673,7 +673,7 @@ class ESPHomeClient(BaseBleakClient):
             await self._client.bluetooth_gatt_write_descriptor(
                 self._address_as_int,
                 cccd_descriptor.handle,
-                CCCD_NOTIFY_BYTES if supports_notify else CCCD_INDICATE_BYTES
+                CCCD_NOTIFY_BYTES if supports_notify else CCCD_INDICATE_BYTES,
             )
         except Exception:
             notify_stop, _ = self._notify_cancels.pop(characteristic.handle)
