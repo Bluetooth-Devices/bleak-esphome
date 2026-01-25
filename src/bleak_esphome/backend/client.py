@@ -675,9 +675,11 @@ class ESPHomeClient(BaseBleakClient):
                 cccd_descriptor.handle,
                 CCCD_NOTIFY_BYTES if supports_notify else CCCD_INDICATE_BYTES,
             )
-        except Exception:
-            notify_stop, _ = self._notify_cancels.pop(characteristic.handle)
-            await notify_stop()
+        except BaseException:
+            # Use BaseException to handle CancelledError as well as Exception.
+            # bluetooth_gatt_stop_notify is sync so it's safe to call here.
+            self._notify_cancels.pop(ble_handle, None)
+            self._client.bluetooth_gatt_stop_notify(self._address_as_int, ble_handle)
             raise
 
     @api_error_as_bleak_error
