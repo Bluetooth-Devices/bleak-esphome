@@ -650,31 +650,35 @@ class ESPHomeClient(BaseBleakClient):
         if not self._feature_flags & BluetoothProxyFeature.REMOTE_CACHING.value:
             return
 
-        # For connection v3 we are responsible for enabling notifications
-        # on the cccd (characteristic client config descriptor) handle since
-        # the esp32 will not have resolved the characteristic descriptors to
-        # save memory since doing so can exhaust the memory and cause a soft
-        # reset
-        cccd_descriptor = characteristic.get_descriptor(CCCD_UUID)
-        if not cccd_descriptor:
-            raise BleakError(
-                f"{self._description}: Characteristic {characteristic.uuid} "
-                "does not have a characteristic client config descriptor."
+        try:
+            # For connection v3 we are responsible for enabling notifications
+            # on the cccd (characteristic client config descriptor) handle since
+            # the esp32 will not have resolved the characteristic descriptors to
+            # save memory since doing so can exhaust the memory and cause a soft
+            # reset
+            cccd_descriptor = characteristic.get_descriptor(CCCD_UUID)
+            if not cccd_descriptor:
+                raise BleakError(
+                    f"{self._description}: Characteristic {characteristic.uuid} "
+                    "does not have a characteristic client config descriptor."
+                )
+    
+            _LOGGER.debug(
+                "%s: Writing to CCD descriptor %s for notifications with properties=%s",
+                self._description,
+                cccd_descriptor.handle,
+                characteristic.properties,
             )
-
-        _LOGGER.debug(
-            "%s: Writing to CCD descriptor %s for notifications with properties=%s",
-            self._description,
-            cccd_descriptor.handle,
-            characteristic.properties,
-        )
-        supports_notify = "notify" in characteristic.properties
-        await self._client.bluetooth_gatt_write_descriptor(
-            self._address_as_int,
-            cccd_descriptor.handle,
-            CCCD_NOTIFY_BYTES if supports_notify else CCCD_INDICATE_BYTES,
-            wait_for_response=False,
-        )
+            supports_notify = "notify" in characteristic.properties
+            await self._client.bluetooth_gatt_write_descriptor(
+                self._address_as_int,
+                cccd_descriptor.handle,
+                CCCD_NOTIFY_BYTES if supports_notify else CCCD_INDICATE_BYTES
+            )
+        except Exception:
+            notify_stop, _ = self._notify_cancels.pop(characteristic.handle):
+            await notify_stop()
+            raise
 
     @api_error_as_bleak_error
     async def stop_notify(self, characteristic: BleakGATTCharacteristic) -> None:
