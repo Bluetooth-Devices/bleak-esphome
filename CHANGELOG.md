@@ -1,5 +1,13 @@
 # Changelog
 
+## v3.4.1 (2026-01-25)
+
+### Bug fixes
+
+
+- Make sure we wait for ccd write in start_notify ([`8ab893f`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/8ab893fdc832bc703352186a7aa98005811219dd))
+
+
 ## v3.4.0 (2025-10-04)
 
 ### Features
