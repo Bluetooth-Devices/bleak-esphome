@@ -662,7 +662,7 @@ class ESPHomeClient(BaseBleakClient):
                     f"{self._description}: Characteristic {characteristic.uuid} "
                     "does not have a characteristic client config descriptor."
                 )
-    
+
             _LOGGER.debug(
                 "%s: Writing to CCD descriptor %s for notifications with properties=%s",
                 self._description,
