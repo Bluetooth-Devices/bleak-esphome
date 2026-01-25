@@ -676,7 +676,7 @@ class ESPHomeClient(BaseBleakClient):
                 CCCD_NOTIFY_BYTES if supports_notify else CCCD_INDICATE_BYTES
             )
         except Exception:
-            notify_stop, _ = self._notify_cancels.pop(characteristic.handle):
+            notify_stop, _ = self._notify_cancels.pop(characteristic.handle)
             await notify_stop()
             raise
 
