@@ -1063,3 +1063,52 @@ async def test_start_notify_success_with_ccd_write(
     )
     # Verify notify_cancels has the entry
     assert char.handle in client._notify_cancels
+
+
+@pytest.mark.asyncio
+async def test_start_notify_missing_cccd_raises_error(
+    client_data: ESPHomeClientData,
+    esphome_bluetooth_gatt_services: ESPHomeBluetoothGATTServices,
+) -> None:
+    """Test that start_notify raises error when characteristic has no CCCD."""
+    ble_device = generate_ble_device(
+        "CC:BB:AA:DD:EE:FF", details={"source": ESP_MAC_ADDRESS, "address_type": 1}
+    )
+
+    client = ESPHomeClient(ble_device, client_data=client_data)
+    client._is_connected = True
+
+    # Get services to have characteristic objects
+    with patch.object(
+        client._client,
+        "bluetooth_gatt_get_services",
+        return_value=esphome_bluetooth_gatt_services,
+    ):
+        services = await client._get_services()
+
+    # Get a characteristic with indicate property
+    char = services.get_characteristic("00002a05-0000-1000-8000-00805f9b34fb")
+    assert char is not None
+    assert "indicate" in char.properties
+
+    # Mock the notify start to succeed
+    mock_stop_notify = AsyncMock()
+    mock_remove_callback = Mock()
+    with (
+        patch.object(
+            client._client,
+            "bluetooth_gatt_start_notify",
+            return_value=(mock_stop_notify, mock_remove_callback),
+        ),
+        # Make the characteristic appear to have no CCCD descriptor
+        patch.object(char, "get_descriptor", return_value=None),
+        patch.object(
+            client._client,
+            "bluetooth_gatt_stop_notify",
+        ) as mock_stop,
+        pytest.raises(BleakError, match="does not have a characteristic client config"),
+    ):
+        await client.start_notify(char, lambda data: None)
+
+    # Verify cleanup was called
+    mock_stop.assert_called_once_with(client._address_as_int, char.handle)
