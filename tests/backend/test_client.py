@@ -1,6 +1,6 @@
 import asyncio
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import AsyncMock, Mock, patch
 from uuid import UUID
 
 import pytest
@@ -903,3 +903,163 @@ async def test_unpair_feature_not_supported(
         await client.unpair()
     assert "Unpairing is not available in this version ESPHome" in str(exc_info.value)
     assert client._device_info.name in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_start_notify_ccd_write_failure_cleans_up(
+    client_data: ESPHomeClientData,
+    esphome_bluetooth_gatt_services: ESPHomeBluetoothGATTServices,
+) -> None:
+    """Test that start_notify cleans up when CCD write fails."""
+    ble_device = generate_ble_device(
+        "CC:BB:AA:DD:EE:FF", details={"source": ESP_MAC_ADDRESS, "address_type": 1}
+    )
+
+    client = ESPHomeClient(ble_device, client_data=client_data)
+    client._is_connected = True
+
+    # Get services to have characteristic objects
+    with patch.object(
+        client._client,
+        "bluetooth_gatt_get_services",
+        return_value=esphome_bluetooth_gatt_services,
+    ):
+        services = await client._get_services()
+
+    # Get the characteristic with indicate property (handle 8) which has CCCD
+    char = services.get_characteristic("00002a05-0000-1000-8000-00805f9b34fb")
+    assert char is not None
+    assert "indicate" in char.properties
+
+    # Mock the notify start to succeed
+    mock_stop_notify = AsyncMock()
+    mock_remove_callback = Mock()
+    with (
+        patch.object(
+            client._client,
+            "bluetooth_gatt_start_notify",
+            return_value=(mock_stop_notify, mock_remove_callback),
+        ),
+        patch.object(
+            client._client,
+            "bluetooth_gatt_write_descriptor",
+            side_effect=Exception("CCD write failed"),
+        ),
+        patch.object(
+            client._client,
+            "bluetooth_gatt_stop_notify",
+        ) as mock_stop,
+        pytest.raises(Exception, match="CCD write failed"),
+    ):
+        await client.start_notify(char, lambda data: None)
+
+    # Verify cleanup was called
+    mock_stop.assert_called_once_with(client._address_as_int, char.handle)
+    # Verify notify_cancels was cleaned up
+    assert char.handle not in client._notify_cancels
+
+
+@pytest.mark.asyncio
+async def test_start_notify_ccd_write_cancelled_cleans_up(
+    client_data: ESPHomeClientData,
+    esphome_bluetooth_gatt_services: ESPHomeBluetoothGATTServices,
+) -> None:
+    """Test that start_notify cleans up when CCD write is cancelled."""
+    ble_device = generate_ble_device(
+        "CC:BB:AA:DD:EE:FF", details={"source": ESP_MAC_ADDRESS, "address_type": 1}
+    )
+
+    client = ESPHomeClient(ble_device, client_data=client_data)
+    client._is_connected = True
+
+    # Get services to have characteristic objects
+    with patch.object(
+        client._client,
+        "bluetooth_gatt_get_services",
+        return_value=esphome_bluetooth_gatt_services,
+    ):
+        services = await client._get_services()
+
+    # Get the characteristic with indicate property (handle 8) which has CCCD
+    char = services.get_characteristic("00002a05-0000-1000-8000-00805f9b34fb")
+    assert char is not None
+
+    # Mock the notify start to succeed
+    mock_stop_notify = AsyncMock()
+    mock_remove_callback = Mock()
+    with (
+        patch.object(
+            client._client,
+            "bluetooth_gatt_start_notify",
+            return_value=(mock_stop_notify, mock_remove_callback),
+        ),
+        patch.object(
+            client._client,
+            "bluetooth_gatt_write_descriptor",
+            side_effect=asyncio.CancelledError(),
+        ),
+        patch.object(
+            client._client,
+            "bluetooth_gatt_stop_notify",
+        ) as mock_stop,
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await client.start_notify(char, lambda data: None)
+
+    # Verify cleanup was called even for CancelledError
+    mock_stop.assert_called_once_with(client._address_as_int, char.handle)
+    # Verify notify_cancels was cleaned up
+    assert char.handle not in client._notify_cancels
+
+
+@pytest.mark.asyncio
+async def test_start_notify_success_with_ccd_write(
+    client_data: ESPHomeClientData,
+    esphome_bluetooth_gatt_services: ESPHomeBluetoothGATTServices,
+) -> None:
+    """Test that start_notify succeeds and writes to CCD."""
+    ble_device = generate_ble_device(
+        "CC:BB:AA:DD:EE:FF", details={"source": ESP_MAC_ADDRESS, "address_type": 1}
+    )
+
+    client = ESPHomeClient(ble_device, client_data=client_data)
+    client._is_connected = True
+
+    # Get services to have characteristic objects
+    with patch.object(
+        client._client,
+        "bluetooth_gatt_get_services",
+        return_value=esphome_bluetooth_gatt_services,
+    ):
+        services = await client._get_services()
+
+    # Get the characteristic with indicate property (handle 8) which has CCCD
+    char = services.get_characteristic("00002a05-0000-1000-8000-00805f9b34fb")
+    assert char is not None
+    cccd = char.get_descriptor("00002902-0000-1000-8000-00805f9b34fb")
+    assert cccd is not None
+
+    # Mock the notify start to succeed
+    mock_stop_notify = AsyncMock()
+    mock_remove_callback = Mock()
+    with (
+        patch.object(
+            client._client,
+            "bluetooth_gatt_start_notify",
+            return_value=(mock_stop_notify, mock_remove_callback),
+        ),
+        patch.object(
+            client._client,
+            "bluetooth_gatt_write_descriptor",
+        ) as mock_write_descriptor,
+    ):
+        await client.start_notify(char, lambda data: None)
+
+    # Verify CCD write was called with indicate bytes (0x02, 0x00)
+    mock_write_descriptor.assert_called_once_with(
+        client._address_as_int,
+        cccd.handle,
+        b"\x02\x00",  # CCCD_INDICATE_BYTES
+    )
+    # Verify notify_cancels has the entry
+    assert char.handle in client._notify_cancels
