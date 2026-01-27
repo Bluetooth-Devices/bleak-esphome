@@ -48,6 +48,7 @@ GATT_HEADER_SIZE = 3
 DISCONNECT_TIMEOUT = 5.0
 CONNECT_FREE_SLOT_TIMEOUT = 2.0
 GATT_READ_TIMEOUT = 30.0
+DEFAULT_TIMEOUT = 30.0
 
 # CCCD (Characteristic Client Config Descriptor)
 CCCD_UUID = "00002902-0000-1000-8000-00805f9b34fb"
@@ -137,6 +138,8 @@ class ESPHomeClient(BaseBleakClient):
         self._disconnect_callbacks = client_data.disconnect_callbacks
         if TYPE_CHECKING:
             assert isinstance(address_or_ble_device, BLEDevice)
+        # Bleak 2.1+ requires timeout in kwargs
+        kwargs.setdefault("timeout", DEFAULT_TIMEOUT)
         super().__init__(address_or_ble_device, *args, **kwargs)
         self._loop = asyncio.get_running_loop()
         ble_device = address_or_ble_device
