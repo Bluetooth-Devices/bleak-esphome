@@ -1,5 +1,13 @@
 # Changelog
 
+## v3.5.0 (2026-01-27)
+
+### Features
+
+
+- Add support for bleak 2.1.1 ([`0d1e8f6`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/0d1e8f67c5f8bc7919163deee7a6f38cad6843b2))
+
+
 ## v3.4.1 (2026-01-25)
 
 ### Bug fixes
