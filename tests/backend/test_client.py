@@ -365,6 +365,72 @@ async def test_client_read_gatt_char_with_custom_timeout(
 
 
 @pytest.mark.asyncio
+async def test_client_read_gatt_descriptor_default_timeout(
+    client_data: ESPHomeClientData,
+    esphome_bluetooth_gatt_services: ESPHomeBluetoothGATTServices,
+) -> None:
+    """Test reading a GATT descriptor uses the default timeout."""
+    ble_device = generate_ble_device(
+        "CC:BB:AA:DD:EE:FF", details={"source": ESP_MAC_ADDRESS, "address_type": 1}
+    )
+
+    client = ESPHomeClient(ble_device, client_data=client_data)
+    client._is_connected = True
+    with patch.object(
+        client._client,
+        "bluetooth_gatt_get_services",
+        return_value=esphome_bluetooth_gatt_services,
+    ):
+        services = await client._get_services()
+
+    char = services.get_characteristic("00002a05-0000-1000-8000-00805f9b34fb")
+    assert char is not None
+    descriptor = char.get_descriptor("00002902-0000-1000-8000-00805f9b34fb")
+    assert descriptor is not None
+
+    with patch.object(
+        client._client,
+        "bluetooth_gatt_read_descriptor",
+    ) as mock_read_descriptor:
+        await client.read_gatt_descriptor(descriptor)
+
+    mock_read_descriptor.assert_called_once_with(225106397622015, 9, 30.0)
+
+
+@pytest.mark.asyncio
+async def test_client_read_gatt_descriptor_with_custom_timeout(
+    client_data: ESPHomeClientData,
+    esphome_bluetooth_gatt_services: ESPHomeBluetoothGATTServices,
+) -> None:
+    """Test reading a GATT descriptor with custom timeout."""
+    ble_device = generate_ble_device(
+        "CC:BB:AA:DD:EE:FF", details={"source": ESP_MAC_ADDRESS, "address_type": 1}
+    )
+
+    client = ESPHomeClient(ble_device, client_data=client_data)
+    client._is_connected = True
+    with patch.object(
+        client._client,
+        "bluetooth_gatt_get_services",
+        return_value=esphome_bluetooth_gatt_services,
+    ):
+        services = await client._get_services()
+
+    char = services.get_characteristic("00002a05-0000-1000-8000-00805f9b34fb")
+    assert char is not None
+    descriptor = char.get_descriptor("00002902-0000-1000-8000-00805f9b34fb")
+    assert descriptor is not None
+
+    with patch.object(
+        client._client,
+        "bluetooth_gatt_read_descriptor",
+    ) as mock_read_descriptor:
+        await client.read_gatt_descriptor(descriptor, timeout=90.0)
+
+    mock_read_descriptor.assert_called_once_with(225106397622015, 9, 90.0)
+
+
+@pytest.mark.asyncio
 async def test_bleak_client_get_services_and_read_write(
     client_data: ESPHomeClientData,
     esphome_bluetooth_gatt_services: ESPHomeBluetoothGATTServices,
