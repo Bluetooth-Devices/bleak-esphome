@@ -334,6 +334,37 @@ async def test_client_get_services_and_read_write(
 
 
 @pytest.mark.asyncio
+async def test_client_read_gatt_char_with_custom_timeout(
+    client_data: ESPHomeClientData,
+    esphome_bluetooth_gatt_services: ESPHomeBluetoothGATTServices,
+) -> None:
+    """Test reading a GATT char with custom timeout."""
+    ble_device = generate_ble_device(
+        "CC:BB:AA:DD:EE:FF", details={"source": ESP_MAC_ADDRESS, "address_type": 1}
+    )
+
+    client = ESPHomeClient(ble_device, client_data=client_data)
+    client._is_connected = True
+    with patch.object(
+        client._client,
+        "bluetooth_gatt_get_services",
+        return_value=esphome_bluetooth_gatt_services,
+    ):
+        services = await client._get_services()
+
+    char = services.get_characteristic("090b7847-e12b-09a8-b04b-8e0922a9abab")
+    assert char is not None
+
+    with patch.object(
+        client._client,
+        "bluetooth_gatt_read",
+    ) as mock_read:
+        await client.read_gatt_char(char, timeout=90.0)
+
+    mock_read.assert_called_once_with(225106397622015, 20, 90.0)
+
+
+@pytest.mark.asyncio
 async def test_bleak_client_get_services_and_read_write(
     client_data: ESPHomeClientData,
     esphome_bluetooth_gatt_services: ESPHomeBluetoothGATTServices,

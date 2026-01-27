@@ -524,7 +524,8 @@ class ESPHomeClient(BaseBleakClient):
         Args:
         ----
             characteristic: The BleakGATTCharacteristic to read from.
-            **kwargs: Unused
+            **kwargs:
+                timeout (float): Read timeout in seconds. Defaults to 30.0.
 
         Returns:
         -------
@@ -532,8 +533,9 @@ class ESPHomeClient(BaseBleakClient):
 
         """
         self._raise_if_not_connected()
+        timeout = kwargs.get("timeout", GATT_READ_TIMEOUT)
         return await self._client.bluetooth_gatt_read(
-            self._address_as_int, characteristic.handle, GATT_READ_TIMEOUT
+            self._address_as_int, characteristic.handle, timeout
         )
 
     @api_error_as_bleak_error
@@ -546,7 +548,8 @@ class ESPHomeClient(BaseBleakClient):
         Args:
         ----
             descriptor: The BleakGATTDescriptor to read from.
-            **kwargs: Unused
+            **kwargs:
+                timeout (float): Read timeout in seconds. Defaults to 30.0.
 
         Returns:
         -------
@@ -554,8 +557,9 @@ class ESPHomeClient(BaseBleakClient):
 
         """
         self._raise_if_not_connected()
+        timeout = kwargs.get("timeout", GATT_READ_TIMEOUT)
         return await self._client.bluetooth_gatt_read_descriptor(
-            self._address_as_int, descriptor.handle, GATT_READ_TIMEOUT
+            self._address_as_int, descriptor.handle, timeout
         )
 
     @api_error_as_bleak_error
