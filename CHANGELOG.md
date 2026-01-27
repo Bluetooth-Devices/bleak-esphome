@@ -1,5 +1,13 @@
 # Changelog
 
+## v3.6.0 (2026-01-27)
+
+### Features
+
+
+- Allow custom gatt read timeouts ([`8ebd2a3`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/8ebd2a397f1e2e21dc7ad1416840ebaafabe2c7b))
+
+
 ## v3.5.0 (2026-01-27)
 
 ### Features
