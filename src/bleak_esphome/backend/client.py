@@ -320,6 +320,7 @@ class ESPHomeClient(BaseBleakClient):
                         # to avoid a warning about an un-retrieved
                         # exception.
                         await connected_future
+                self._async_disconnected_cleanup()
                 # If the current task is not actually being cancelled,
                 # the cancellation came from inside (e.g. the
                 # connect_future being cancelled externally). Convert
@@ -341,6 +342,7 @@ class ESPHomeClient(BaseBleakClient):
                         # will be more descriptive.
                         await connected_future
                 connected_future.cancel(f"Unhandled exception in connect call: {ex}")
+                self._async_disconnected_cleanup()
                 raise
             try:
                 await connected_future
@@ -365,6 +367,9 @@ class ESPHomeClient(BaseBleakClient):
                     raise BleakError(
                         f"{self._description}: Connect attempt was cancelled"
                     ) from None
+                raise
+            except BaseException:
+                self._async_disconnected_cleanup()
                 raise
 
         if pair:
@@ -404,8 +409,10 @@ class ESPHomeClient(BaseBleakClient):
         await self._disconnect()
 
     async def _disconnect(self) -> bool:
-        await self._client.bluetooth_device_disconnect(self._address_as_int)
-        self._async_ble_device_disconnected()
+        try:
+            await self._client.bluetooth_device_disconnect(self._address_as_int)
+        finally:
+            self._async_ble_device_disconnected()
         await self._wait_for_free_connection_slot(DISCONNECT_TIMEOUT)
         return True
 
