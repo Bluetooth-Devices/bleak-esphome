@@ -1,5 +1,13 @@
 # Changelog
 
+## v3.7.0 (2026-03-07)
+
+### Features
+
+
+- Add ble connection parameters api ([`f40d54f`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/f40d54f484c1558ce4f75ac025bbb631b15c7793))
+
+
 ## v3.6.1 (2026-03-07)
 
 ### Bug fixes
