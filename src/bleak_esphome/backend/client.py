@@ -527,9 +527,12 @@ class ESPHomeClient(BaseBleakClient):
             not self._feature_flags
             & BluetoothProxyFeature.CONNECTION_PARAMS_SETTING.value
         ):
-            _LOGGER.debug(
-                "%s: ESPHome device does not support connection params setting",
-                self._description,
+            _LOGGER.warning(
+                "Setting connection parameters is not available with"
+                " ESPHome version %s on device %s;"
+                " Upgrade the ESPHome version on the device",
+                self._device_info.esphome_version,
+                self._device_info.name,
             )
             return
         self._raise_if_not_connected()
