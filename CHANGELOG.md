@@ -1,5 +1,13 @@
 # Changelog
 
+## v3.7.1 (2026-03-07)
+
+### Bug fixes
+
+
+- Warn when esphome device does not support connection params ([`c07e620`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/c07e620f66a12f5fbb8f08e3c384ef561c5a49f0))
+
+
 ## v3.7.0 (2026-03-07)
 
 ### Features
