@@ -515,6 +515,33 @@ class ESPHomeClient(BaseBleakClient):
         return False
 
     @api_error_as_bleak_error
+    async def set_connection_params(
+        self,
+        min_interval: int,
+        max_interval: int,
+        latency: int,
+        timeout: int,
+    ) -> None:
+        """Set BLE connection parameters on a connected device."""
+        if (
+            not self._feature_flags
+            & BluetoothProxyFeature.CONNECTION_PARAMS_SETTING.value
+        ):
+            _LOGGER.debug(
+                "%s: ESPHome device does not support connection params setting",
+                self._description,
+            )
+            return
+        self._raise_if_not_connected()
+        await self._client.bluetooth_device_set_connection_params(
+            self._address_as_int,
+            min_interval,
+            max_interval,
+            latency,
+            timeout,
+        )
+
+    @api_error_as_bleak_error
     async def read_gatt_char(
         self, characteristic: BleakGATTCharacteristic, **kwargs: Any
     ) -> bytearray:
