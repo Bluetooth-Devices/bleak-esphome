@@ -1209,3 +1209,69 @@ async def test_start_notify_missing_cccd_raises_error(
 
     # Verify cleanup was called
     mock_stop.assert_called_once_with(client._address_as_int, char.handle)
+
+
+@pytest.mark.asyncio
+async def test_set_connection_params(
+    client_data: ESPHomeClientData,
+) -> None:
+    """Test that set_connection_params calls through to the API client."""
+    ble_device = generate_ble_device(
+        "CC:BB:AA:DD:EE:FF", details={"source": ESP_MAC_ADDRESS, "address_type": 1}
+    )
+
+    client = ESPHomeClient(ble_device, client_data=client_data)
+    client._is_connected = True
+
+    # Enable connection params setting feature flag
+    client._feature_flags |= BluetoothProxyFeature.CONNECTION_PARAMS_SETTING.value
+
+    with patch.object(
+        client._client,
+        "bluetooth_device_set_connection_params",
+    ) as mock_set_params:
+        await client.set_connection_params(800, 800, 0, 300)
+
+    mock_set_params.assert_called_once_with(client._address_as_int, 800, 800, 0, 300)
+
+
+@pytest.mark.asyncio
+async def test_set_connection_params_not_supported(
+    client_data: ESPHomeClientData,
+) -> None:
+    """Test that set_connection_params returns early when feature flag is not set."""
+    ble_device = generate_ble_device(
+        "CC:BB:AA:DD:EE:FF", details={"source": ESP_MAC_ADDRESS, "address_type": 1}
+    )
+
+    client = ESPHomeClient(ble_device, client_data=client_data)
+    client._is_connected = True
+
+    # The default client_data fixture does NOT include CONNECTION_PARAMS_SETTING
+    with patch.object(
+        client._client,
+        "bluetooth_device_set_connection_params",
+    ) as mock_set_params:
+        await client.set_connection_params(800, 800, 0, 300)
+
+    mock_set_params.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_set_connection_params_not_connected(
+    client_data: ESPHomeClientData,
+) -> None:
+    """Test that set_connection_params raises BleakError when not connected."""
+    ble_device = generate_ble_device(
+        "CC:BB:AA:DD:EE:FF", details={"source": ESP_MAC_ADDRESS, "address_type": 1}
+    )
+
+    client = ESPHomeClient(ble_device, client_data=client_data)
+    client._is_connected = False
+
+    # Enable connection params setting feature flag
+    client._feature_flags |= BluetoothProxyFeature.CONNECTION_PARAMS_SETTING.value
+
+    with pytest.raises(BleakError) as exc_info:
+        await client.set_connection_params(800, 800, 0, 300)
+    assert "is not connected" in str(exc_info.value)
