@@ -1,5 +1,13 @@
 # Changelog
 
+## v3.6.1 (2026-03-07)
+
+### Bug fixes
+
+
+- Update poetry marker for py 3.14 ([`9b7c344`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/9b7c344d1c38d6149278bf55281802578f1b61d0))
+
+
 ## v3.6.0 (2026-01-27)
 
 ### Features
