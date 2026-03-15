@@ -23,6 +23,14 @@ if TYPE_CHECKING:
     from .device import ESPHomeBluetoothDevice
 
 
+_ADDRESS_TYPE_0 = {"address_type": 0}
+_ADDRESS_TYPE_1 = {"address_type": 1}
+_ADDRESS_TYPE_CACHE: dict[int, dict[str, int]] = {
+    0: _ADDRESS_TYPE_0,
+    1: _ADDRESS_TYPE_1,
+}
+
+
 class ESPHomeScanner(BaseHaRemoteScanner):
     """Scanner for esphome."""
 
@@ -81,7 +89,8 @@ class ESPHomeScanner(BaseHaRemoteScanner):
             adv.service_data,
             adv.manufacturer_data,
             None,
-            {"address_type": adv.address_type},
+            _ADDRESS_TYPE_CACHE.get(adv.address_type)
+            or {"address_type": adv.address_type},
             MONOTONIC_TIME(),
         )
 
@@ -105,6 +114,7 @@ class ESPHomeScanner(BaseHaRemoteScanner):
                 int_to_bluetooth_address(adv.address),
                 adv.rssi,
                 adv.data,
-                {"address_type": adv.address_type},
+                _ADDRESS_TYPE_CACHE.get(adv.address_type)
+                or {"address_type": adv.address_type},
                 now,
             )
