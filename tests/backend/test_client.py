@@ -649,10 +649,12 @@ async def test_bleak_client_connect_connected_future_cancelled_raises_bleak_erro
         captured.append(fut)
         return fut
 
+    mock_cancel_connection_state = Mock()
     with (
         patch.object(
             client._client,
             "bluetooth_device_connect",
+            return_value=mock_cancel_connection_state,
         ) as mock_connect,
         patch.object(client._loop, "create_future", capturing_create_future),
     ):
@@ -671,6 +673,10 @@ async def test_bleak_client_connect_connected_future_cancelled_raises_bleak_erro
         assert task.cancelling() == 0
 
     assert not client.is_connected
+    # The connection-state subscription must have been cleaned up before
+    # raising BleakError so it does not leak callbacks.
+    mock_cancel_connection_state.assert_called_once_with()
+    assert client._cancel_connection_state is None
 
 
 @pytest.mark.asyncio

@@ -350,6 +350,14 @@ class ESPHomeClient(BaseBleakClient):
                 # rather than letting CancelledError leak to the caller.
                 current_task = asyncio.current_task()
                 if current_task is None or not current_task.cancelling():
+                    # Clean up the connection-state subscription that was
+                    # registered by bluetooth_device_connect above, since
+                    # we are bailing out before the normal disconnect path
+                    # runs.
+                    cancel_connection_state = self._cancel_connection_state
+                    self._cancel_connection_state = None
+                    if cancel_connection_state is not None:
+                        cancel_connection_state()
                     raise BleakError(
                         f"{self._description}: Connect attempt was cancelled"
                     ) from None
