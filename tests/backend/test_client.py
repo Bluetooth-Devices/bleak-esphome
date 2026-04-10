@@ -710,6 +710,92 @@ async def test_bleak_client_connect_inner_cancelled_raises_bleak_error(
 
 
 @pytest.mark.asyncio
+async def test_bleak_client_connect_real_task_cancel_propagates_inner(
+    client_data: ESPHomeClientData,
+) -> None:
+    """
+    Test real task cancellation during ``bluetooth_device_connect``.
+
+    When the awaiting task is genuinely cancelled (``task.cancelling() > 0``)
+    while inside the ``bluetooth_device_connect`` call, the ``CancelledError``
+    must propagate so ``TaskGroup`` / ``asyncio.timeout`` semantics are
+    preserved.
+    """
+    ble_device = generate_ble_device(
+        "CC:BB:AA:DD:EE:FF", details={"source": ESP_MAC_ADDRESS, "address_type": 1}
+    )
+
+    bleak_client = BleakClient(ble_device, backend=_make_client_backend(client_data))
+    client: ESPHomeClient = bleak_client._backend
+    client._bluetooth_device.ble_connections_free = 10
+
+    inside_connect = asyncio.Event()
+
+    async def _hang(*args: Any, **kwargs: Any) -> Any:
+        inside_connect.set()
+        await asyncio.Event().wait()
+
+    with patch.object(
+        client._client,
+        "bluetooth_device_connect",
+        side_effect=_hang,
+    ):
+        task = asyncio.create_task(bleak_client.connect(dangerous_use_bleak_cache=True))
+        await inside_connect.wait()
+        # Genuine task cancel; cancelling() goes to 1 and CancelledError
+        # raises inside ``bluetooth_device_connect``. The bare ``raise`` in
+        # the except branch must propagate it as CancelledError.
+        assert task.cancel() is True
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert task.cancelled()
+
+    assert not client.is_connected
+
+
+@pytest.mark.asyncio
+async def test_bleak_client_connect_real_task_cancel_propagates_outer(
+    client_data: ESPHomeClientData,
+) -> None:
+    """
+    Test real task cancellation during the outer ``await connected_future``.
+
+    When the awaiting task is genuinely cancelled while parked on the
+    second ``await connected_future`` (after ``bluetooth_device_connect``
+    has returned), the ``CancelledError`` must propagate via the bare
+    ``raise`` so ``TaskGroup`` / ``asyncio.timeout`` semantics are preserved.
+    """
+    ble_device = generate_ble_device(
+        "CC:BB:AA:DD:EE:FF", details={"source": ESP_MAC_ADDRESS, "address_type": 1}
+    )
+
+    bleak_client = BleakClient(ble_device, backend=_make_client_backend(client_data))
+    client: ESPHomeClient = bleak_client._backend
+    client._bluetooth_device.ble_connections_free = 10
+
+    with patch.object(
+        client._client,
+        "bluetooth_device_connect",
+        return_value=Mock(),
+    ) as mock_connect:
+        task = asyncio.create_task(bleak_client.connect(dangerous_use_bleak_cache=True))
+        await asyncio.sleep(0)
+        # Wait for bluetooth_device_connect to return so we are parked on
+        # ``await connected_future``.
+        await asyncio.sleep(0)
+        mock_connect.assert_called_once()
+        # Genuine task cancel; cancelling() goes to 1 and CancelledError
+        # raises at ``await connected_future``. The bare ``raise`` in the
+        # except branch must propagate it as CancelledError.
+        assert task.cancel() is True
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert task.cancelled()
+
+    assert not client.is_connected
+
+
+@pytest.mark.asyncio
 async def test_bleak_client_connect_raises_when_device_connect_raises(
     client_data: ESPHomeClientData,
 ) -> None:
