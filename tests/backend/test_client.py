@@ -773,10 +773,11 @@ async def test_bleak_client_connect_real_task_cancel_propagates_outer(
     client: ESPHomeClient = bleak_client._backend
     client._bluetooth_device.ble_connections_free = 10
 
+    mock_cancel_connection_state = Mock()
     with patch.object(
         client._client,
         "bluetooth_device_connect",
-        return_value=Mock(),
+        return_value=mock_cancel_connection_state,
     ) as mock_connect:
         task = asyncio.create_task(bleak_client.connect(dangerous_use_bleak_cache=True))
         await asyncio.sleep(0)
@@ -793,6 +794,10 @@ async def test_bleak_client_connect_real_task_cancel_propagates_outer(
         assert task.cancelled()
 
     assert not client.is_connected
+    # The connection-state subscription must be cleaned up on the
+    # real-cancel propagation path as well, so it does not leak.
+    mock_cancel_connection_state.assert_called_once_with()
+    assert client._cancel_connection_state is None
 
 
 @pytest.mark.asyncio
