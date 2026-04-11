@@ -6,6 +6,7 @@ from uuid import UUID
 import pytest
 from aioesphomeapi import (
     APIClient,
+    APIConnectionError,
     APIVersion,
     BluetoothDevicePairing,
     BluetoothDeviceUnpairing,
@@ -618,6 +619,259 @@ async def test_bleak_client_connect(
         await client.disconnect()
 
     mock_disconnect.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_bleak_client_connect_connected_future_cancelled_raises_bleak_error(
+    client_data: ESPHomeClientData,
+) -> None:
+    """
+    Test that external cancel of the connected_future raises BleakError.
+
+    Simulates a CancelledError leaking from the ESPHome connect path when the
+    connect_future is cancelled externally (not the awaiting task). It should
+    be converted to a BleakError so bleak_retry_connector can retry instead of
+    letting CancelledError propagate to the caller.
+    """
+    ble_device = generate_ble_device(
+        "CC:BB:AA:DD:EE:FF", details={"source": ESP_MAC_ADDRESS, "address_type": 1}
+    )
+
+    bleak_client = BleakClient(ble_device, backend=_make_client_backend(client_data))
+    client: ESPHomeClient = bleak_client._backend
+    client._bluetooth_device.ble_connections_free = 10
+
+    original_create_future = client._loop.create_future
+    captured: list[asyncio.Future[bool]] = []
+
+    def capturing_create_future() -> asyncio.Future[bool]:
+        fut = original_create_future()
+        captured.append(fut)
+        return fut
+
+    mock_cancel_connection_state = Mock()
+    with (
+        patch.object(
+            client._client,
+            "bluetooth_device_connect",
+            return_value=mock_cancel_connection_state,
+        ) as mock_connect,
+        patch.object(client._loop, "create_future", capturing_create_future),
+    ):
+        task = asyncio.create_task(bleak_client.connect(dangerous_use_bleak_cache=True))
+        await asyncio.sleep(0)
+        # Wait for bluetooth_device_connect to return so we're parked on
+        # `await connected_future`.
+        await asyncio.sleep(0)
+        mock_connect.assert_called_once()
+        assert len(captured) == 1
+        # Cancel the connected_future directly; the awaiting task is not
+        # being cancelled.
+        captured[0].cancel()
+        with pytest.raises(BleakError, match="cancelled"):
+            await task
+        assert task.cancelling() == 0
+
+    assert not client.is_connected
+    # The connection-state subscription must have been cleaned up before
+    # raising BleakError so it does not leak callbacks.
+    mock_cancel_connection_state.assert_called_once_with()
+    assert client._cancel_connection_state is None
+
+
+@pytest.mark.asyncio
+async def test_bleak_client_connect_inner_cancelled_raises_bleak_error(
+    client_data: ESPHomeClientData,
+) -> None:
+    """
+    Test inner CancelledError converted to BleakError when task not cancelled.
+
+    If ``bluetooth_device_connect`` itself raises ``CancelledError`` (e.g. an
+    internal future was cancelled) while the awaiting task is not being
+    cancelled, ``connect`` should raise a ``BleakError`` instead.
+    """
+    ble_device = generate_ble_device(
+        "CC:BB:AA:DD:EE:FF", details={"source": ESP_MAC_ADDRESS, "address_type": 1}
+    )
+
+    bleak_client = BleakClient(ble_device, backend=_make_client_backend(client_data))
+    client: ESPHomeClient = bleak_client._backend
+    client._bluetooth_device.ble_connections_free = 10
+
+    with patch.object(
+        client._client,
+        "bluetooth_device_connect",
+        side_effect=asyncio.CancelledError(),
+    ):
+        with pytest.raises(BleakError, match="cancelled"):
+            await bleak_client.connect(dangerous_use_bleak_cache=True)
+
+    assert not client.is_connected
+
+
+@pytest.mark.asyncio
+async def test_bleak_client_connect_real_task_cancel_propagates_inner(
+    client_data: ESPHomeClientData,
+) -> None:
+    """
+    Test real task cancellation during ``bluetooth_device_connect``.
+
+    When the awaiting task is genuinely cancelled (``task.cancelling() > 0``)
+    while inside the ``bluetooth_device_connect`` call, the ``CancelledError``
+    must propagate so ``TaskGroup`` / ``asyncio.timeout`` semantics are
+    preserved.
+    """
+    ble_device = generate_ble_device(
+        "CC:BB:AA:DD:EE:FF", details={"source": ESP_MAC_ADDRESS, "address_type": 1}
+    )
+
+    bleak_client = BleakClient(ble_device, backend=_make_client_backend(client_data))
+    client: ESPHomeClient = bleak_client._backend
+    client._bluetooth_device.ble_connections_free = 10
+
+    inside_connect = asyncio.Event()
+
+    async def _hang(*args: Any, **kwargs: Any) -> Any:
+        inside_connect.set()
+        await asyncio.Event().wait()
+
+    with patch.object(
+        client._client,
+        "bluetooth_device_connect",
+        side_effect=_hang,
+    ):
+        task = asyncio.create_task(bleak_client.connect(dangerous_use_bleak_cache=True))
+        await inside_connect.wait()
+        # Genuine task cancel; cancelling() goes to 1 and CancelledError
+        # raises inside ``bluetooth_device_connect``. The bare ``raise`` in
+        # the except branch must propagate it as CancelledError.
+        assert task.cancel() is True
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert task.cancelled()
+
+    assert not client.is_connected
+
+
+@pytest.mark.asyncio
+async def test_bleak_client_connect_real_task_cancel_propagates_outer(
+    client_data: ESPHomeClientData,
+) -> None:
+    """
+    Test real task cancellation during the outer ``await connected_future``.
+
+    When the awaiting task is genuinely cancelled while parked on the
+    second ``await connected_future`` (after ``bluetooth_device_connect``
+    has returned), the ``CancelledError`` must propagate via the bare
+    ``raise`` so ``TaskGroup`` / ``asyncio.timeout`` semantics are preserved.
+    """
+    ble_device = generate_ble_device(
+        "CC:BB:AA:DD:EE:FF", details={"source": ESP_MAC_ADDRESS, "address_type": 1}
+    )
+
+    bleak_client = BleakClient(ble_device, backend=_make_client_backend(client_data))
+    client: ESPHomeClient = bleak_client._backend
+    client._bluetooth_device.ble_connections_free = 10
+
+    mock_cancel_connection_state = Mock()
+    with patch.object(
+        client._client,
+        "bluetooth_device_connect",
+        return_value=mock_cancel_connection_state,
+    ) as mock_connect:
+        task = asyncio.create_task(bleak_client.connect(dangerous_use_bleak_cache=True))
+        await asyncio.sleep(0)
+        # Wait for bluetooth_device_connect to return so we are parked on
+        # ``await connected_future``.
+        await asyncio.sleep(0)
+        mock_connect.assert_called_once()
+        # Genuine task cancel; cancelling() goes to 1 and CancelledError
+        # raises at ``await connected_future``. The bare ``raise`` in the
+        # except branch must propagate it as CancelledError.
+        assert task.cancel() is True
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert task.cancelled()
+
+    assert not client.is_connected
+    # The connection-state subscription must be cleaned up on the
+    # real-cancel propagation path as well, so it does not leak.
+    mock_cancel_connection_state.assert_called_once_with()
+    assert client._cancel_connection_state is None
+
+
+@pytest.mark.asyncio
+async def test_bleak_client_connect_raises_when_device_connect_raises(
+    client_data: ESPHomeClientData,
+) -> None:
+    """
+    Test ``bluetooth_device_connect`` raising propagates and cancels future.
+
+    Exercises the ``except Exception`` branch around the
+    ``bluetooth_device_connect`` call when ``connected_future`` has not yet
+    been resolved. The exception must propagate unchanged and the unresolved
+    ``connected_future`` must be cancelled to avoid leaking it.
+    """
+    ble_device = generate_ble_device(
+        "CC:BB:AA:DD:EE:FF", details={"source": ESP_MAC_ADDRESS, "address_type": 1}
+    )
+
+    bleak_client = BleakClient(ble_device, backend=_make_client_backend(client_data))
+    client: ESPHomeClient = bleak_client._backend
+    client._bluetooth_device.ble_connections_free = 10
+
+    with patch.object(
+        client._client,
+        "bluetooth_device_connect",
+        side_effect=APIConnectionError("boom"),
+    ):
+        with pytest.raises(BleakError, match="boom"):
+            await bleak_client.connect(dangerous_use_bleak_cache=True)
+
+    assert not client.is_connected
+
+
+@pytest.mark.asyncio
+async def test_bleak_client_connect_raises_after_connected_future_resolved(
+    client_data: ESPHomeClientData,
+) -> None:
+    """
+    Test ``bluetooth_device_connect`` raising after the callback fires.
+
+    Exercises the ``if connected_future.done():`` branch inside the
+    ``except Exception`` handler around the ``bluetooth_device_connect``
+    call. The callback reports a failed connection (which sets a
+    ``BleakError`` on ``connected_future``), then ``bluetooth_device_connect``
+    itself raises. The already-resolved future must be drained (with the
+    BleakError suppressed) and the original exception must propagate.
+    """
+    ble_device = generate_ble_device(
+        "CC:BB:AA:DD:EE:FF", details={"source": ESP_MAC_ADDRESS, "address_type": 1}
+    )
+
+    bleak_client = BleakClient(ble_device, backend=_make_client_backend(client_data))
+    client: ESPHomeClient = bleak_client._backend
+    client._bluetooth_device.ble_connections_free = 10
+
+    async def _fire_callback_then_raise(
+        address: int,
+        on_bluetooth_connection_state: Any,
+        **kwargs: Any,
+    ) -> None:
+        # Resolve the future with a disconnect (sets BleakError exception),
+        # then raise to exercise the ``if connected_future.done():`` branch.
+        on_bluetooth_connection_state(False, 0, 0)
+        raise APIConnectionError("boom")
+
+    with patch.object(
+        client._client,
+        "bluetooth_device_connect",
+        side_effect=_fire_callback_then_raise,
+    ):
+        with pytest.raises(BleakError, match="boom"):
+            await bleak_client.connect(dangerous_use_bleak_cache=True)
+
+    assert not client.is_connected
 
 
 @pytest.mark.asyncio
