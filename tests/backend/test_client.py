@@ -875,6 +875,93 @@ async def test_bleak_client_connect_raises_after_connected_future_resolved(
 
 
 @pytest.mark.asyncio
+async def test_bleak_client_connect_get_services_cleanup_shielded(
+    client_data: ESPHomeClientData,
+) -> None:
+    """
+    Test the disconnect cleanup is shielded against re-cancellation.
+
+    When ``_get_services`` raises ``CancelledError`` the connect path
+    runs ``await self._disconnect()`` to release the BLE connection on
+    the ESP side. ``_disconnect`` is itself a cancellation point, so a
+    parent-task cancellation arriving while it is running would
+    interrupt it half-way and leave the device connected on the ESP
+    side. The fix wraps the disconnect in ``asyncio.shield`` and, on
+    re-cancellation, finishes awaiting the disconnect before re-raising
+    so the cleanup completes and the original cancellation still
+    propagates to the caller.
+
+    This test asserts both that ``CancelledError`` propagates and that
+    the slow ``_disconnect`` ran to completion (its
+    ``disconnect_finished`` event is set).
+    """
+    ble_device = generate_ble_device(
+        "CC:BB:AA:DD:EE:FF", details={"source": ESP_MAC_ADDRESS, "address_type": 1}
+    )
+
+    bleak_client = BleakClient(ble_device, backend=_make_client_backend(client_data))
+    client: ESPHomeClient = bleak_client._backend
+    client._bluetooth_device.ble_connections_free = 10
+
+    in_disconnect = asyncio.Event()
+    release_disconnect = asyncio.Event()
+    disconnect_finished = asyncio.Event()
+    in_get_services = asyncio.Event()
+
+    async def _hang_get_services(*args: Any, **kwargs: Any) -> Any:
+        in_get_services.set()
+        await asyncio.Event().wait()
+
+    async def _slow_disconnect() -> bool:
+        in_disconnect.set()
+        # Do not use try/finally here; we want ``disconnect_finished``
+        # to remain unset if a re-cancellation interrupts this await,
+        # so the test can detect whether the disconnect ran to
+        # completion or was cut off.
+        await release_disconnect.wait()
+        disconnect_finished.set()
+        return True
+
+    with (
+        patch.object(
+            client._client,
+            "bluetooth_device_connect",
+            return_value=Mock(),
+        ) as mock_connect,
+        patch.object(client, "_get_services", side_effect=_hang_get_services),
+        patch.object(client, "_disconnect", side_effect=_slow_disconnect),
+    ):
+        task = asyncio.create_task(bleak_client.connect(dangerous_use_bleak_cache=True))
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        mock_connect.assert_called_once()
+        # Resolve the connection so we proceed past the
+        # ``await connected_future`` and into ``_get_services``.
+        callback = mock_connect.call_args_list[0][0][1]
+        callback(True, 23, 0)
+        await in_get_services.wait()
+        # Cancel the parent task while ``_get_services`` is hanging;
+        # this jumps into the ``except asyncio.CancelledError`` cleanup
+        # which calls ``_disconnect``.
+        assert task.cancel() is True
+        await in_disconnect.wait()
+        # Re-cancel the parent while ``_disconnect`` is parked. Without
+        # the shield this would interrupt the disconnect and leave the
+        # ESP-side connection dangling.
+        task.cancel()
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        # Now release the disconnect so it can complete.
+        release_disconnect.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert task.cancelled()
+        # The disconnect must have run to completion (the shield held
+        # the re-cancel back).
+        assert disconnect_finished.is_set()
+
+
+@pytest.mark.asyncio
 async def test_bleak_client_connect_wait_for_connection_slot(
     client_data: ESPHomeClientData,
     esphome_bluetooth_gatt_services: ESPHomeBluetoothGATTServices,
