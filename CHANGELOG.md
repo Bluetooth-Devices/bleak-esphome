@@ -1,5 +1,13 @@
 # Changelog
 
+## v3.7.3 (2026-04-11)
+
+### Bug fixes
+
+
+- Shield disconnect cleanup in connect cancel handler ([`a5675c1`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/a5675c1b5ec13c25c49b2977c2e177e83654fca0))
+
+
 ## v3.7.2 (2026-04-11)
 
 ### Bug fixes
