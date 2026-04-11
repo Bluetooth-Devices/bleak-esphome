@@ -375,11 +375,24 @@ class ESPHomeClient(BaseBleakClient):
                 dangerous_use_bleak_cache=dangerous_use_bleak_cache
             )
         except asyncio.CancelledError:
-            # On cancel we must still raise cancelled error
-            # to avoid blocking the cancellation even if the
-            # disconnect call fails.
+            # On cancel we must still raise CancelledError to avoid
+            # blocking the cancellation even if the disconnect call
+            # fails. Shield the disconnect so a re-cancellation arriving
+            # while it is running cannot interrupt it half-way and leave
+            # the device connected on the ESP side. If a re-cancel does
+            # arrive, finish awaiting the disconnect before re-raising
+            # so the cancellation still propagates to the caller.
+            disconnect_task = asyncio.create_task(self._disconnect())
             with contextlib.suppress(Exception):
-                await self._disconnect()
+                try:
+                    await asyncio.shield(disconnect_task)
+                except asyncio.CancelledError:
+                    # Re-cancelled while the shielded disconnect was in
+                    # flight. Drain disconnect_task best-effort so it
+                    # does not leak before the original CancelledError
+                    # is re-raised below.
+                    with contextlib.suppress(Exception):
+                        await disconnect_task
             raise
         except Exception:
             await self._disconnect()
