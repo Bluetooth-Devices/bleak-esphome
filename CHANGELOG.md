@@ -1,5 +1,22 @@
 # Changelog
 
+## v3.7.2 (2026-04-11)
+
+### Bug fixes
+
+
+- Convert spurious cancellederror in connect to bleakerror ([`e3cc1c1`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/e3cc1c1f3b2099aba9703578136fa05886326618))
+
+
+- Convert spurious cancellation in apiconnectionmanager.start to esphomestartaborted ([`9190d8c`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/9190d8c5607c2bc099306bc9297cc79ad183a302))
+
+
+### Documentation
+
+
+- Add extension methods documentation ([`4d10fca`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/4d10fcac05a5d8db9c45825ba631bab7ea207839))
+
+
 ## v3.7.1 (2026-03-07)
 
 ### Bug fixes
