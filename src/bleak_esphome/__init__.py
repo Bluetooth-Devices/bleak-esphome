@@ -1,9 +1,13 @@
 from .connect import connect_scanner
-from .connection_manager import APIConnectionManager, ESPHomeDeviceConfig, StartAborted
+from .connection_manager import (
+    APIConnectionManager,
+    ESPHomeDeviceConfig,
+    ESPHomeStartAborted,
+)
 
 __all__ = [
     "APIConnectionManager",
     "ESPHomeDeviceConfig",
-    "StartAborted",
+    "ESPHomeStartAborted",
     "connect_scanner",
 ]

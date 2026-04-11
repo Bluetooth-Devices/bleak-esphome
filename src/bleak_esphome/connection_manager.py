@@ -10,7 +10,7 @@ from aioesphomeapi import APIClient, ReconnectLogic
 import bleak_esphome
 
 
-class StartAborted(Exception):
+class ESPHomeStartAborted(Exception):
     """Raised when ``APIConnectionManager.start()`` is aborted by ``stop()``."""
 
 
@@ -68,12 +68,12 @@ class APIConnectionManager:
         except asyncio.CancelledError:
             # If the awaiting task is not actually being cancelled, the
             # CancelledError came from ``stop()`` cancelling the
-            # ``_start_future`` directly. Convert it to ``StartAborted``
+            # ``_start_future`` directly. Convert it to ``ESPHomeStartAborted``
             # so it does not leak as a spurious cancellation that breaks
             # ``TaskGroup`` / ``asyncio.timeout`` semantics for callers.
             current_task = asyncio.current_task()
             if current_task is None or not current_task.cancelling():
-                raise StartAborted("API connection start was aborted") from None
+                raise ESPHomeStartAborted("API connection start was aborted") from None
             raise
 
     async def stop(self) -> None:

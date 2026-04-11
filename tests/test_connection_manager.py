@@ -10,18 +10,18 @@ import pytest
 from bleak_esphome.connection_manager import (
     APIConnectionManager,
     ESPHomeDeviceConfig,
-    StartAborted,
+    ESPHomeStartAborted,
 )
 
 
 @pytest.mark.asyncio
 async def test_start_aborted_by_stop_raises_start_aborted() -> None:
     """
-    ``start()`` raises ``StartAborted`` when ``stop()`` cancels its future.
+    ``start()`` raises ``ESPHomeStartAborted`` when ``stop()`` cancels its future.
 
     The ``_start_future`` is a local future that ``stop()`` cancels to
     abort a pending ``start()``. The resulting ``CancelledError`` must
-    be converted to ``StartAborted`` so it does not leak as a spurious
+    be converted to ``ESPHomeStartAborted`` so it does not leak as a spurious
     cancellation that breaks ``TaskGroup`` / ``asyncio.timeout``
     semantics in callers (whose task is not actually being cancelled).
     """
@@ -40,7 +40,7 @@ async def test_start_aborted_by_stop_raises_start_aborted() -> None:
             await asyncio.sleep(0)
             await asyncio.sleep(0)
             await manager.stop()
-            with pytest.raises(StartAborted):
+            with pytest.raises(ESPHomeStartAborted):
                 await start_task
             assert start_task.cancelling() == 0
             assert not start_task.cancelled()
