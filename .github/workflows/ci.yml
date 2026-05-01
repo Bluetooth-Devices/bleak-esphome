@@ -207,5 +207,5 @@ jobs:
           merge-multiple: true
 
       - uses:
-          pypa/gh-action-pypi-publish@v1.13.0
+          pypa/gh-action-pypi-publish@v1.14.0
           # To test: repository_url: https://test.pypi.org/legacy/
