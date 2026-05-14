@@ -86,7 +86,11 @@ class ESPHomeBluetoothDevice:
 
     def _wait_for_ble_connections_free_timeout(self, fut: asyncio.Future[int]) -> None:
         """Timeout the wait_for_ble_connections_free future."""
-        fut.set_exception(TimeoutError())
+        # The future may already be done if ``async_update_ble_connection_limits``
+        # scheduled the awaiter to resume but the timer fired before the awaiter
+        # ran to cancel it. Guard against ``InvalidStateError`` in that race.
+        if not fut.done():
+            fut.set_exception(TimeoutError())
 
     async def wait_for_ble_connections_free(self, timeout: float) -> int:
         """Wait until there are free BLE connections."""
@@ -101,3 +105,7 @@ class ESPHomeBluetoothDevice:
             return await fut
         finally:
             cancel_timeout.cancel()
+            # On cancellation the future stays in the list — drop it so the
+            # list does not grow unbounded across repeated cancelled waits.
+            if fut in self._ble_connection_free_futures:
+                self._ble_connection_free_futures.remove(fut)
