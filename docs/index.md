@@ -6,6 +6,7 @@
 
 installation
 usage
+architecture
 ```
 
 ```{toctree}

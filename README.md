@@ -39,7 +39,15 @@
 
 ---
 
-Bleak backend of ESPHome
+A [Bleak](https://github.com/hbldh/bleak) backend that proxies Bluetooth Low Energy
+through an ESP32 running [ESPHome](https://github.com/esphome/esphome) with the
+[Bluetooth Proxy](https://esphome.io/components/bluetooth_proxy.html) component.
+It lets any Python application — Home Assistant, an add-on, or a stand-alone
+script — discover and connect to BLE peripherals using a remote ESP32 as the
+adapter. The Bluetooth Proxy firmware itself lives in the ESPHome project; this
+library is the host-side client. See the [architecture
+docs](https://bleak-esphome.readthedocs.io/en/latest/architecture.html) for how
+the pieces fit together.
 
 ## Installation
 
