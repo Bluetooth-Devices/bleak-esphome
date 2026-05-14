@@ -5,7 +5,7 @@ Guidance for Claude Code (and other AI assistants) working in this repository.
 ## What this library is
 
 `bleak-esphome` is the **host-side** Bleak backend that lets a Python app drive
-Bluetooth via an ESPHome Bluetooth Proxy node. It is *not* the firmware — the
+Bluetooth via an ESPHome Bluetooth Proxy node. It is _not_ the firmware — the
 proxy firmware lives in the `esphome/esphome` repository under
 `esphome/components/bluetooth_proxy/`. This package wires an
 `aioesphomeapi.APIClient` to an `ESPHomeScanner` + `ESPHomeClient`, with no
