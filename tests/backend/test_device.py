@@ -58,7 +58,9 @@ async def test_wait_for_ble_connections_free_cancellation_cleans_up() -> None:
 
 
 @pytest.mark.asyncio
-async def test_wait_for_ble_connections_free_timer_after_result_does_not_raise() -> None:
+async def test_wait_for_ble_connections_free_timer_after_result_does_not_raise() -> (
+    None
+):
     """A late-firing timeout must not raise ``InvalidStateError`` on a resolved future."""
     device = ESPHomeBluetoothDevice(ESP_NAME, ESP_MAC_ADDRESS)
     fut: asyncio.Future[int] = asyncio.get_running_loop().create_future()
