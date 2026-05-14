@@ -24,9 +24,7 @@ class ESPHomeBluetoothDevice:
     ble_connections_free: int = 0
     ble_connections_limit: int = 0
     ble_allocations: list[int] = field(default_factory=list)
-    _ble_connection_free_futures: list[asyncio.Future[int]] = field(
-        default_factory=list
-    )
+    _ble_connection_free_futures: set[asyncio.Future[int]] = field(default_factory=set)
     loop: asyncio.AbstractEventLoop = field(default_factory=asyncio.get_running_loop)
     available: bool = False
     cache: ESPHomeBluetoothCache = field(default_factory=ESPHomeBluetoothCache)
@@ -86,14 +84,15 @@ class ESPHomeBluetoothDevice:
 
     def _wait_for_ble_connections_free_timeout(self, fut: asyncio.Future[int]) -> None:
         """Timeout the wait_for_ble_connections_free future."""
-        fut.set_exception(TimeoutError())
+        if not fut.done():
+            fut.set_exception(TimeoutError())
 
     async def wait_for_ble_connections_free(self, timeout: float) -> int:
         """Wait until there are free BLE connections."""
         if self.ble_connections_free > 0:
             return self.ble_connections_free
         fut: asyncio.Future[int] = self.loop.create_future()
-        self._ble_connection_free_futures.append(fut)
+        self._ble_connection_free_futures.add(fut)
         cancel_timeout = self.loop.call_later(
             timeout, self._wait_for_ble_connections_free_timeout, fut
         )
@@ -101,3 +100,4 @@ class ESPHomeBluetoothDevice:
             return await fut
         finally:
             cancel_timeout.cancel()
+            self._ble_connection_free_futures.discard(fut)
