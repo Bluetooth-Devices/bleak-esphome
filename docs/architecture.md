@@ -16,14 +16,14 @@ client that consumes the proxy's API.
 
 The split is:
 
-| Layer | Where it lives | Repository |
-| --- | --- | --- |
-| ESP32 firmware (Bluetooth Proxy component) | On the ESP32, written in C++ | [esphome/esphome](https://github.com/esphome/esphome) — see `esphome/components/bluetooth_proxy/` |
-| Native ESPHome API (protobuf over TCP, port 6053) | On the ESP32 | [esphome/esphome](https://github.com/esphome/esphome) — see `esphome/components/api/` |
-| Python client for the ESPHome API | Host (your app) | [esphome/aioesphomeapi](https://github.com/esphome/aioesphomeapi) |
-| `bleak`-compatible adapter on top of `aioesphomeapi` | Host (your app) | **this repo** |
-| Remote-scanner / connection-slot bookkeeping primitives | Host (your app) | [Bluetooth-Devices/habluetooth](https://github.com/Bluetooth-Devices/habluetooth) |
-| Standard BLE client API consumed by user code | Host (your app) | [hbldh/bleak](https://github.com/hbldh/bleak) |
+| Layer                                                   | Where it lives               | Repository                                                                                        |
+| ------------------------------------------------------- | ---------------------------- | ------------------------------------------------------------------------------------------------- |
+| ESP32 firmware (Bluetooth Proxy component)              | On the ESP32, written in C++ | [esphome/esphome](https://github.com/esphome/esphome) — see `esphome/components/bluetooth_proxy/` |
+| Native ESPHome API (protobuf over TCP, port 6053)       | On the ESP32                 | [esphome/esphome](https://github.com/esphome/esphome) — see `esphome/components/api/`             |
+| Python client for the ESPHome API                       | Host (your app)              | [esphome/aioesphomeapi](https://github.com/esphome/aioesphomeapi)                                 |
+| `bleak`-compatible adapter on top of `aioesphomeapi`    | Host (your app)              | **this repo**                                                                                     |
+| Remote-scanner / connection-slot bookkeeping primitives | Host (your app)              | [Bluetooth-Devices/habluetooth](https://github.com/Bluetooth-Devices/habluetooth)                 |
+| Standard BLE client API consumed by user code           | Host (your app)              | [hbldh/bleak](https://github.com/hbldh/bleak)                                                     |
 
 So when you call `bleak.BleakScanner.discover(...)` in an app that has set up an
 `APIConnectionManager`, what really happens is:
