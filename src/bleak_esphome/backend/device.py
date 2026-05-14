@@ -24,9 +24,7 @@ class ESPHomeBluetoothDevice:
     ble_connections_free: int = 0
     ble_connections_limit: int = 0
     ble_allocations: list[int] = field(default_factory=list)
-    _ble_connection_free_futures: set[asyncio.Future[int]] = field(
-        default_factory=set
-    )
+    _ble_connection_free_futures: set[asyncio.Future[int]] = field(default_factory=set)
     loop: asyncio.AbstractEventLoop = field(default_factory=asyncio.get_running_loop)
     available: bool = False
     cache: ESPHomeBluetoothCache = field(default_factory=ESPHomeBluetoothCache)
