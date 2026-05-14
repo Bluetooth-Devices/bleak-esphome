@@ -31,7 +31,7 @@ async def test_wait_for_ble_connections_free_resolves_on_update() -> None:
     assert not task.done()
     device.async_update_ble_connection_limits(2, 5, [10, 20, 30])
     assert await task == 2
-    assert device._ble_connection_free_futures == []
+    assert device._ble_connection_free_futures == set()
 
 
 @pytest.mark.asyncio
@@ -41,7 +41,7 @@ async def test_wait_for_ble_connections_free_timeout() -> None:
     with pytest.raises(TimeoutError):
         await device.wait_for_ble_connections_free(0.001)
     # Future must be cleaned up so the internal list does not grow forever.
-    assert device._ble_connection_free_futures == []
+    assert device._ble_connection_free_futures == set()
 
 
 @pytest.mark.asyncio
@@ -54,7 +54,7 @@ async def test_wait_for_ble_connections_free_cancellation_cleans_up() -> None:
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
-    assert device._ble_connection_free_futures == []
+    assert device._ble_connection_free_futures == set()
 
 
 @pytest.mark.asyncio
@@ -77,12 +77,12 @@ async def test_async_update_ble_connection_limits_skips_done_futures() -> None:
     done_fut: asyncio.Future[int] = asyncio.get_running_loop().create_future()
     done_fut.cancel()
     pending_fut: asyncio.Future[int] = asyncio.get_running_loop().create_future()
-    device._ble_connection_free_futures.extend([done_fut, pending_fut])
+    device._ble_connection_free_futures.update([done_fut, pending_fut])
     device.async_update_ble_connection_limits(4, 4, [])
     assert pending_fut.done()
     assert pending_fut.result() == 4
     # Both must be cleared.
-    assert device._ble_connection_free_futures == []
+    assert device._ble_connection_free_futures == set()
 
 
 @pytest.mark.asyncio
