@@ -1,5 +1,22 @@
 # Changelog
 
+## v3.7.4 (2026-05-14)
+
+### Bug fixes
+
+
+- Guard wait_for_ble_connections_free against late timer race ([`9ece701`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/9ece701b4bdf190ea33b226541419d0119e9168f))
+
+
+### Documentation
+
+
+- Add claude.md with style and tooling guide ([`789088c`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/789088c0873ab4f54691f7dfbf913d508ded09cc))
+
+
+- Explain bluetooth proxy architecture and library scope ([`355cac6`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/355cac657837281220eab7e0701b64713e945054))
+
+
 ## v3.7.3 (2026-04-11)
 
 ### Bug fixes
