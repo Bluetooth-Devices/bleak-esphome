@@ -74,7 +74,8 @@ async def test_start_real_task_cancel_propagates_cancelled_error() -> None:
 
 @pytest.mark.asyncio
 async def test_on_connect_registers_scanner_and_resolves_start() -> None:
-    """``_on_connect`` wires the scanner and unblocks a pending ``start()``.
+    """
+    ``_on_connect`` wires the scanner and unblocks a pending ``start()``.
 
     The reconnect callback fetches device info, builds a scanner via
     ``bleak_esphome.connect_scanner``, sets it up, registers it with the
@@ -119,7 +120,8 @@ async def test_on_connect_registers_scanner_and_resolves_start() -> None:
 
 @pytest.mark.asyncio
 async def test_on_connect_with_already_done_future_does_not_raise() -> None:
-    """Re-entering ``_on_connect`` after the future resolved is a no-op for it.
+    """
+    Re-entering ``_on_connect`` after the future resolved is a no-op for it.
 
     On reconnection, ``_on_connect`` may fire again. The future is one-shot
     and must not raise ``InvalidStateError`` when already done.
