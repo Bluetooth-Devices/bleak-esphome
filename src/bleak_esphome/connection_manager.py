@@ -37,12 +37,19 @@ class APIConnectionManager:
             on_connect=self._on_connect,
         )
         self._unregister_scanner: Callable[[], None] | None = None
+        self._disconnect_callbacks: set[Callable[[], None]] | None = None
         self._start_future: asyncio.Future[None] = (
             asyncio.get_running_loop().create_future()
         )
 
     async def _on_disconnect(self, expected_disconnect: bool) -> None:
         """Handle the disconnection of the API client."""
+        if self._disconnect_callbacks is not None:
+            # Each callback discards itself from the set, so iterate a
+            # snapshot to avoid "set changed size during iteration".
+            for callback in list(self._disconnect_callbacks):
+                callback()
+            self._disconnect_callbacks = None
         if self._unregister_scanner is not None:
             self._unregister_scanner()
             self._unregister_scanner = None
@@ -57,6 +64,7 @@ class APIConnectionManager:
         self._unregister_scanner = habluetooth.get_manager().async_register_scanner(
             scanner
         )
+        self._disconnect_callbacks = client_data.disconnect_callbacks
         if not self._start_future.done():
             self._start_future.set_result(None)
 
