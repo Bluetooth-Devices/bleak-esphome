@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
+from typing import cast
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
@@ -200,7 +201,9 @@ async def test_on_disconnect_unregisters_scanner_when_registered(
     await conn_manager._on_disconnect(expected_disconnect=True)
 
     unregister.assert_called_once_with()
-    assert conn_manager._unregister_scanner is None
+    # ``cast`` re-widens the attribute type that mypy narrowed to ``Mock``
+    # after the earlier assignment so ``is None`` is not flagged unreachable.
+    assert cast(Callable[[], None] | None, conn_manager._unregister_scanner) is None
 
 
 @pytest.mark.asyncio
