@@ -243,9 +243,22 @@ async def test_esp_disconnected_invokes_bleak_callback(
     client._disconnected_callback = callback
     client._async_esp_disconnected()
     callback.assert_called_once()
-    # Callback is cleared after firing.
     assert client._disconnected_callback is None
-    # A second disconnect does not call the callback again.
+
+
+@pytest.mark.asyncio
+async def test_esp_disconnected_does_not_refire_callback(
+    client_data: ESPHomeClientData,
+) -> None:
+    """A second ESP disconnect after the callback cleared is a no-op."""
+    client = _make_client(client_data)
+    client._is_connected = True
+    callback = Mock()
+    client._disconnected_callback = callback
+    client._async_esp_disconnected()
+    callback.assert_called_once()
+    # Simulate a stale second disconnect: the callback was cleared, and any
+    # subsequent disconnect must not refire it.
     client._is_connected = True
     client._async_esp_disconnected()
     callback.assert_called_once()
