@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Iterator
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
@@ -12,6 +13,53 @@ from bleak_esphome.connection_manager import (
     ESPHomeDeviceConfig,
     ESPHomeStartAborted,
 )
+
+
+@pytest.fixture
+def config() -> ESPHomeDeviceConfig:
+    """Return a minimal device config used across tests."""
+    return {"address": "test.local", "noise_psk": None}
+
+
+@pytest.fixture
+def conn_manager(config: ESPHomeDeviceConfig) -> APIConnectionManager:
+    """Build an ``APIConnectionManager`` under a patched ``ReconnectLogic``."""
+    with patch("bleak_esphome.connection_manager.ReconnectLogic"):
+        return APIConnectionManager(config)
+
+
+@pytest.fixture
+def conn_manager_with_mocked_reconnect(
+    config: ESPHomeDeviceConfig,
+) -> Iterator[tuple[APIConnectionManager, Mock]]:
+    """
+    Yield ``(manager, mock_reconnect_logic)`` pre-wired for ``stop()`` tests.
+
+    The manager has a mocked ``_cli`` with ``disconnect`` and a resolved
+    ``_start_future`` so ``stop()`` does not cancel it.
+    """
+    with patch(
+        "bleak_esphome.connection_manager.ReconnectLogic"
+    ) as mock_reconnect_logic_cls:
+        mock_reconnect_logic = mock_reconnect_logic_cls.return_value
+        mock_reconnect_logic.stop = AsyncMock()
+        mgr = APIConnectionManager(config)
+        mgr._cli = Mock()
+        mgr._cli.disconnect = AsyncMock()
+        mgr._start_future.set_result(None)
+        yield mgr, mock_reconnect_logic
+
+
+@pytest.fixture
+def patched_scanner_wiring() -> Iterator[tuple[Mock, Mock]]:
+    """Patch ``connect_scanner`` and ``habluetooth.get_manager`` together."""
+    with (
+        patch("bleak_esphome.connect_scanner") as connect_scanner_mock,
+        patch(
+            "bleak_esphome.connection_manager.habluetooth.get_manager"
+        ) as get_manager_mock,
+    ):
+        yield connect_scanner_mock, get_manager_mock
 
 
 @pytest.mark.asyncio
@@ -73,7 +121,10 @@ async def test_start_real_task_cancel_propagates_cancelled_error() -> None:
 
 
 @pytest.mark.asyncio
-async def test_on_connect_registers_scanner_and_resolves_start() -> None:
+async def test_on_connect_registers_scanner_and_resolves_start(
+    conn_manager: APIConnectionManager,
+    patched_scanner_wiring: tuple[Mock, Mock],
+) -> None:
     """
     ``_on_connect`` wires the scanner and unblocks a pending ``start()``.
 
@@ -82,144 +133,112 @@ async def test_on_connect_registers_scanner_and_resolves_start() -> None:
     habluetooth manager, and resolves ``_start_future`` so a waiting
     ``start()`` returns.
     """
-    config: ESPHomeDeviceConfig = {"address": "test.local", "noise_psk": None}
-
     mock_scanner = Mock()
     mock_client_data = Mock()
     mock_client_data.scanner = mock_scanner
     unregister_scanner = Mock()
-    mock_manager = Mock()
-    mock_manager.async_register_scanner = Mock(return_value=unregister_scanner)
+    mock_habluetooth_manager = Mock()
+    mock_habluetooth_manager.async_register_scanner = Mock(
+        return_value=unregister_scanner
+    )
 
-    with patch("bleak_esphome.connection_manager.ReconnectLogic"):
-        manager = APIConnectionManager(config)
+    connect_scanner_mock, get_manager_mock = patched_scanner_wiring
+    connect_scanner_mock.return_value = mock_client_data
+    get_manager_mock.return_value = mock_habluetooth_manager
 
-    manager._cli = Mock()
-    manager._cli.device_info = AsyncMock(return_value=Mock(name="device_info"))
+    conn_manager._cli = Mock()
+    conn_manager._cli.device_info = AsyncMock(return_value=Mock(name="device_info"))
 
-    with (
-        patch(
-            "bleak_esphome.connect_scanner", return_value=mock_client_data
-        ) as mock_connect_scanner,
-        patch(
-            "bleak_esphome.connection_manager.habluetooth.get_manager",
-            return_value=mock_manager,
-        ),
-    ):
-        await manager._on_connect()
+    await conn_manager._on_connect()
 
-    mock_connect_scanner.assert_called_once_with(
-        manager._cli, manager._cli.device_info.return_value, True
+    connect_scanner_mock.assert_called_once_with(
+        conn_manager._cli, conn_manager._cli.device_info.return_value, True
     )
     mock_scanner.async_setup.assert_called_once_with()
-    mock_manager.async_register_scanner.assert_called_once_with(mock_scanner)
-    assert manager._unregister_scanner is unregister_scanner
-    assert manager._start_future.done()
-    assert manager._start_future.result() is None
+    mock_habluetooth_manager.async_register_scanner.assert_called_once_with(
+        mock_scanner
+    )
+    assert conn_manager._unregister_scanner is unregister_scanner
+    assert conn_manager._start_future.done()
+    assert conn_manager._start_future.result() is None
 
 
 @pytest.mark.asyncio
-async def test_on_connect_with_already_done_future_does_not_raise() -> None:
+async def test_on_connect_with_already_done_future_does_not_raise(
+    conn_manager: APIConnectionManager,
+    patched_scanner_wiring: tuple[Mock, Mock],
+) -> None:
     """
     Re-entering ``_on_connect`` after the future resolved is a no-op for it.
 
     On reconnection, ``_on_connect`` may fire again. The future is one-shot
     and must not raise ``InvalidStateError`` when already done.
     """
-    config: ESPHomeDeviceConfig = {"address": "test.local", "noise_psk": None}
-
-    with patch("bleak_esphome.connection_manager.ReconnectLogic"):
-        manager = APIConnectionManager(config)
-
-    manager._start_future.set_result(None)
-    manager._cli = Mock()
-    manager._cli.device_info = AsyncMock(return_value=Mock())
+    conn_manager._start_future.set_result(None)
+    conn_manager._cli = Mock()
+    conn_manager._cli.device_info = AsyncMock(return_value=Mock())
 
     mock_client_data = Mock()
     mock_client_data.scanner = Mock()
 
-    with (
-        patch("bleak_esphome.connect_scanner", return_value=mock_client_data),
-        patch(
-            "bleak_esphome.connection_manager.habluetooth.get_manager",
-            return_value=MagicMock(),
-        ),
-    ):
-        # Must not raise InvalidStateError on the already-resolved future.
-        await manager._on_connect()
+    connect_scanner_mock, get_manager_mock = patched_scanner_wiring
+    connect_scanner_mock.return_value = mock_client_data
+    get_manager_mock.return_value = MagicMock()
+
+    # Must not raise InvalidStateError on the already-resolved future.
+    await conn_manager._on_connect()
 
 
 @pytest.mark.asyncio
-async def test_on_disconnect_unregisters_scanner_when_registered() -> None:
+async def test_on_disconnect_unregisters_scanner_when_registered(
+    conn_manager: APIConnectionManager,
+) -> None:
     """``_on_disconnect`` calls the unregister callback and clears it."""
-    config: ESPHomeDeviceConfig = {"address": "test.local", "noise_psk": None}
+    unregister = Mock()
+    conn_manager._unregister_scanner = unregister
 
-    with patch("bleak_esphome.connection_manager.ReconnectLogic"):
-        manager = APIConnectionManager(config)
+    await conn_manager._on_disconnect(expected_disconnect=True)
 
+    unregister.assert_called_once_with()
+    assert conn_manager._unregister_scanner is None
+
+
+@pytest.mark.asyncio
+async def test_on_disconnect_when_no_scanner_registered_is_noop(
+    conn_manager: APIConnectionManager,
+) -> None:
+    """``_on_disconnect`` is safe when no scanner was registered yet."""
+    assert conn_manager._unregister_scanner is None
+    await conn_manager._on_disconnect(expected_disconnect=False)
+    assert conn_manager._unregister_scanner is None
+
+
+@pytest.mark.asyncio
+async def test_stop_unregisters_scanner_if_registered(
+    conn_manager_with_mocked_reconnect: tuple[APIConnectionManager, Mock],
+) -> None:
+    """``stop()`` calls the scanner unregister callback if one is set."""
+    manager, mock_reconnect_logic = conn_manager_with_mocked_reconnect
     unregister = Mock()
     manager._unregister_scanner = unregister
 
-    await manager._on_disconnect(expected_disconnect=True)
+    await manager.stop()
 
     unregister.assert_called_once_with()
-    assert manager._unregister_scanner is None
-
-
-@pytest.mark.asyncio
-async def test_on_disconnect_when_no_scanner_registered_is_noop() -> None:
-    """``_on_disconnect`` is safe when no scanner was registered yet."""
-    config: ESPHomeDeviceConfig = {"address": "test.local", "noise_psk": None}
-
-    with patch("bleak_esphome.connection_manager.ReconnectLogic"):
-        manager = APIConnectionManager(config)
-
-    assert manager._unregister_scanner is None
-    await manager._on_disconnect(expected_disconnect=False)
-    assert manager._unregister_scanner is None
-
-
-@pytest.mark.asyncio
-async def test_stop_unregisters_scanner_if_registered() -> None:
-    """``stop()`` calls the scanner unregister callback if one is set."""
-    config: ESPHomeDeviceConfig = {"address": "test.local", "noise_psk": None}
-
-    with patch(
-        "bleak_esphome.connection_manager.ReconnectLogic"
-    ) as mock_reconnect_logic_cls:
-        mock_reconnect_logic = mock_reconnect_logic_cls.return_value
-        mock_reconnect_logic.stop = AsyncMock()
-        manager = APIConnectionManager(config)
-        manager._cli = Mock()
-        manager._cli.disconnect = AsyncMock()
-        unregister = Mock()
-        manager._unregister_scanner = unregister
-        # Mark the start future done so stop() doesn't cancel it.
-        manager._start_future.set_result(None)
-
-        await manager.stop()
-
-    unregister.assert_called_once_with()
-    assert manager._unregister_scanner is None
     mock_reconnect_logic.stop.assert_awaited_once_with()
     manager._cli.disconnect.assert_awaited_once_with()
+    # Final assertion: avoids mypy ``[unreachable]`` from narrowing
+    # ``_unregister_scanner`` to ``Mock`` after the earlier assignment.
+    assert manager._unregister_scanner is None
 
 
 @pytest.mark.asyncio
-async def test_stop_without_scanner_does_not_call_unregister() -> None:
+async def test_stop_without_scanner_does_not_call_unregister(
+    conn_manager_with_mocked_reconnect: tuple[APIConnectionManager, Mock],
+) -> None:
     """``stop()`` is a no-op for the scanner branch when nothing is registered."""
-    config: ESPHomeDeviceConfig = {"address": "test.local", "noise_psk": None}
+    manager, _ = conn_manager_with_mocked_reconnect
 
-    with patch(
-        "bleak_esphome.connection_manager.ReconnectLogic"
-    ) as mock_reconnect_logic_cls:
-        mock_reconnect_logic = mock_reconnect_logic_cls.return_value
-        mock_reconnect_logic.stop = AsyncMock()
-        manager = APIConnectionManager(config)
-        manager._cli = Mock()
-        manager._cli.disconnect = AsyncMock()
-        manager._start_future.set_result(None)
-
-        await manager.stop()
+    await manager.stop()
 
     assert manager._unregister_scanner is None
