@@ -596,6 +596,7 @@ async def test_bleak_client_connect(
         patch.object(
             client._client,
             "bluetooth_device_connect",
+            return_value=Mock(),
         ) as mock_connect,
         patch.object(
             client._client,
@@ -978,6 +979,7 @@ async def test_bleak_client_connect_wait_for_connection_slot(
         patch.object(
             client._client,
             "bluetooth_device_connect",
+            return_value=Mock(),
         ) as mock_connect,
         patch.object(
             client._client,
@@ -1024,6 +1026,7 @@ async def test_bleak_client_connect_wait_for_connection_slot_timeout(
         patch.object(
             client._client,
             "bluetooth_device_connect",
+            return_value=Mock(),
         ) as mock_connect,
         patch.object(
             client._client,
@@ -1060,6 +1063,7 @@ async def test_bleak_client_connect_with_pair_parameter(
         patch.object(
             client._client,
             "bluetooth_device_connect",
+            return_value=Mock(),
         ) as mock_connect,
         patch.object(
             client._client,
@@ -1108,6 +1112,7 @@ async def test_esphome_client_connect_with_pair_false(
         patch.object(
             client._client,
             "bluetooth_device_connect",
+            return_value=Mock(),
         ) as mock_connect,
         patch.object(
             client._client,
