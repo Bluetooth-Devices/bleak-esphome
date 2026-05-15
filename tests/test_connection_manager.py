@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator
 from typing import cast
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
+import pytest_asyncio
 
 from bleak_esphome.connection_manager import (
     APIConnectionManager,
@@ -22,22 +23,22 @@ def config() -> ESPHomeDeviceConfig:
     return {"address": "test.local", "noise_psk": None}
 
 
-@pytest.fixture
-def conn_manager(config: ESPHomeDeviceConfig) -> APIConnectionManager:
+@pytest_asyncio.fixture
+async def conn_manager(config: ESPHomeDeviceConfig) -> APIConnectionManager:
     """Build an ``APIConnectionManager`` under a patched ``ReconnectLogic``."""
     with patch("bleak_esphome.connection_manager.ReconnectLogic"):
         return APIConnectionManager(config)
 
 
-@pytest.fixture
-def conn_manager_with_mocked_reconnect(
+@pytest_asyncio.fixture
+async def conn_manager_with_mocked_reconnect(
     config: ESPHomeDeviceConfig,
-) -> Iterator[tuple[APIConnectionManager, Mock]]:
+) -> AsyncIterator[tuple[APIConnectionManager, Mock, AsyncMock]]:
     """
-    Yield ``(manager, mock_reconnect_logic)`` pre-wired for ``stop()`` tests.
+    Yield ``(manager, mock_reconnect_logic, mock_disconnect)`` for ``stop()`` tests.
 
-    The manager has a mocked ``_cli`` with ``disconnect`` and a resolved
-    ``_start_future`` so ``stop()`` does not cancel it.
+    The manager has its ``_cli.disconnect`` patched with ``AsyncMock`` and a
+    resolved ``_start_future`` so ``stop()`` does not cancel it.
     """
     with patch(
         "bleak_esphome.connection_manager.ReconnectLogic"
@@ -45,10 +46,10 @@ def conn_manager_with_mocked_reconnect(
         mock_reconnect_logic = mock_reconnect_logic_cls.return_value
         mock_reconnect_logic.stop = AsyncMock()
         mgr = APIConnectionManager(config)
-        mgr._cli = Mock()
-        mgr._cli.disconnect = AsyncMock()
         mgr._start_future.set_result(None)
-        yield mgr, mock_reconnect_logic
+        mock_disconnect = AsyncMock()
+        with patch.object(mgr._cli, "disconnect", mock_disconnect):
+            yield mgr, mock_reconnect_logic, mock_disconnect
 
 
 @pytest.fixture
@@ -218,10 +219,10 @@ async def test_on_disconnect_when_no_scanner_registered_is_noop(
 
 @pytest.mark.asyncio
 async def test_stop_unregisters_scanner_if_registered(
-    conn_manager_with_mocked_reconnect: tuple[APIConnectionManager, Mock],
+    conn_manager_with_mocked_reconnect: tuple[APIConnectionManager, Mock, AsyncMock],
 ) -> None:
     """``stop()`` calls the scanner unregister callback if one is set."""
-    manager, mock_reconnect_logic = conn_manager_with_mocked_reconnect
+    manager, mock_reconnect_logic, mock_disconnect = conn_manager_with_mocked_reconnect
     unregister = Mock()
     manager._unregister_scanner = unregister
 
@@ -229,19 +230,21 @@ async def test_stop_unregisters_scanner_if_registered(
 
     unregister.assert_called_once_with()
     mock_reconnect_logic.stop.assert_awaited_once_with()
-    manager._cli.disconnect.assert_awaited_once_with()
-    # Final assertion: avoids mypy ``[unreachable]`` from narrowing
-    # ``_unregister_scanner`` to ``Mock`` after the earlier assignment.
-    assert manager._unregister_scanner is None
+    mock_disconnect.assert_awaited_once_with()
+    # ``cast`` re-widens the attribute type that mypy narrowed to ``Mock``
+    # after the earlier assignment so ``is None`` is not flagged unreachable.
+    assert cast(Callable[[], None] | None, manager._unregister_scanner) is None
 
 
 @pytest.mark.asyncio
 async def test_stop_without_scanner_does_not_call_unregister(
-    conn_manager_with_mocked_reconnect: tuple[APIConnectionManager, Mock],
+    conn_manager_with_mocked_reconnect: tuple[APIConnectionManager, Mock, AsyncMock],
 ) -> None:
     """``stop()`` is a no-op for the scanner branch when nothing is registered."""
-    manager, _ = conn_manager_with_mocked_reconnect
+    manager, mock_reconnect_logic, mock_disconnect = conn_manager_with_mocked_reconnect
 
     await manager.stop()
 
     assert manager._unregister_scanner is None
+    mock_reconnect_logic.stop.assert_awaited_once_with()
+    mock_disconnect.assert_awaited_once_with()
