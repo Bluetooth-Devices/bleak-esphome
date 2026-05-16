@@ -138,6 +138,7 @@ async def test_on_connect_registers_scanner_and_resolves_start(
     mock_scanner = Mock()
     mock_client_data = Mock()
     mock_client_data.scanner = mock_scanner
+    mock_client_data.disconnect_callbacks = set()
     unregister_scanner = Mock()
     mock_habluetooth_manager = Mock()
     mock_habluetooth_manager.async_register_scanner = Mock(
@@ -161,6 +162,7 @@ async def test_on_connect_registers_scanner_and_resolves_start(
         mock_scanner
     )
     assert conn_manager._unregister_scanner is unregister_scanner
+    assert conn_manager._disconnect_callbacks is mock_client_data.disconnect_callbacks
     assert conn_manager._start_future.done()
     assert conn_manager._start_future.result() is None
 
@@ -182,6 +184,7 @@ async def test_on_connect_with_already_done_future_does_not_raise(
 
     mock_client_data = Mock()
     mock_client_data.scanner = Mock()
+    mock_client_data.disconnect_callbacks = set()
 
     connect_scanner_mock, get_manager_mock = patched_scanner_wiring
     connect_scanner_mock.return_value = mock_client_data
@@ -215,6 +218,52 @@ async def test_on_disconnect_when_no_scanner_registered_is_noop(
     assert conn_manager._unregister_scanner is None
     await conn_manager._on_disconnect(expected_disconnect=False)
     assert conn_manager._unregister_scanner is None
+
+
+@pytest.mark.asyncio
+async def test_on_disconnect_fires_client_data_disconnect_callbacks(
+    conn_manager: APIConnectionManager,
+) -> None:
+    """
+    ``_on_disconnect`` invokes every registered ``ESPHomeClient`` disconnect cb.
+
+    Each active BLE client (``ESPHomeClient``) registers a disconnect callback
+    in ``client_data.disconnect_callbacks`` so that when the ESP drops, it can
+    tear down its state and notify bleak callers. The manager must fire them.
+    """
+    cb_one = Mock()
+    cb_two = Mock()
+    conn_manager._disconnect_callbacks = {cb_one, cb_two}
+
+    await conn_manager._on_disconnect(expected_disconnect=False)
+
+    cb_one.assert_called_once_with()
+    cb_two.assert_called_once_with()
+    assert conn_manager._disconnect_callbacks is None
+
+
+@pytest.mark.asyncio
+async def test_on_disconnect_tolerates_callback_self_removal(
+    conn_manager: APIConnectionManager,
+) -> None:
+    """
+    Firing a callback that mutates the set must not raise.
+
+    Real ``ESPHomeClient`` callbacks discard themselves from
+    ``disconnect_callbacks`` during ``_async_disconnected_cleanup``, so the
+    manager must iterate a snapshot rather than the live set.
+    """
+    callbacks: set[Callable[[], None]] = set()
+
+    def self_removing() -> None:
+        callbacks.discard(self_removing)
+
+    callbacks.add(self_removing)
+    conn_manager._disconnect_callbacks = callbacks
+
+    # Should not raise ``RuntimeError: set changed size during iteration``.
+    await conn_manager._on_disconnect(expected_disconnect=True)
+    assert conn_manager._disconnect_callbacks is None
 
 
 @pytest.mark.asyncio
