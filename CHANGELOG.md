@@ -1,5 +1,28 @@
 # Changelog
 
+## v3.7.5 (2026-05-16)
+
+### Bug fixes
+
+
+- Clear scanner.current_mode when proxy is not running ([`7f25876`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/7f258765d4cbd3ce170a4711401b7705f6a40e42))
+
+
+- Fire client_data.disconnect_callbacks on esp disconnect ([`a2c90ff`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/a2c90ff9406bc8609faf0e7b9d040b2031dc472e))
+
+
+### Testing
+
+
+- Silence bledevice deprecation and asyncmock coroutine warnings ([`c2c443d`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/c2c443d7fc65356a00fb085f5fcec16af830442d))
+
+
+- Cover connection_manager on_connect/on_disconnect/stop paths ([`0c680fa`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/0c680fa48f74b9062b8da751d9806bf19e5e2be3))
+
+
+- Add direct coverage for esphomebluetoothcache ([`52f968e`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/52f968e51e248da322d1c793a94f71923a671ea7))
+
+
 ## v3.7.4 (2026-05-14)
 
 ### Bug fixes
