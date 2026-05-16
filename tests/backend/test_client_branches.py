@@ -33,8 +33,7 @@ from bleak.exc import BleakError
 
 from bleak_esphome.backend.client import ESPHomeClient, ESPHomeClientData
 
-from .. import generate_ble_device
-from ._helpers import ESP_MAC_ADDRESS, _make_client, _make_client_backend
+from ._helpers import ESP_MAC_ADDRESS, _make_client
 
 
 @pytest.mark.asyncio
@@ -428,16 +427,10 @@ async def test_stop_notify_missing_handle_is_noop(
 
 @pytest.mark.asyncio
 async def test_connect_get_services_failure_disconnects(
-    client_data: ESPHomeClientData,
+    bleak_pair: tuple[BleakClient, ESPHomeClient],
 ) -> None:
     """A non-cancel failure in ``_get_services`` runs ``_disconnect``."""
-    ble_device = generate_ble_device(
-        "CC:BB:AA:DD:EE:FF",
-        details={"source": ESP_MAC_ADDRESS, "address_type": 1},
-    )
-    bleak_client = BleakClient(ble_device, backend=_make_client_backend(client_data))
-    client: ESPHomeClient = bleak_client._backend
-    client._bluetooth_device.ble_connections_free = 10
+    bleak_client, client = bleak_pair
 
     async def _boom(*args: Any, **kwargs: Any) -> Any:
         raise RuntimeError("services boom")

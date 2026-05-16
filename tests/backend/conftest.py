@@ -13,14 +13,16 @@ from aioesphomeapi import (
     DeviceInfo,
     ESPHomeBluetoothGATTServices,
 )
+from bleak import BleakClient
+from bleak.backends.device import BLEDevice
 from habluetooth import HaBluetoothConnector
 from pytest_asyncio import fixture as aio_fixture
 
-from bleak_esphome.backend.client import ESPHomeClientData
+from bleak_esphome.backend.client import ESPHomeClient, ESPHomeClientData
 from bleak_esphome.backend.device import ESPHomeBluetoothDevice
 from bleak_esphome.backend.scanner import ESPHomeScanner
 
-from ._helpers import ESP_MAC_ADDRESS, ESP_NAME
+from ._helpers import ESP_MAC_ADDRESS, ESP_NAME, make_ble_device, make_bleak_client
 
 
 @aio_fixture(name="client_data")
@@ -213,3 +215,40 @@ def esphome_bluetooth_gatt_services() -> ESPHomeBluetoothGATTServices:
         address=57911560448430,
         services=[service1, service2, service3, service4],
     )
+
+
+@pytest.fixture
+def ble_device() -> BLEDevice:
+    """Return the standard remote BLE device used by tests."""
+    return make_ble_device()
+
+
+@aio_fixture(name="esphome_client")
+async def esphome_client_fixture(
+    client_data: ESPHomeClientData, ble_device: BLEDevice
+) -> ESPHomeClient:
+    """Return a fresh ``ESPHomeClient`` bound to ``client_data``."""
+    return ESPHomeClient(ble_device, client_data=client_data)
+
+
+@aio_fixture(name="connected_client")
+async def connected_client_fixture(
+    esphome_client: ESPHomeClient,
+) -> ESPHomeClient:
+    """Return an ``ESPHomeClient`` already marked as connected."""
+    esphome_client._is_connected = True
+    return esphome_client
+
+
+@aio_fixture(name="bleak_pair")
+async def bleak_pair_fixture(
+    client_data: ESPHomeClientData,
+) -> tuple[BleakClient, ESPHomeClient]:
+    """Return ``(BleakClient, ESPHomeClient backend)`` with 10 free slots."""
+    return make_bleak_client(client_data)
+
+
+@aio_fixture(name="bluetooth_device")
+async def bluetooth_device_fixture() -> ESPHomeBluetoothDevice:
+    """Return a fresh ``ESPHomeBluetoothDevice`` for the standard proxy."""
+    return ESPHomeBluetoothDevice(ESP_NAME, ESP_MAC_ADDRESS)

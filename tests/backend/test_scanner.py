@@ -21,8 +21,7 @@ from bleak_esphome.backend.client import ESPHomeClientData
 from bleak_esphome.backend.device import ESPHomeBluetoothDevice
 from bleak_esphome.backend.scanner import ESPHomeScanner
 
-ESP_MAC_ADDRESS = "AA:BB:CC:DD:EE:FF"
-ESP_NAME = "proxy"
+from ._helpers import ESP_MAC_ADDRESS, ESP_NAME
 
 
 @pytest.fixture
