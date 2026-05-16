@@ -18,8 +18,18 @@ from habluetooth import BaseHaRemoteScanner, HaBluetoothConnector
 from bleak_esphome.backend.client import ESPHomeClient, ESPHomeClientData
 from bleak_esphome.backend.scanner import ESPHomeScanner
 
-from .. import generate_ble_device
-from ._helpers import ESP_MAC_ADDRESS, ESP_NAME, _make_client_backend
+from ._helpers import (
+    ESP_MAC_ADDRESS,
+    ESP_NAME,
+    fetch_services,
+    make_bleak_client,
+    patch_get_services,
+)
+
+PRIMARY_CHAR_UUID = "090b7847-e12b-09a8-b04b-8e0922a9abab"
+INDICATE_CHAR_UUID = "00002a05-0000-1000-8000-00805f9b34fb"
+CCCD_UUID = "00002902-0000-1000-8000-00805f9b34fb"
+BLE_ADDRESS_AS_INT = 225106397622015
 
 
 def test_get_services() -> None:
@@ -29,275 +39,180 @@ def test_get_services() -> None:
 
 
 @pytest.mark.asyncio
-async def test_client_usage_while_not_connected(client_data: ESPHomeClientData) -> None:
+async def test_client_usage_while_not_connected(
+    esphome_client: ESPHomeClient,
+) -> None:
     """Test client usage while not connected."""
-    ble_device = generate_ble_device(
-        "CC:BB:AA:DD:EE:FF", details={"source": ESP_MAC_ADDRESS, "address_type": 1}
-    )
-
-    client = ESPHomeClient(ble_device, client_data=client_data)
     with pytest.raises(
         BleakError, match=f"{ESP_NAME}.*{ESP_MAC_ADDRESS}.*not connected"
     ):
-        # Try to write without a proper characteristic object
-        # This should fail since we're not connected
         from bleak.backends.characteristic import BleakGATTCharacteristic
 
-        # Create a mock characteristic
         char = BleakGATTCharacteristic(None, 1, "test", [], lambda: 20, None)
-        await client.write_gatt_char(char, b"test", False)
+        await esphome_client.write_gatt_char(char, b"test", False)
 
 
 @pytest.mark.asyncio
 async def test_client_get_services_and_read_write(
-    client_data: ESPHomeClientData,
+    connected_client: ESPHomeClient,
     esphome_bluetooth_gatt_services: ESPHomeBluetoothGATTServices,
 ) -> None:
     """Test getting client services and read/write a GATT char."""
-    ble_device = generate_ble_device(
-        "CC:BB:AA:DD:EE:FF", details={"source": ESP_MAC_ADDRESS, "address_type": 1}
-    )
-
-    client = ESPHomeClient(ble_device, client_data=client_data)
-    client._is_connected = True
-    with patch.object(
-        client._client,
-        "bluetooth_gatt_get_services",
-        return_value=esphome_bluetooth_gatt_services,
-    ):
-        services = await client._get_services()
+    services = await fetch_services(connected_client, esphome_bluetooth_gatt_services)
 
     assert services is not None
 
-    char = services.get_characteristic("090b7847-e12b-09a8-b04b-8e0922a9abab")
+    char = services.get_characteristic(PRIMARY_CHAR_UUID)
     assert char is not None
-    assert char.uuid == "090b7847-e12b-09a8-b04b-8e0922a9abab"
+    assert char.uuid == PRIMARY_CHAR_UUID
     assert char.properties == ["read", "write"]
     assert char.handle == 20
 
-    char2 = services.get_characteristic("090b7847-e12b-09a8-b04b-8e0922a9abab")
+    char2 = services.get_characteristic(PRIMARY_CHAR_UUID)
     assert char2 is not None
-    assert char2.uuid == "090b7847-e12b-09a8-b04b-8e0922a9abab"
+    assert char2.uuid == PRIMARY_CHAR_UUID
     assert char2.properties == ["read", "write"]
     assert char2.handle == 20
 
-    char3 = services.get_characteristic(UUID("090b7847-e12b-09a8-b04b-8e0922a9abab"))
+    char3 = services.get_characteristic(UUID(PRIMARY_CHAR_UUID))
     assert char3 is not None
-    assert char3.uuid == "090b7847-e12b-09a8-b04b-8e0922a9abab"
+    assert char3.uuid == PRIMARY_CHAR_UUID
     assert char3.properties == ["read", "write"]
     assert char3.handle == 20
 
     with patch.object(
-        client._client,
+        connected_client._client,
         "bluetooth_gatt_write",
     ) as mock_write:
-        await client.write_gatt_char(
-            char,
-            b"test",
-            True,
-        )
+        await connected_client.write_gatt_char(char, b"test", True)
 
-    mock_write.assert_called_once_with(225106397622015, 20, b"test", True)
+    mock_write.assert_called_once_with(BLE_ADDRESS_AS_INT, 20, b"test", True)
 
     with patch.object(
-        client._client,
+        connected_client._client,
         "bluetooth_gatt_read",
     ) as mock_read:
-        await client.read_gatt_char(
-            char,
-        )
+        await connected_client.read_gatt_char(char)
 
-    mock_read.assert_called_once_with(225106397622015, 20, 30)
+    mock_read.assert_called_once_with(BLE_ADDRESS_AS_INT, 20, 30)
 
 
 @pytest.mark.asyncio
 async def test_client_read_gatt_char_with_custom_timeout(
-    client_data: ESPHomeClientData,
+    connected_client: ESPHomeClient,
     esphome_bluetooth_gatt_services: ESPHomeBluetoothGATTServices,
 ) -> None:
     """Test reading a GATT char with custom timeout."""
-    ble_device = generate_ble_device(
-        "CC:BB:AA:DD:EE:FF", details={"source": ESP_MAC_ADDRESS, "address_type": 1}
-    )
-
-    client = ESPHomeClient(ble_device, client_data=client_data)
-    client._is_connected = True
-    with patch.object(
-        client._client,
-        "bluetooth_gatt_get_services",
-        return_value=esphome_bluetooth_gatt_services,
-    ):
-        services = await client._get_services()
-
-    char = services.get_characteristic("090b7847-e12b-09a8-b04b-8e0922a9abab")
+    services = await fetch_services(connected_client, esphome_bluetooth_gatt_services)
+    char = services.get_characteristic(PRIMARY_CHAR_UUID)
     assert char is not None
 
     with patch.object(
-        client._client,
+        connected_client._client,
         "bluetooth_gatt_read",
     ) as mock_read:
-        await client.read_gatt_char(char, timeout=90.0)
+        await connected_client.read_gatt_char(char, timeout=90.0)
 
-    mock_read.assert_called_once_with(225106397622015, 20, 90.0)
+    mock_read.assert_called_once_with(BLE_ADDRESS_AS_INT, 20, 90.0)
 
 
 @pytest.mark.asyncio
 async def test_client_read_gatt_descriptor_default_timeout(
-    client_data: ESPHomeClientData,
+    connected_client: ESPHomeClient,
     esphome_bluetooth_gatt_services: ESPHomeBluetoothGATTServices,
 ) -> None:
     """Test reading a GATT descriptor uses the default timeout."""
-    ble_device = generate_ble_device(
-        "CC:BB:AA:DD:EE:FF", details={"source": ESP_MAC_ADDRESS, "address_type": 1}
-    )
-
-    client = ESPHomeClient(ble_device, client_data=client_data)
-    client._is_connected = True
-    with patch.object(
-        client._client,
-        "bluetooth_gatt_get_services",
-        return_value=esphome_bluetooth_gatt_services,
-    ):
-        services = await client._get_services()
-
-    char = services.get_characteristic("00002a05-0000-1000-8000-00805f9b34fb")
+    services = await fetch_services(connected_client, esphome_bluetooth_gatt_services)
+    char = services.get_characteristic(INDICATE_CHAR_UUID)
     assert char is not None
-    descriptor = char.get_descriptor("00002902-0000-1000-8000-00805f9b34fb")
+    descriptor = char.get_descriptor(CCCD_UUID)
     assert descriptor is not None
 
     with patch.object(
-        client._client,
+        connected_client._client,
         "bluetooth_gatt_read_descriptor",
     ) as mock_read_descriptor:
-        await client.read_gatt_descriptor(descriptor)
+        await connected_client.read_gatt_descriptor(descriptor)
 
-    mock_read_descriptor.assert_called_once_with(225106397622015, 9, 30.0)
+    mock_read_descriptor.assert_called_once_with(BLE_ADDRESS_AS_INT, 9, 30.0)
 
 
 @pytest.mark.asyncio
 async def test_client_read_gatt_descriptor_with_custom_timeout(
-    client_data: ESPHomeClientData,
+    connected_client: ESPHomeClient,
     esphome_bluetooth_gatt_services: ESPHomeBluetoothGATTServices,
 ) -> None:
     """Test reading a GATT descriptor with custom timeout."""
-    ble_device = generate_ble_device(
-        "CC:BB:AA:DD:EE:FF", details={"source": ESP_MAC_ADDRESS, "address_type": 1}
-    )
-
-    client = ESPHomeClient(ble_device, client_data=client_data)
-    client._is_connected = True
-    with patch.object(
-        client._client,
-        "bluetooth_gatt_get_services",
-        return_value=esphome_bluetooth_gatt_services,
-    ):
-        services = await client._get_services()
-
-    char = services.get_characteristic("00002a05-0000-1000-8000-00805f9b34fb")
+    services = await fetch_services(connected_client, esphome_bluetooth_gatt_services)
+    char = services.get_characteristic(INDICATE_CHAR_UUID)
     assert char is not None
-    descriptor = char.get_descriptor("00002902-0000-1000-8000-00805f9b34fb")
+    descriptor = char.get_descriptor(CCCD_UUID)
     assert descriptor is not None
 
     with patch.object(
-        client._client,
+        connected_client._client,
         "bluetooth_gatt_read_descriptor",
     ) as mock_read_descriptor:
-        await client.read_gatt_descriptor(descriptor, timeout=90.0)
+        await connected_client.read_gatt_descriptor(descriptor, timeout=90.0)
 
-    mock_read_descriptor.assert_called_once_with(225106397622015, 9, 90.0)
+    mock_read_descriptor.assert_called_once_with(BLE_ADDRESS_AS_INT, 9, 90.0)
 
 
 @pytest.mark.asyncio
 async def test_bleak_client_get_services_and_read_write(
-    client_data: ESPHomeClientData,
+    bleak_pair: tuple[BleakClient, ESPHomeClient],
     esphome_bluetooth_gatt_services: ESPHomeBluetoothGATTServices,
 ) -> None:
-    """Test getting client services via the bleak wrapper and read/write a GATT char."""
-    ble_device = generate_ble_device(
-        "CC:BB:AA:DD:EE:FF", details={"source": ESP_MAC_ADDRESS, "address_type": 1}
-    )
-
-    bleak_client = BleakClient(ble_device, backend=_make_client_backend(client_data))
-    client: ESPHomeClient = bleak_client._backend
+    """Test getting client services via the bleak wrapper and read/write."""
+    bleak_client, client = bleak_pair
     client._is_connected = True
-    with patch.object(
-        client._client,
-        "bluetooth_gatt_get_services",
-        return_value=esphome_bluetooth_gatt_services,
-    ):
-        # In Bleak 1.0, services are available as a property after connect
-        # We need to manually trigger the service discovery since we're mocking
-        await client._get_services()
+    # In Bleak 1.0, services are available as a property after connect; trigger
+    # service discovery manually since we are mocking the proxy.
+    await fetch_services(client, esphome_bluetooth_gatt_services)
 
     assert bleak_client.services is not None
 
-    char2 = bleak_client.services.get_characteristic(
-        "090b7847-e12b-09a8-b04b-8e0922a9abab"
-    )
+    char2 = bleak_client.services.get_characteristic(PRIMARY_CHAR_UUID)
     assert char2 is not None
-    assert char2.uuid == "090b7847-e12b-09a8-b04b-8e0922a9abab"
+    assert char2.uuid == PRIMARY_CHAR_UUID
     assert char2.properties == ["read", "write"]
     assert char2.handle == 20
 
-    char3 = bleak_client.services.get_characteristic(
-        UUID("090b7847-e12b-09a8-b04b-8e0922a9abab")
-    )
+    char3 = bleak_client.services.get_characteristic(UUID(PRIMARY_CHAR_UUID))
     assert char3 is not None
-    assert char3.uuid == "090b7847-e12b-09a8-b04b-8e0922a9abab"
+    assert char3.uuid == PRIMARY_CHAR_UUID
     assert char3.properties == ["read", "write"]
     assert char3.handle == 20
 
-    char = bleak_client.services.get_characteristic(
-        "090b7847-e12b-09a8-b04b-8e0922a9abab"
-    )
+    char = bleak_client.services.get_characteristic(PRIMARY_CHAR_UUID)
     assert char is not None
-    assert char.uuid == "090b7847-e12b-09a8-b04b-8e0922a9abab"
-    assert char.properties == ["read", "write"]
-    assert char.handle == 20
 
     with patch.object(
         client._client,
         "bluetooth_gatt_write",
     ) as mock_write:
-        await bleak_client.write_gatt_char(
-            char,
-            b"test",
-            True,
-        )
+        await bleak_client.write_gatt_char(char, b"test", True)
 
-    mock_write.assert_called_once_with(225106397622015, 20, b"test", True)
+    mock_write.assert_called_once_with(BLE_ADDRESS_AS_INT, 20, b"test", True)
 
     with patch.object(
         client._client,
         "bluetooth_gatt_read",
     ) as mock_read:
-        await bleak_client.read_gatt_char(
-            char,
-        )
+        await bleak_client.read_gatt_char(char)
 
-    mock_read.assert_called_once_with(225106397622015, 20, 30)
+    mock_read.assert_called_once_with(BLE_ADDRESS_AS_INT, 20, 30)
 
 
 @pytest.mark.asyncio
 async def test_bleak_client_cached_get_services_and_read_write(
-    client_data: ESPHomeClientData,
+    bleak_pair: tuple[BleakClient, ESPHomeClient],
     esphome_bluetooth_gatt_services: ESPHomeBluetoothGATTServices,
 ) -> None:
-    """Test cached client services via the bleak wrapper and read/write a GATT char."""
-    ble_device = generate_ble_device(
-        "CC:BB:AA:DD:EE:FF", details={"source": ESP_MAC_ADDRESS, "address_type": 1}
-    )
-
-    bleak_client = BleakClient(ble_device, backend=_make_client_backend(client_data))
-    client: ESPHomeClient = bleak_client._backend
+    """Test cached client services via the bleak wrapper and read/write."""
+    bleak_client, client = bleak_pair
     client._is_connected = True
-    with patch.object(
-        client._client,
-        "bluetooth_gatt_get_services",
-        return_value=esphome_bluetooth_gatt_services,
-    ):
-        # In Bleak 1.0, services are discovered during connect
-        # We need to manually trigger the service discovery since we're mocking
+    with patch_get_services(client, esphome_bluetooth_gatt_services):
         await client._get_services(dangerous_use_bleak_cache=True)
         services = bleak_client.services
 
@@ -308,66 +223,45 @@ async def test_bleak_client_cached_get_services_and_read_write(
     assert services2 is not None
     assert services2 == services
 
-    char2 = bleak_client.services.get_characteristic(
-        "090b7847-e12b-09a8-b04b-8e0922a9abab"
-    )
+    char2 = bleak_client.services.get_characteristic(PRIMARY_CHAR_UUID)
     assert char2 is not None
-    assert char2.uuid == "090b7847-e12b-09a8-b04b-8e0922a9abab"
+    assert char2.uuid == PRIMARY_CHAR_UUID
     assert char2.properties == ["read", "write"]
     assert char2.handle == 20
 
-    char3 = bleak_client.services.get_characteristic(
-        UUID("090b7847-e12b-09a8-b04b-8e0922a9abab")
-    )
+    char3 = bleak_client.services.get_characteristic(UUID(PRIMARY_CHAR_UUID))
     assert char3 is not None
-    assert char3.uuid == "090b7847-e12b-09a8-b04b-8e0922a9abab"
+    assert char3.uuid == PRIMARY_CHAR_UUID
     assert char3.properties == ["read", "write"]
     assert char3.handle == 20
 
-    char = bleak_client.services.get_characteristic(
-        "090b7847-e12b-09a8-b04b-8e0922a9abab"
-    )
+    char = bleak_client.services.get_characteristic(PRIMARY_CHAR_UUID)
     assert char is not None
-    assert char.uuid == "090b7847-e12b-09a8-b04b-8e0922a9abab"
-    assert char.properties == ["read", "write"]
-    assert char.handle == 20
 
     with patch.object(
         client._client,
         "bluetooth_gatt_write",
     ) as mock_write:
-        await bleak_client.write_gatt_char(
-            char,
-            b"test",
-            True,
-        )
+        await bleak_client.write_gatt_char(char, b"test", True)
 
-    mock_write.assert_called_once_with(225106397622015, 20, b"test", True)
+    mock_write.assert_called_once_with(BLE_ADDRESS_AS_INT, 20, b"test", True)
 
     with patch.object(
         client._client,
         "bluetooth_gatt_read",
     ) as mock_read:
-        await bleak_client.read_gatt_char(
-            char,
-        )
+        await bleak_client.read_gatt_char(char)
 
-    mock_read.assert_called_once_with(225106397622015, 20, 30)
+    mock_read.assert_called_once_with(BLE_ADDRESS_AS_INT, 20, 30)
 
 
 @pytest.mark.asyncio
 async def test_bleak_client_connect(
-    client_data: ESPHomeClientData,
+    bleak_pair: tuple[BleakClient, ESPHomeClient],
     esphome_bluetooth_gatt_services: ESPHomeBluetoothGATTServices,
 ) -> None:
     """Test connect and disconnect when connection slots are available."""
-    ble_device = generate_ble_device(
-        "CC:BB:AA:DD:EE:FF", details={"source": ESP_MAC_ADDRESS, "address_type": 1}
-    )
-
-    bleak_client = BleakClient(ble_device, backend=_make_client_backend(client_data))
-    client: ESPHomeClient = bleak_client._backend
-    client._bluetooth_device.ble_connections_free = 10
+    bleak_client, client = bleak_pair
     with (
         patch.object(
             client._client,
@@ -383,7 +277,6 @@ async def test_bleak_client_connect(
         task = asyncio.create_task(bleak_client.connect(dangerous_use_bleak_cache=True))
         await asyncio.sleep(0)
         callback = mock_connect.call_args_list[0][0][1]
-        # Mock connected with MTU of 23 and error code 0
         callback(True, 23, 0)
         await task
 
@@ -400,7 +293,7 @@ async def test_bleak_client_connect(
 
 @pytest.mark.asyncio
 async def test_bleak_client_connect_connected_future_cancelled_raises_bleak_error(
-    client_data: ESPHomeClientData,
+    bleak_pair: tuple[BleakClient, ESPHomeClient],
 ) -> None:
     """
     Test that external cancel of the connected_future raises BleakError.
@@ -410,14 +303,7 @@ async def test_bleak_client_connect_connected_future_cancelled_raises_bleak_erro
     be converted to a BleakError so bleak_retry_connector can retry instead of
     letting CancelledError propagate to the caller.
     """
-    ble_device = generate_ble_device(
-        "CC:BB:AA:DD:EE:FF", details={"source": ESP_MAC_ADDRESS, "address_type": 1}
-    )
-
-    bleak_client = BleakClient(ble_device, backend=_make_client_backend(client_data))
-    client: ESPHomeClient = bleak_client._backend
-    client._bluetooth_device.ble_connections_free = 10
-
+    bleak_client, client = bleak_pair
     original_create_future = client._loop.create_future
     captured: list[asyncio.Future[bool]] = []
 
@@ -437,28 +323,22 @@ async def test_bleak_client_connect_connected_future_cancelled_raises_bleak_erro
     ):
         task = asyncio.create_task(bleak_client.connect(dangerous_use_bleak_cache=True))
         await asyncio.sleep(0)
-        # Wait for bluetooth_device_connect to return so we're parked on
-        # `await connected_future`.
         await asyncio.sleep(0)
         mock_connect.assert_called_once()
         assert len(captured) == 1
-        # Cancel the connected_future directly; the awaiting task is not
-        # being cancelled.
         captured[0].cancel()
         with pytest.raises(BleakError, match="cancelled"):
             await task
         assert task.cancelling() == 0
 
     assert not client.is_connected
-    # The connection-state subscription must have been cleaned up before
-    # raising BleakError so it does not leak callbacks.
     mock_cancel_connection_state.assert_called_once_with()
     assert client._cancel_connection_state is None
 
 
 @pytest.mark.asyncio
 async def test_bleak_client_connect_inner_cancelled_raises_bleak_error(
-    client_data: ESPHomeClientData,
+    bleak_pair: tuple[BleakClient, ESPHomeClient],
 ) -> None:
     """
     Test inner CancelledError converted to BleakError when task not cancelled.
@@ -467,28 +347,21 @@ async def test_bleak_client_connect_inner_cancelled_raises_bleak_error(
     internal future was cancelled) while the awaiting task is not being
     cancelled, ``connect`` should raise a ``BleakError`` instead.
     """
-    ble_device = generate_ble_device(
-        "CC:BB:AA:DD:EE:FF", details={"source": ESP_MAC_ADDRESS, "address_type": 1}
-    )
-
-    bleak_client = BleakClient(ble_device, backend=_make_client_backend(client_data))
-    client: ESPHomeClient = bleak_client._backend
-    client._bluetooth_device.ble_connections_free = 10
-
+    bleak_client, _client = bleak_pair
     with patch.object(
-        client._client,
+        _client._client,
         "bluetooth_device_connect",
         side_effect=asyncio.CancelledError(),
     ):
         with pytest.raises(BleakError, match="cancelled"):
             await bleak_client.connect(dangerous_use_bleak_cache=True)
 
-    assert not client.is_connected
+    assert not _client.is_connected
 
 
 @pytest.mark.asyncio
 async def test_bleak_client_connect_real_task_cancel_propagates_inner(
-    client_data: ESPHomeClientData,
+    bleak_pair: tuple[BleakClient, ESPHomeClient],
 ) -> None:
     """
     Test real task cancellation during ``bluetooth_device_connect``.
@@ -498,14 +371,7 @@ async def test_bleak_client_connect_real_task_cancel_propagates_inner(
     must propagate so ``TaskGroup`` / ``asyncio.timeout`` semantics are
     preserved.
     """
-    ble_device = generate_ble_device(
-        "CC:BB:AA:DD:EE:FF", details={"source": ESP_MAC_ADDRESS, "address_type": 1}
-    )
-
-    bleak_client = BleakClient(ble_device, backend=_make_client_backend(client_data))
-    client: ESPHomeClient = bleak_client._backend
-    client._bluetooth_device.ble_connections_free = 10
-
+    bleak_client, client = bleak_pair
     inside_connect = asyncio.Event()
 
     async def _hang(*args: Any, **kwargs: Any) -> Any:
@@ -519,9 +385,6 @@ async def test_bleak_client_connect_real_task_cancel_propagates_inner(
     ):
         task = asyncio.create_task(bleak_client.connect(dangerous_use_bleak_cache=True))
         await inside_connect.wait()
-        # Genuine task cancel; cancelling() goes to 1 and CancelledError
-        # raises inside ``bluetooth_device_connect``. The bare ``raise`` in
-        # the except branch must propagate it as CancelledError.
         assert task.cancel() is True
         with pytest.raises(asyncio.CancelledError):
             await task
@@ -532,7 +395,7 @@ async def test_bleak_client_connect_real_task_cancel_propagates_inner(
 
 @pytest.mark.asyncio
 async def test_bleak_client_connect_real_task_cancel_propagates_outer(
-    client_data: ESPHomeClientData,
+    bleak_pair: tuple[BleakClient, ESPHomeClient],
 ) -> None:
     """
     Test real task cancellation during the outer ``await connected_future``.
@@ -542,14 +405,7 @@ async def test_bleak_client_connect_real_task_cancel_propagates_outer(
     has returned), the ``CancelledError`` must propagate via the bare
     ``raise`` so ``TaskGroup`` / ``asyncio.timeout`` semantics are preserved.
     """
-    ble_device = generate_ble_device(
-        "CC:BB:AA:DD:EE:FF", details={"source": ESP_MAC_ADDRESS, "address_type": 1}
-    )
-
-    bleak_client = BleakClient(ble_device, backend=_make_client_backend(client_data))
-    client: ESPHomeClient = bleak_client._backend
-    client._bluetooth_device.ble_connections_free = 10
-
+    bleak_client, client = bleak_pair
     mock_cancel_connection_state = Mock()
     with patch.object(
         client._client,
@@ -558,28 +414,21 @@ async def test_bleak_client_connect_real_task_cancel_propagates_outer(
     ) as mock_connect:
         task = asyncio.create_task(bleak_client.connect(dangerous_use_bleak_cache=True))
         await asyncio.sleep(0)
-        # Wait for bluetooth_device_connect to return so we are parked on
-        # ``await connected_future``.
         await asyncio.sleep(0)
         mock_connect.assert_called_once()
-        # Genuine task cancel; cancelling() goes to 1 and CancelledError
-        # raises at ``await connected_future``. The bare ``raise`` in the
-        # except branch must propagate it as CancelledError.
         assert task.cancel() is True
         with pytest.raises(asyncio.CancelledError):
             await task
         assert task.cancelled()
 
     assert not client.is_connected
-    # The connection-state subscription must be cleaned up on the
-    # real-cancel propagation path as well, so it does not leak.
     mock_cancel_connection_state.assert_called_once_with()
     assert client._cancel_connection_state is None
 
 
 @pytest.mark.asyncio
 async def test_bleak_client_connect_raises_when_device_connect_raises(
-    client_data: ESPHomeClientData,
+    bleak_pair: tuple[BleakClient, ESPHomeClient],
 ) -> None:
     """
     Test ``bluetooth_device_connect`` raising propagates and cancels future.
@@ -589,14 +438,7 @@ async def test_bleak_client_connect_raises_when_device_connect_raises(
     been resolved. The exception must propagate unchanged and the unresolved
     ``connected_future`` must be cancelled to avoid leaking it.
     """
-    ble_device = generate_ble_device(
-        "CC:BB:AA:DD:EE:FF", details={"source": ESP_MAC_ADDRESS, "address_type": 1}
-    )
-
-    bleak_client = BleakClient(ble_device, backend=_make_client_backend(client_data))
-    client: ESPHomeClient = bleak_client._backend
-    client._bluetooth_device.ble_connections_free = 10
-
+    bleak_client, client = bleak_pair
     with patch.object(
         client._client,
         "bluetooth_device_connect",
@@ -610,7 +452,7 @@ async def test_bleak_client_connect_raises_when_device_connect_raises(
 
 @pytest.mark.asyncio
 async def test_bleak_client_connect_raises_after_connected_future_resolved(
-    client_data: ESPHomeClientData,
+    bleak_pair: tuple[BleakClient, ESPHomeClient],
 ) -> None:
     """
     Test ``bluetooth_device_connect`` raising after the callback fires.
@@ -622,21 +464,13 @@ async def test_bleak_client_connect_raises_after_connected_future_resolved(
     itself raises. The already-resolved future must be drained (with the
     BleakError suppressed) and the original exception must propagate.
     """
-    ble_device = generate_ble_device(
-        "CC:BB:AA:DD:EE:FF", details={"source": ESP_MAC_ADDRESS, "address_type": 1}
-    )
-
-    bleak_client = BleakClient(ble_device, backend=_make_client_backend(client_data))
-    client: ESPHomeClient = bleak_client._backend
-    client._bluetooth_device.ble_connections_free = 10
+    bleak_client, client = bleak_pair
 
     async def _fire_callback_then_raise(
         address: int,
         on_bluetooth_connection_state: Any,
         **kwargs: Any,
     ) -> None:
-        # Resolve the future with a disconnect (sets BleakError exception),
-        # then raise to exercise the ``if connected_future.done():`` branch.
         on_bluetooth_connection_state(False, 0, 0)
         raise APIConnectionError("boom")
 
@@ -653,7 +487,7 @@ async def test_bleak_client_connect_raises_after_connected_future_resolved(
 
 @pytest.mark.asyncio
 async def test_bleak_client_connect_get_services_cleanup_shielded(
-    client_data: ESPHomeClientData,
+    bleak_pair: tuple[BleakClient, ESPHomeClient],
 ) -> None:
     """
     Test the disconnect cleanup is shielded against re-cancellation.
@@ -672,14 +506,7 @@ async def test_bleak_client_connect_get_services_cleanup_shielded(
     the slow ``_disconnect`` ran to completion (its
     ``disconnect_finished`` event is set).
     """
-    ble_device = generate_ble_device(
-        "CC:BB:AA:DD:EE:FF", details={"source": ESP_MAC_ADDRESS, "address_type": 1}
-    )
-
-    bleak_client = BleakClient(ble_device, backend=_make_client_backend(client_data))
-    client: ESPHomeClient = bleak_client._backend
-    client._bluetooth_device.ble_connections_free = 10
-
+    bleak_client, client = bleak_pair
     in_disconnect = asyncio.Event()
     release_disconnect = asyncio.Event()
     disconnect_finished = asyncio.Event()
@@ -691,10 +518,6 @@ async def test_bleak_client_connect_get_services_cleanup_shielded(
 
     async def _slow_disconnect() -> bool:
         in_disconnect.set()
-        # Do not use try/finally here; we want ``disconnect_finished``
-        # to remain unset if a re-cancellation interrupts this await,
-        # so the test can detect whether the disconnect ran to
-        # completion or was cut off.
         await release_disconnect.wait()
         disconnect_finished.set()
         return True
@@ -712,29 +535,18 @@ async def test_bleak_client_connect_get_services_cleanup_shielded(
         await asyncio.sleep(0)
         await asyncio.sleep(0)
         mock_connect.assert_called_once()
-        # Resolve the connection so we proceed past the
-        # ``await connected_future`` and into ``_get_services``.
         callback = mock_connect.call_args_list[0][0][1]
         callback(True, 23, 0)
         await in_get_services.wait()
-        # Cancel the parent task while ``_get_services`` is hanging;
-        # this jumps into the ``except asyncio.CancelledError`` cleanup
-        # which calls ``_disconnect``.
         assert task.cancel() is True
         await in_disconnect.wait()
-        # Re-cancel the parent while ``_disconnect`` is parked. Without
-        # the shield this would interrupt the disconnect and leave the
-        # ESP-side connection dangling.
         task.cancel()
         await asyncio.sleep(0)
         await asyncio.sleep(0)
-        # Now release the disconnect so it can complete.
         release_disconnect.set()
         with pytest.raises(asyncio.CancelledError):
             await task
         assert task.cancelled()
-        # The disconnect must have run to completion (the shield held
-        # the re-cancel back).
         assert disconnect_finished.is_set()
 
 
@@ -744,13 +556,7 @@ async def test_bleak_client_connect_wait_for_connection_slot(
     esphome_bluetooth_gatt_services: ESPHomeBluetoothGATTServices,
 ) -> None:
     """Test connect and disconnect when connection slots are not available."""
-    ble_device = generate_ble_device(
-        "CC:BB:AA:DD:EE:FF", details={"source": ESP_MAC_ADDRESS, "address_type": 1}
-    )
-
-    bleak_client = BleakClient(ble_device, backend=_make_client_backend(client_data))
-    client: ESPHomeClient = bleak_client._backend
-    client._bluetooth_device.ble_connections_free = 0
+    bleak_client, client = make_bleak_client(client_data, free_slots=0)
     with (
         patch.object(
             client._client,
@@ -769,7 +575,6 @@ async def test_bleak_client_connect_wait_for_connection_slot(
         client._bluetooth_device.async_update_ble_connection_limits(10, 10, [])
         await asyncio.sleep(0)
         callback = mock_connect.call_args_list[0][0][1]
-        # Mock connected with MTU of 23 and error code 0
         callback(True, 23, 0)
         await task
 
@@ -790,13 +595,7 @@ async def test_bleak_client_connect_wait_for_connection_slot_timeout(
     esphome_bluetooth_gatt_services: ESPHomeBluetoothGATTServices,
 ) -> None:
     """Test connect and disconnect when connection slots wait times out."""
-    ble_device = generate_ble_device(
-        "CC:BB:AA:DD:EE:FF", details={"source": ESP_MAC_ADDRESS, "address_type": 1}
-    )
-
-    bleak_client = BleakClient(ble_device, backend=_make_client_backend(client_data))
-    client: ESPHomeClient = bleak_client._backend
-    client._bluetooth_device.ble_connections_free = 0
+    bleak_client, client = make_bleak_client(client_data, free_slots=0)
     with (
         pytest.raises(asyncio.TimeoutError),
         patch.object(
@@ -826,15 +625,7 @@ async def test_bleak_client_connect_with_pair_parameter(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Test connect with pair=True calls pair method."""
-    ble_device = generate_ble_device(
-        "CC:BB:AA:DD:EE:FF", details={"source": ESP_MAC_ADDRESS, "address_type": 1}
-    )
-
-    bleak_client = BleakClient(
-        ble_device, backend=_make_client_backend(client_data), pair=True
-    )
-    client: ESPHomeClient = bleak_client._backend
-    client._bluetooth_device.ble_connections_free = 10
+    bleak_client, client = make_bleak_client(client_data, pair=True)
     with (
         patch.object(
             client._client,
@@ -851,11 +642,9 @@ async def test_bleak_client_connect_with_pair_parameter(
             "_pair",
         ) as mock_pair,
     ):
-        # Test with pair=True
         task = asyncio.create_task(bleak_client.connect())
         await asyncio.sleep(0)
         callback = mock_connect.call_args_list[0][0][1]
-        # Mock connected with MTU of 23 and error code 0
         callback(True, 23, 0)
         await task
 
@@ -873,527 +662,341 @@ async def test_bleak_client_connect_with_pair_parameter(
 
 @pytest.mark.asyncio
 async def test_esphome_client_connect_with_pair_false(
-    client_data: ESPHomeClientData,
+    esphome_client: ESPHomeClient,
     esphome_bluetooth_gatt_services: ESPHomeBluetoothGATTServices,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Test connect with pair=False (default) does not log warning."""
-    ble_device = generate_ble_device(
-        "CC:BB:AA:DD:EE:FF", details={"source": ESP_MAC_ADDRESS, "address_type": 1}
-    )
-
-    client = ESPHomeClient(ble_device, client_data=client_data)
-    client._bluetooth_device.ble_connections_free = 10
+    esphome_client._bluetooth_device.ble_connections_free = 10
     with (
         patch.object(
-            client._client,
+            esphome_client._client,
             "bluetooth_device_connect",
             return_value=Mock(),
         ) as mock_connect,
         patch.object(
-            client._client,
+            esphome_client._client,
             "bluetooth_gatt_get_services",
             return_value=esphome_bluetooth_gatt_services,
         ),
     ):
-        # Test with pair=False
-        task = asyncio.create_task(client.connect(False))
+        task = asyncio.create_task(esphome_client.connect(False))
         await asyncio.sleep(0)
         callback = mock_connect.call_args_list[0][0][1]
-        # Mock connected with MTU of 23 and error code 0
         callback(True, 23, 0)
         await task
 
-    assert client.is_connected
+    assert esphome_client.is_connected
     assert (
         "Explicit pairing during connect is not available in ESPHome" not in caplog.text
     )
 
     with patch.object(
-        client._client,
+        esphome_client._client,
         "bluetooth_device_disconnect",
     ) as mock_disconnect:
-        await client.disconnect()
+        await esphome_client.disconnect()
 
     mock_disconnect.assert_called_once()
 
 
 @pytest.mark.asyncio
-async def test_pair_success(
-    client_data: ESPHomeClientData,
-) -> None:
+async def test_pair_success(connected_client: ESPHomeClient) -> None:
     """Test successful pairing."""
-    ble_device = generate_ble_device(
-        "CC:BB:AA:DD:EE:FF", details={"source": ESP_MAC_ADDRESS, "address_type": 1}
-    )
-
-    client = ESPHomeClient(ble_device, client_data=client_data)
-    # Simulate connection
-    client._is_connected = True
-
-    # Enable pairing feature flag
-    client._feature_flags |= BluetoothProxyFeature.PAIRING.value
+    connected_client._feature_flags |= BluetoothProxyFeature.PAIRING.value
 
     with patch.object(
-        client._client,
+        connected_client._client,
         "bluetooth_device_pair",
         return_value=BluetoothDevicePairing(
-            address=client._address_as_int,
+            address=connected_client._address_as_int,
             paired=True,
             error=0,
         ),
     ) as mock_pair:
-        await client.pair()
+        await connected_client.pair()
 
-    mock_pair.assert_called_once_with(client._address_as_int)
+    mock_pair.assert_called_once_with(connected_client._address_as_int)
 
 
 @pytest.mark.asyncio
-async def test_pair_failure(
-    client_data: ESPHomeClientData,
-) -> None:
+async def test_pair_failure(connected_client: ESPHomeClient) -> None:
     """Test pairing failure."""
-    ble_device = generate_ble_device(
-        "CC:BB:AA:DD:EE:FF", details={"source": ESP_MAC_ADDRESS, "address_type": 1}
-    )
-
-    client = ESPHomeClient(ble_device, client_data=client_data)
-    # Simulate connection
-    client._is_connected = True
-
-    # Enable pairing feature flag
-    client._feature_flags |= BluetoothProxyFeature.PAIRING.value
+    connected_client._feature_flags |= BluetoothProxyFeature.PAIRING.value
 
     with patch.object(
-        client._client,
+        connected_client._client,
         "bluetooth_device_pair",
         return_value=BluetoothDevicePairing(
-            address=client._address_as_int,
+            address=connected_client._address_as_int,
             paired=False,
             error=1,
         ),
     ):
         with pytest.raises(BleakError) as exc_info:
-            await client.pair()
+            await connected_client.pair()
         assert "Pairing failed due to error: 1" in str(exc_info.value)
 
 
 @pytest.mark.asyncio
-async def test_pair_not_connected(
-    client_data: ESPHomeClientData,
-) -> None:
+async def test_pair_not_connected(esphome_client: ESPHomeClient) -> None:
     """Test pairing when not connected."""
-    ble_device = generate_ble_device(
-        "CC:BB:AA:DD:EE:FF", details={"source": ESP_MAC_ADDRESS, "address_type": 1}
-    )
-
-    client = ESPHomeClient(ble_device, client_data=client_data)
-    # Device is not connected
-    client._is_connected = False
-
-    # Enable pairing feature flag
-    client._feature_flags |= BluetoothProxyFeature.PAIRING.value
+    esphome_client._feature_flags |= BluetoothProxyFeature.PAIRING.value
 
     with pytest.raises(BleakError) as exc_info:
-        await client.pair()
+        await esphome_client.pair()
     assert "is not connected" in str(exc_info.value)
 
 
 @pytest.mark.asyncio
-async def test_pair_feature_not_supported(
-    client_data: ESPHomeClientData,
-) -> None:
+async def test_pair_feature_not_supported(connected_client: ESPHomeClient) -> None:
     """Test pairing when feature is not supported."""
-    ble_device = generate_ble_device(
-        "CC:BB:AA:DD:EE:FF", details={"source": ESP_MAC_ADDRESS, "address_type": 1}
-    )
-
-    client = ESPHomeClient(ble_device, client_data=client_data)
-    # Simulate connection
-    client._is_connected = True
-
-    # Disable pairing feature flag
-    client._feature_flags &= ~BluetoothProxyFeature.PAIRING.value
+    connected_client._feature_flags &= ~BluetoothProxyFeature.PAIRING.value
 
     with pytest.raises(NotImplementedError) as exc_info:
-        await client.pair()
+        await connected_client.pair()
     assert "Pairing is not available in this version ESPHome" in str(exc_info.value)
-    assert client._device_info.name in str(exc_info.value)
+    assert connected_client._device_info.name in str(exc_info.value)
 
 
 @pytest.mark.asyncio
-async def test_unpair_success(
-    client_data: ESPHomeClientData,
-) -> None:
+async def test_unpair_success(connected_client: ESPHomeClient) -> None:
     """Test successful unpairing."""
-    ble_device = generate_ble_device(
-        "CC:BB:AA:DD:EE:FF", details={"source": ESP_MAC_ADDRESS, "address_type": 1}
-    )
-
-    client = ESPHomeClient(ble_device, client_data=client_data)
-    # Simulate connection
-    client._is_connected = True
-
-    # Enable pairing feature flag
-    client._feature_flags |= BluetoothProxyFeature.PAIRING.value
+    connected_client._feature_flags |= BluetoothProxyFeature.PAIRING.value
 
     with patch.object(
-        client._client,
+        connected_client._client,
         "bluetooth_device_unpair",
         return_value=BluetoothDeviceUnpairing(
-            address=client._address_as_int,
+            address=connected_client._address_as_int,
             success=True,
             error=0,
         ),
     ) as mock_unpair:
-        await client.unpair()
+        await connected_client.unpair()
 
-    mock_unpair.assert_called_once_with(client._address_as_int)
+    mock_unpair.assert_called_once_with(connected_client._address_as_int)
 
 
 @pytest.mark.asyncio
-async def test_unpair_failure(
-    client_data: ESPHomeClientData,
-) -> None:
+async def test_unpair_failure(connected_client: ESPHomeClient) -> None:
     """Test unpairing failure."""
-    ble_device = generate_ble_device(
-        "CC:BB:AA:DD:EE:FF", details={"source": ESP_MAC_ADDRESS, "address_type": 1}
-    )
-
-    client = ESPHomeClient(ble_device, client_data=client_data)
-    # Simulate connection
-    client._is_connected = True
-
-    # Enable pairing feature flag
-    client._feature_flags |= BluetoothProxyFeature.PAIRING.value
+    connected_client._feature_flags |= BluetoothProxyFeature.PAIRING.value
 
     with patch.object(
-        client._client,
+        connected_client._client,
         "bluetooth_device_unpair",
         return_value=BluetoothDeviceUnpairing(
-            address=client._address_as_int,
+            address=connected_client._address_as_int,
             success=False,
             error=2,
         ),
     ):
         with pytest.raises(BleakError) as exc_info:
-            await client.unpair()
+            await connected_client.unpair()
         assert "Unpairing failed due to error: 2" in str(exc_info.value)
 
 
 @pytest.mark.asyncio
-async def test_unpair_not_connected(
-    client_data: ESPHomeClientData,
-) -> None:
+async def test_unpair_not_connected(esphome_client: ESPHomeClient) -> None:
     """Test unpairing when not connected."""
-    ble_device = generate_ble_device(
-        "CC:BB:AA:DD:EE:FF", details={"source": ESP_MAC_ADDRESS, "address_type": 1}
-    )
-
-    client = ESPHomeClient(ble_device, client_data=client_data)
-    # Device is not connected
-    client._is_connected = False
-
-    # Enable pairing feature flag
-    client._feature_flags |= BluetoothProxyFeature.PAIRING.value
+    esphome_client._feature_flags |= BluetoothProxyFeature.PAIRING.value
 
     with pytest.raises(BleakError) as exc_info:
-        await client.unpair()
+        await esphome_client.unpair()
     assert "is not connected" in str(exc_info.value)
 
 
 @pytest.mark.asyncio
-async def test_unpair_feature_not_supported(
-    client_data: ESPHomeClientData,
-) -> None:
+async def test_unpair_feature_not_supported(connected_client: ESPHomeClient) -> None:
     """Test unpairing when feature is not supported."""
-    ble_device = generate_ble_device(
-        "CC:BB:AA:DD:EE:FF", details={"source": ESP_MAC_ADDRESS, "address_type": 1}
-    )
-
-    client = ESPHomeClient(ble_device, client_data=client_data)
-    # Simulate connection
-    client._is_connected = True
-
-    # Disable pairing feature flag
-    client._feature_flags &= ~BluetoothProxyFeature.PAIRING.value
+    connected_client._feature_flags &= ~BluetoothProxyFeature.PAIRING.value
 
     with pytest.raises(NotImplementedError) as exc_info:
-        await client.unpair()
+        await connected_client.unpair()
     assert "Unpairing is not available in this version ESPHome" in str(exc_info.value)
-    assert client._device_info.name in str(exc_info.value)
+    assert connected_client._device_info.name in str(exc_info.value)
 
 
 @pytest.mark.asyncio
 async def test_start_notify_ccd_write_failure_cleans_up(
-    client_data: ESPHomeClientData,
+    connected_client: ESPHomeClient,
     esphome_bluetooth_gatt_services: ESPHomeBluetoothGATTServices,
 ) -> None:
     """Test that start_notify cleans up when CCD write fails."""
-    ble_device = generate_ble_device(
-        "CC:BB:AA:DD:EE:FF", details={"source": ESP_MAC_ADDRESS, "address_type": 1}
-    )
-
-    client = ESPHomeClient(ble_device, client_data=client_data)
-    client._is_connected = True
-
-    # Get services to have characteristic objects
-    with patch.object(
-        client._client,
-        "bluetooth_gatt_get_services",
-        return_value=esphome_bluetooth_gatt_services,
-    ):
-        services = await client._get_services()
-
-    # Get the characteristic with indicate property (handle 8) which has CCCD
-    char = services.get_characteristic("00002a05-0000-1000-8000-00805f9b34fb")
+    services = await fetch_services(connected_client, esphome_bluetooth_gatt_services)
+    char = services.get_characteristic(INDICATE_CHAR_UUID)
     assert char is not None
     assert "indicate" in char.properties
 
-    # Mock the notify start to succeed
     mock_stop_notify = AsyncMock()
     mock_remove_callback = Mock()
     with (
         patch.object(
-            client._client,
+            connected_client._client,
             "bluetooth_gatt_start_notify",
             return_value=(mock_stop_notify, mock_remove_callback),
         ),
         patch.object(
-            client._client,
+            connected_client._client,
             "bluetooth_gatt_write_descriptor",
             side_effect=Exception("CCD write failed"),
         ),
         patch.object(
-            client._client,
+            connected_client._client,
             "bluetooth_gatt_stop_notify",
         ) as mock_stop,
         pytest.raises(Exception, match="CCD write failed"),
     ):
-        await client.start_notify(char, lambda data: None)
+        await connected_client.start_notify(char, lambda data: None)
 
-    # Verify cleanup was called
-    mock_stop.assert_called_once_with(client._address_as_int, char.handle)
-    # Verify notify_cancels was cleaned up
-    assert char.handle not in client._notify_cancels
+    mock_stop.assert_called_once_with(connected_client._address_as_int, char.handle)
+    assert char.handle not in connected_client._notify_cancels
 
 
 @pytest.mark.asyncio
 async def test_start_notify_ccd_write_cancelled_cleans_up(
-    client_data: ESPHomeClientData,
+    connected_client: ESPHomeClient,
     esphome_bluetooth_gatt_services: ESPHomeBluetoothGATTServices,
 ) -> None:
     """Test that start_notify cleans up when CCD write is cancelled."""
-    ble_device = generate_ble_device(
-        "CC:BB:AA:DD:EE:FF", details={"source": ESP_MAC_ADDRESS, "address_type": 1}
-    )
-
-    client = ESPHomeClient(ble_device, client_data=client_data)
-    client._is_connected = True
-
-    # Get services to have characteristic objects
-    with patch.object(
-        client._client,
-        "bluetooth_gatt_get_services",
-        return_value=esphome_bluetooth_gatt_services,
-    ):
-        services = await client._get_services()
-
-    # Get the characteristic with indicate property (handle 8) which has CCCD
-    char = services.get_characteristic("00002a05-0000-1000-8000-00805f9b34fb")
+    services = await fetch_services(connected_client, esphome_bluetooth_gatt_services)
+    char = services.get_characteristic(INDICATE_CHAR_UUID)
     assert char is not None
 
-    # Mock the notify start to succeed
     mock_stop_notify = AsyncMock()
     mock_remove_callback = Mock()
     with (
         patch.object(
-            client._client,
+            connected_client._client,
             "bluetooth_gatt_start_notify",
             return_value=(mock_stop_notify, mock_remove_callback),
         ),
         patch.object(
-            client._client,
+            connected_client._client,
             "bluetooth_gatt_write_descriptor",
             side_effect=asyncio.CancelledError(),
         ),
         patch.object(
-            client._client,
+            connected_client._client,
             "bluetooth_gatt_stop_notify",
         ) as mock_stop,
         pytest.raises(asyncio.CancelledError),
     ):
-        await client.start_notify(char, lambda data: None)
+        await connected_client.start_notify(char, lambda data: None)
 
-    # Verify cleanup was called even for CancelledError
-    mock_stop.assert_called_once_with(client._address_as_int, char.handle)
-    # Verify notify_cancels was cleaned up
-    assert char.handle not in client._notify_cancels
+    mock_stop.assert_called_once_with(connected_client._address_as_int, char.handle)
+    assert char.handle not in connected_client._notify_cancels
 
 
 @pytest.mark.asyncio
 async def test_start_notify_success_with_ccd_write(
-    client_data: ESPHomeClientData,
+    connected_client: ESPHomeClient,
     esphome_bluetooth_gatt_services: ESPHomeBluetoothGATTServices,
 ) -> None:
     """Test that start_notify succeeds and writes to CCD."""
-    ble_device = generate_ble_device(
-        "CC:BB:AA:DD:EE:FF", details={"source": ESP_MAC_ADDRESS, "address_type": 1}
-    )
-
-    client = ESPHomeClient(ble_device, client_data=client_data)
-    client._is_connected = True
-
-    # Get services to have characteristic objects
-    with patch.object(
-        client._client,
-        "bluetooth_gatt_get_services",
-        return_value=esphome_bluetooth_gatt_services,
-    ):
-        services = await client._get_services()
-
-    # Get the characteristic with indicate property (handle 8) which has CCCD
-    char = services.get_characteristic("00002a05-0000-1000-8000-00805f9b34fb")
+    services = await fetch_services(connected_client, esphome_bluetooth_gatt_services)
+    char = services.get_characteristic(INDICATE_CHAR_UUID)
     assert char is not None
-    cccd = char.get_descriptor("00002902-0000-1000-8000-00805f9b34fb")
+    cccd = char.get_descriptor(CCCD_UUID)
     assert cccd is not None
 
-    # Mock the notify start to succeed
     mock_stop_notify = AsyncMock()
     mock_remove_callback = Mock()
     with (
         patch.object(
-            client._client,
+            connected_client._client,
             "bluetooth_gatt_start_notify",
             return_value=(mock_stop_notify, mock_remove_callback),
         ),
         patch.object(
-            client._client,
+            connected_client._client,
             "bluetooth_gatt_write_descriptor",
         ) as mock_write_descriptor,
     ):
-        await client.start_notify(char, lambda data: None)
+        await connected_client.start_notify(char, lambda data: None)
 
-    # Verify CCD write was called with indicate bytes (0x02, 0x00)
     mock_write_descriptor.assert_called_once_with(
-        client._address_as_int,
+        connected_client._address_as_int,
         cccd.handle,
-        b"\x02\x00",  # CCCD_INDICATE_BYTES
+        b"\x02\x00",
     )
-    # Verify notify_cancels has the entry
-    assert char.handle in client._notify_cancels
+    assert char.handle in connected_client._notify_cancels
 
 
 @pytest.mark.asyncio
 async def test_start_notify_missing_cccd_raises_error(
-    client_data: ESPHomeClientData,
+    connected_client: ESPHomeClient,
     esphome_bluetooth_gatt_services: ESPHomeBluetoothGATTServices,
 ) -> None:
     """Test that start_notify raises error when characteristic has no CCCD."""
-    ble_device = generate_ble_device(
-        "CC:BB:AA:DD:EE:FF", details={"source": ESP_MAC_ADDRESS, "address_type": 1}
-    )
-
-    client = ESPHomeClient(ble_device, client_data=client_data)
-    client._is_connected = True
-
-    # Get services to have characteristic objects
-    with patch.object(
-        client._client,
-        "bluetooth_gatt_get_services",
-        return_value=esphome_bluetooth_gatt_services,
-    ):
-        services = await client._get_services()
-
-    # Get a characteristic with indicate property
-    char = services.get_characteristic("00002a05-0000-1000-8000-00805f9b34fb")
+    services = await fetch_services(connected_client, esphome_bluetooth_gatt_services)
+    char = services.get_characteristic(INDICATE_CHAR_UUID)
     assert char is not None
     assert "indicate" in char.properties
 
-    # Mock the notify start to succeed
     mock_stop_notify = AsyncMock()
     mock_remove_callback = Mock()
     with (
         patch.object(
-            client._client,
+            connected_client._client,
             "bluetooth_gatt_start_notify",
             return_value=(mock_stop_notify, mock_remove_callback),
         ),
-        # Make the characteristic appear to have no CCCD descriptor
         patch.object(char, "get_descriptor", return_value=None),
         patch.object(
-            client._client,
+            connected_client._client,
             "bluetooth_gatt_stop_notify",
         ) as mock_stop,
         pytest.raises(BleakError, match="does not have a characteristic client config"),
     ):
-        await client.start_notify(char, lambda data: None)
+        await connected_client.start_notify(char, lambda data: None)
 
-    # Verify cleanup was called
-    mock_stop.assert_called_once_with(client._address_as_int, char.handle)
+    mock_stop.assert_called_once_with(connected_client._address_as_int, char.handle)
 
 
 @pytest.mark.asyncio
-async def test_set_connection_params(
-    client_data: ESPHomeClientData,
-) -> None:
+async def test_set_connection_params(connected_client: ESPHomeClient) -> None:
     """Test that set_connection_params calls through to the API client."""
-    ble_device = generate_ble_device(
-        "CC:BB:AA:DD:EE:FF", details={"source": ESP_MAC_ADDRESS, "address_type": 1}
+    connected_client._feature_flags |= (
+        BluetoothProxyFeature.CONNECTION_PARAMS_SETTING.value
     )
 
-    client = ESPHomeClient(ble_device, client_data=client_data)
-    client._is_connected = True
-
-    # Enable connection params setting feature flag
-    client._feature_flags |= BluetoothProxyFeature.CONNECTION_PARAMS_SETTING.value
-
     with patch.object(
-        client._client,
+        connected_client._client,
         "bluetooth_device_set_connection_params",
     ) as mock_set_params:
-        await client.set_connection_params(800, 800, 0, 300)
+        await connected_client.set_connection_params(800, 800, 0, 300)
 
-    mock_set_params.assert_called_once_with(client._address_as_int, 800, 800, 0, 300)
+    mock_set_params.assert_called_once_with(
+        connected_client._address_as_int, 800, 800, 0, 300
+    )
 
 
 @pytest.mark.asyncio
 async def test_set_connection_params_not_supported(
-    client_data: ESPHomeClientData,
+    connected_client: ESPHomeClient,
 ) -> None:
-    """Test that set_connection_params returns early when feature flag is not set."""
-    ble_device = generate_ble_device(
-        "CC:BB:AA:DD:EE:FF", details={"source": ESP_MAC_ADDRESS, "address_type": 1}
-    )
-
-    client = ESPHomeClient(ble_device, client_data=client_data)
-    client._is_connected = True
-
-    # The default client_data fixture does NOT include CONNECTION_PARAMS_SETTING
+    """Test that set_connection_params returns early when flag is not set."""
+    # The default client_data fixture does NOT include CONNECTION_PARAMS_SETTING.
     with patch.object(
-        client._client,
+        connected_client._client,
         "bluetooth_device_set_connection_params",
     ) as mock_set_params:
-        await client.set_connection_params(800, 800, 0, 300)
+        await connected_client.set_connection_params(800, 800, 0, 300)
 
     mock_set_params.assert_not_called()
 
 
 @pytest.mark.asyncio
 async def test_set_connection_params_not_connected(
-    client_data: ESPHomeClientData,
+    esphome_client: ESPHomeClient,
 ) -> None:
     """Test that set_connection_params raises BleakError when not connected."""
-    ble_device = generate_ble_device(
-        "CC:BB:AA:DD:EE:FF", details={"source": ESP_MAC_ADDRESS, "address_type": 1}
+    esphome_client._feature_flags |= (
+        BluetoothProxyFeature.CONNECTION_PARAMS_SETTING.value
     )
 
-    client = ESPHomeClient(ble_device, client_data=client_data)
-    client._is_connected = False
-
-    # Enable connection params setting feature flag
-    client._feature_flags |= BluetoothProxyFeature.CONNECTION_PARAMS_SETTING.value
-
     with pytest.raises(BleakError) as exc_info:
-        await client.set_connection_params(800, 800, 0, 300)
+        await esphome_client.set_connection_params(800, 800, 0, 300)
     assert "is not connected" in str(exc_info.value)
