@@ -3,15 +3,65 @@
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import AsyncMock, patch
+from collections.abc import AsyncIterator, Callable, Iterator
+from typing import cast
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
+import pytest_asyncio
 
 from bleak_esphome.connection_manager import (
     APIConnectionManager,
     ESPHomeDeviceConfig,
     ESPHomeStartAborted,
 )
+
+
+@pytest.fixture
+def config() -> ESPHomeDeviceConfig:
+    """Return a minimal device config used across tests."""
+    return {"address": "test.local", "noise_psk": None}
+
+
+@pytest_asyncio.fixture
+async def conn_manager(config: ESPHomeDeviceConfig) -> APIConnectionManager:
+    """Build an ``APIConnectionManager`` under a patched ``ReconnectLogic``."""
+    with patch("bleak_esphome.connection_manager.ReconnectLogic"):
+        return APIConnectionManager(config)
+
+
+@pytest_asyncio.fixture
+async def conn_manager_with_mocked_reconnect(
+    config: ESPHomeDeviceConfig,
+) -> AsyncIterator[tuple[APIConnectionManager, Mock, AsyncMock]]:
+    """
+    Yield ``(manager, mock_reconnect_logic, mock_disconnect)`` for ``stop()`` tests.
+
+    The manager has its ``_cli.disconnect`` patched with ``AsyncMock`` and a
+    resolved ``_start_future`` so ``stop()`` does not cancel it.
+    """
+    with patch(
+        "bleak_esphome.connection_manager.ReconnectLogic"
+    ) as mock_reconnect_logic_cls:
+        mock_reconnect_logic = mock_reconnect_logic_cls.return_value
+        mock_reconnect_logic.stop = AsyncMock()
+        mgr = APIConnectionManager(config)
+        mgr._start_future.set_result(None)
+        mock_disconnect = AsyncMock()
+        with patch.object(mgr._cli, "disconnect", mock_disconnect):
+            yield mgr, mock_reconnect_logic, mock_disconnect
+
+
+@pytest.fixture
+def patched_scanner_wiring() -> Iterator[tuple[Mock, Mock]]:
+    """Patch ``connect_scanner`` and ``habluetooth.get_manager`` together."""
+    with (
+        patch("bleak_esphome.connect_scanner") as connect_scanner_mock,
+        patch(
+            "bleak_esphome.connection_manager.habluetooth.get_manager"
+        ) as get_manager_mock,
+    ):
+        yield connect_scanner_mock, get_manager_mock
 
 
 @pytest.mark.asyncio
@@ -70,3 +120,131 @@ async def test_start_real_task_cancel_propagates_cancelled_error() -> None:
         with pytest.raises(asyncio.CancelledError):
             await start_task
         assert start_task.cancelled()
+
+
+@pytest.mark.asyncio
+async def test_on_connect_registers_scanner_and_resolves_start(
+    conn_manager: APIConnectionManager,
+    patched_scanner_wiring: tuple[Mock, Mock],
+) -> None:
+    """
+    ``_on_connect`` wires the scanner and unblocks a pending ``start()``.
+
+    The reconnect callback fetches device info, builds a scanner via
+    ``bleak_esphome.connect_scanner``, sets it up, registers it with the
+    habluetooth manager, and resolves ``_start_future`` so a waiting
+    ``start()`` returns.
+    """
+    mock_scanner = Mock()
+    mock_client_data = Mock()
+    mock_client_data.scanner = mock_scanner
+    unregister_scanner = Mock()
+    mock_habluetooth_manager = Mock()
+    mock_habluetooth_manager.async_register_scanner = Mock(
+        return_value=unregister_scanner
+    )
+
+    connect_scanner_mock, get_manager_mock = patched_scanner_wiring
+    connect_scanner_mock.return_value = mock_client_data
+    get_manager_mock.return_value = mock_habluetooth_manager
+
+    conn_manager._cli = Mock()
+    conn_manager._cli.device_info = AsyncMock(return_value=Mock(name="device_info"))
+
+    await conn_manager._on_connect()
+
+    connect_scanner_mock.assert_called_once_with(
+        conn_manager._cli, conn_manager._cli.device_info.return_value, True
+    )
+    mock_scanner.async_setup.assert_called_once_with()
+    mock_habluetooth_manager.async_register_scanner.assert_called_once_with(
+        mock_scanner
+    )
+    assert conn_manager._unregister_scanner is unregister_scanner
+    assert conn_manager._start_future.done()
+    assert conn_manager._start_future.result() is None
+
+
+@pytest.mark.asyncio
+async def test_on_connect_with_already_done_future_does_not_raise(
+    conn_manager: APIConnectionManager,
+    patched_scanner_wiring: tuple[Mock, Mock],
+) -> None:
+    """
+    Re-entering ``_on_connect`` after the future resolved is a no-op for it.
+
+    On reconnection, ``_on_connect`` may fire again. The future is one-shot
+    and must not raise ``InvalidStateError`` when already done.
+    """
+    conn_manager._start_future.set_result(None)
+    conn_manager._cli = Mock()
+    conn_manager._cli.device_info = AsyncMock(return_value=Mock())
+
+    mock_client_data = Mock()
+    mock_client_data.scanner = Mock()
+
+    connect_scanner_mock, get_manager_mock = patched_scanner_wiring
+    connect_scanner_mock.return_value = mock_client_data
+    get_manager_mock.return_value = MagicMock()
+
+    # Must not raise InvalidStateError on the already-resolved future.
+    await conn_manager._on_connect()
+
+
+@pytest.mark.asyncio
+async def test_on_disconnect_unregisters_scanner_when_registered(
+    conn_manager: APIConnectionManager,
+) -> None:
+    """``_on_disconnect`` calls the unregister callback and clears it."""
+    unregister = Mock()
+    conn_manager._unregister_scanner = unregister
+
+    await conn_manager._on_disconnect(expected_disconnect=True)
+
+    unregister.assert_called_once_with()
+    # ``cast`` re-widens the attribute type that mypy narrowed to ``Mock``
+    # after the earlier assignment so ``is None`` is not flagged unreachable.
+    assert cast(Callable[[], None] | None, conn_manager._unregister_scanner) is None
+
+
+@pytest.mark.asyncio
+async def test_on_disconnect_when_no_scanner_registered_is_noop(
+    conn_manager: APIConnectionManager,
+) -> None:
+    """``_on_disconnect`` is safe when no scanner was registered yet."""
+    assert conn_manager._unregister_scanner is None
+    await conn_manager._on_disconnect(expected_disconnect=False)
+    assert conn_manager._unregister_scanner is None
+
+
+@pytest.mark.asyncio
+async def test_stop_unregisters_scanner_if_registered(
+    conn_manager_with_mocked_reconnect: tuple[APIConnectionManager, Mock, AsyncMock],
+) -> None:
+    """``stop()`` calls the scanner unregister callback if one is set."""
+    manager, mock_reconnect_logic, mock_disconnect = conn_manager_with_mocked_reconnect
+    unregister = Mock()
+    manager._unregister_scanner = unregister
+
+    await manager.stop()
+
+    unregister.assert_called_once_with()
+    mock_reconnect_logic.stop.assert_awaited_once_with()
+    mock_disconnect.assert_awaited_once_with()
+    # ``cast`` re-widens the attribute type that mypy narrowed to ``Mock``
+    # after the earlier assignment so ``is None`` is not flagged unreachable.
+    assert cast(Callable[[], None] | None, manager._unregister_scanner) is None
+
+
+@pytest.mark.asyncio
+async def test_stop_without_scanner_does_not_call_unregister(
+    conn_manager_with_mocked_reconnect: tuple[APIConnectionManager, Mock, AsyncMock],
+) -> None:
+    """``stop()`` is a no-op for the scanner branch when nothing is registered."""
+    manager, mock_reconnect_logic, mock_disconnect = conn_manager_with_mocked_reconnect
+
+    await manager.stop()
+
+    assert manager._unregister_scanner is None
+    mock_reconnect_logic.stop.assert_awaited_once_with()
+    mock_disconnect.assert_awaited_once_with()
