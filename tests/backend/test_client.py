@@ -1616,3 +1616,81 @@ async def test_set_connection_params_not_connected(
     with pytest.raises(BleakError) as exc_info:
         await client.set_connection_params(800, 800, 0, 300)
     assert "is not connected" in str(exc_info.value)
+
+
+@pytest.mark.parametrize(
+    ("args", "match"),
+    [
+        ((5, 800, 0, 300), "min_interval must be between 6 and 3200"),
+        ((3201, 3201, 0, 300), "min_interval must be between 6 and 3200"),
+        ((6, 5, 0, 300), "max_interval must be between 6 and 3200"),
+        ((6, 3201, 0, 300), "max_interval must be between 6 and 3200"),
+        ((100, 50, 0, 300), "must be >= min_interval"),
+        ((6, 800, -1, 300), "latency must be between 0 and 499"),
+        ((6, 800, 500, 3200), "latency must be between 0 and 499"),
+        ((6, 800, 0, 9), "timeout must be between 10 and 3200"),
+        ((6, 800, 0, 3201), "timeout must be between 10 and 3200"),
+        # timeout * 4 must exceed (1 + latency) * max_interval.
+        # With latency=0, max_interval=800 → boundary is timeout=200; 200 fails.
+        ((6, 800, 0, 200), "Supervision timeout must satisfy"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_set_connection_params_validation(
+    client_data: ESPHomeClientData,
+    args: tuple[int, int, int, int],
+    match: str,
+) -> None:
+    """Out-of-spec connection params raise ValueError before any API call."""
+    ble_device = generate_ble_device(
+        "CC:BB:AA:DD:EE:FF", details={"source": ESP_MAC_ADDRESS, "address_type": 1}
+    )
+    client = ESPHomeClient(ble_device, client_data=client_data)
+    client._is_connected = True
+    client._feature_flags |= BluetoothProxyFeature.CONNECTION_PARAMS_SETTING.value
+
+    with (
+        patch.object(
+            client._client, "bluetooth_device_set_connection_params"
+        ) as mock_set,
+        pytest.raises(ValueError, match=match),
+    ):
+        await client.set_connection_params(*args)
+    mock_set.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_set_connection_params_validation_runs_before_feature_flag(
+    client_data: ESPHomeClientData,
+) -> None:
+    """Bad params raise even when the feature flag is unsupported."""
+    ble_device = generate_ble_device(
+        "CC:BB:AA:DD:EE:FF", details={"source": ESP_MAC_ADDRESS, "address_type": 1}
+    )
+    client = ESPHomeClient(ble_device, client_data=client_data)
+    client._is_connected = True
+    # Default fixture has CONNECTION_PARAMS_SETTING disabled.
+    with pytest.raises(ValueError, match="min_interval must be between"):
+        await client.set_connection_params(0, 0, 0, 0)
+
+
+@pytest.mark.asyncio
+async def test_set_connection_params_boundary_values(
+    client_data: ESPHomeClientData,
+) -> None:
+    """Smallest and largest in-spec values are accepted."""
+    ble_device = generate_ble_device(
+        "CC:BB:AA:DD:EE:FF", details={"source": ESP_MAC_ADDRESS, "address_type": 1}
+    )
+    client = ESPHomeClient(ble_device, client_data=client_data)
+    client._is_connected = True
+    client._feature_flags |= BluetoothProxyFeature.CONNECTION_PARAMS_SETTING.value
+
+    with patch.object(
+        client._client, "bluetooth_device_set_connection_params"
+    ) as mock_set:
+        # Smallest valid: timeout * 4 > (1 + 0) * 6 → timeout >= 2; clamp to min 10.
+        await client.set_connection_params(6, 6, 0, 10)
+        # Largest valid: needs timeout * 4 > (1 + 0) * 3200 → timeout > 800.
+        await client.set_connection_params(6, 3200, 0, 801)
+    assert mock_set.call_count == 2

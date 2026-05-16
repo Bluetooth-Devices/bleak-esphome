@@ -57,6 +57,15 @@ CCCD_INDICATE_BYTES = b"\x02\x00"
 
 DEFAULT_MAX_WRITE_WITHOUT_RESPONSE = DEFAULT_MTU - GATT_HEADER_SIZE
 
+# BLE Core spec ranges for the LL_CONNECTION_UPDATE_IND parameters.
+# Sending out-of-range values can be silently dropped or rejected by the
+# peer with no useful error, so validate before round-tripping to the ESP.
+CONN_INTERVAL_MIN = 6  # 7.5 ms in units of 1.25 ms
+CONN_INTERVAL_MAX = 3200  # 4 s in units of 1.25 ms
+CONN_LATENCY_MAX = 499
+SUPERVISION_TIMEOUT_MIN = 10  # 100 ms in units of 10 ms
+SUPERVISION_TIMEOUT_MAX = 3200  # 32 s in units of 10 ms
+
 _LOGGER = logging.getLogger(__name__)
 
 _ESPHomeClient = TypeVar("_ESPHomeClient", bound="ESPHomeClient")
@@ -106,6 +115,52 @@ def api_error_as_bleak_error(
             raise BleakError(str(err)) from err
 
     return _async_wrap_bluetooth_operation
+
+
+def _validate_connection_params(
+    min_interval: int, max_interval: int, latency: int, timeout: int
+) -> None:
+    """
+    Validate BLE LL_CONNECTION_UPDATE_IND parameters per the Core spec.
+
+    Out-of-spec values can be silently dropped by the controller or rejected
+    by the peer with a generic error; catching them up front gives the caller
+    a clear ``ValueError`` instead.
+    """
+    if not CONN_INTERVAL_MIN <= min_interval <= CONN_INTERVAL_MAX:
+        raise ValueError(
+            f"min_interval must be between {CONN_INTERVAL_MIN} and "
+            f"{CONN_INTERVAL_MAX} (units of 1.25 ms), got {min_interval}"
+        )
+    if not CONN_INTERVAL_MIN <= max_interval <= CONN_INTERVAL_MAX:
+        raise ValueError(
+            f"max_interval must be between {CONN_INTERVAL_MIN} and "
+            f"{CONN_INTERVAL_MAX} (units of 1.25 ms), got {max_interval}"
+        )
+    if max_interval < min_interval:
+        raise ValueError(
+            f"max_interval ({max_interval}) must be >= min_interval "
+            f"({min_interval})"
+        )
+    if not 0 <= latency <= CONN_LATENCY_MAX:
+        raise ValueError(
+            f"latency must be between 0 and {CONN_LATENCY_MAX}, got {latency}"
+        )
+    if not SUPERVISION_TIMEOUT_MIN <= timeout <= SUPERVISION_TIMEOUT_MAX:
+        raise ValueError(
+            f"timeout must be between {SUPERVISION_TIMEOUT_MIN} and "
+            f"{SUPERVISION_TIMEOUT_MAX} (units of 10 ms), got {timeout}"
+        )
+    # Per BLE Core spec: connSupervisionTimeout > (1 + connPeripheralLatency)
+    # * connIntervalMax * 2.  Converting units gives timeout * 4 >
+    # (1 + latency) * max_interval (timeout in 10 ms, max_interval in 1.25 ms).
+    if timeout * 4 <= (1 + latency) * max_interval:
+        raise ValueError(
+            "Supervision timeout must satisfy "
+            "timeout * 4 > (1 + latency) * max_interval "
+            f"(got timeout={timeout}, latency={latency}, "
+            f"max_interval={max_interval})"
+        )
 
 
 @dataclass(slots=True)
@@ -570,6 +625,7 @@ class ESPHomeClient(BaseBleakClient):
         timeout: int,
     ) -> None:
         """Set BLE connection parameters on a connected device."""
+        _validate_connection_params(min_interval, max_interval, latency, timeout)
         if (
             not self._feature_flags
             & BluetoothProxyFeature.CONNECTION_PARAMS_SETTING.value

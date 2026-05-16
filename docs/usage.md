@@ -111,11 +111,18 @@ Sets BLE connection parameters on the connected device via the ESP32 proxy. The 
 
 This is useful for "Always Connected" devices where battery conservation is important — switching from fast intervals (~7.5ms) to slow intervals (e.g., 1000ms) after the initial data sync can significantly reduce power consumption.
 
-Parameters are in BLE units:
+Parameters are in BLE units and validated against the Core spec before they
+are sent to the device — out-of-range values raise `ValueError` immediately
+rather than being silently dropped by the controller or rejected by the
+peer with a generic error:
 
-- **min_interval** / **max_interval**: Connection interval in units of 1.25ms (e.g., 800 = 1000ms)
-- **latency**: Number of connection events the peripheral can skip (typically 0)
-- **timeout**: Supervision timeout in units of 10ms (e.g., 600 = 6000ms)
+- **min_interval** / **max_interval**: Connection interval in units of 1.25ms.
+  Must be between 6 (7.5ms) and 3200 (4s), and `max_interval >= min_interval`.
+- **latency**: Number of connection events the peripheral can skip. Must be
+  between 0 and 499 (typically 0).
+- **timeout**: Supervision timeout in units of 10ms. Must be between 10 (100ms)
+  and 3200 (32s), and must satisfy `timeout * 4 > (1 + latency) * max_interval`
+  per the BLE Core spec.
 
 Requires the `CONNECTION_PARAMS_SETTING` feature flag. If the ESPHome firmware is too old, a warning is logged with the current ESPHome version.
 
