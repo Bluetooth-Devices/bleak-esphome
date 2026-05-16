@@ -1,6 +1,7 @@
 import pytest
 from aioesphomeapi import (
     APIClient,
+    BluetoothLEAdvertisement,
     BluetoothLERawAdvertisement,
     BluetoothLERawAdvertisementsResponse,
     BluetoothScannerMode,
@@ -35,7 +36,30 @@ def test_scanner(scanner: ESPHomeScanner) -> None:
     assert isinstance(scanner, BaseHaRemoteScanner)
 
 
-def test_scanner_async_on_advertisement(scanner: ESPHomeScanner) -> None:
+def test_scanner_async_on_advertisement_decoded(scanner: ESPHomeScanner) -> None:
+    """Cover the decoded (non-raw) advertisement path."""
+    address_int = 261602360644300
+    adv = BluetoothLEAdvertisement(
+        address=address_int,
+        rssi=-72,
+        address_type=1,
+        name="decoded-device",
+        service_uuids=["0000fe07-0000-1000-8000-00805f9b34fb"],
+        service_data={"0000fe07-0000-1000-8000-00805f9b34fb": b"\x01\x02"},
+        manufacturer_data={0x05: b"\xaa\xbb"},
+    )
+    scanner.async_on_advertisement(adv)
+    manager = get_manager()
+    service_info = manager.async_last_service_info(
+        int_to_bluetooth_address(address_int), True
+    )
+    assert service_info is not None
+    assert service_info.name == "decoded-device"
+    assert service_info.rssi == -72
+    assert service_info.manufacturer_data == {0x05: b"\xaa\xbb"}
+
+
+def test_scanner_async_on_raw_advertisements(scanner: ESPHomeScanner) -> None:
     adv = BluetoothLERawAdvertisementsResponse(
         advertisements=[
             BluetoothLERawAdvertisement(
