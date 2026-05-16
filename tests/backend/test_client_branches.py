@@ -17,12 +17,9 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 from aioesphomeapi import (
-    APIClient,
-    APIVersion,
     BluetoothConnectionDroppedError,
     BluetoothDeviceClearCache,
     BluetoothProxyFeature,
-    DeviceInfo,
     ESPHomeBluetoothGATTServices,
 )
 from aioesphomeapi.core import (
@@ -30,52 +27,14 @@ from aioesphomeapi.core import (
     BluetoothGATTError,
     TimeoutAPIError,
 )
+from bleak import BleakClient
 from bleak.backends.characteristic import BleakGATTCharacteristic
 from bleak.exc import BleakError
-from habluetooth import HaBluetoothConnector
-from pytest_asyncio import fixture as aio_fixture
 
 from bleak_esphome.backend.client import ESPHomeClient, ESPHomeClientData
-from bleak_esphome.backend.device import ESPHomeBluetoothDevice
-from bleak_esphome.backend.scanner import ESPHomeScanner
 
 from .. import generate_ble_device
-from .test_client import (
-    ESP_MAC_ADDRESS,
-    ESP_NAME,
-    esphome_bluetooth_gatt_services,  # noqa: F401 — reused fixture
-)
-
-
-@aio_fixture(name="client_data")
-async def client_data_fixture(mock_client: APIClient) -> ESPHomeClientData:
-    """Return a client data fixture for branch tests."""
-    connector = HaBluetoothConnector(ESPHomeClientData, ESP_MAC_ADDRESS, lambda: True)
-    return ESPHomeClientData(
-        bluetooth_device=ESPHomeBluetoothDevice(ESP_NAME, ESP_MAC_ADDRESS),
-        client=mock_client,
-        device_info=DeviceInfo(
-            mac_address=ESP_MAC_ADDRESS,
-            name=ESP_NAME,
-            bluetooth_proxy_feature_flags=BluetoothProxyFeature.PASSIVE_SCAN
-            | BluetoothProxyFeature.ACTIVE_CONNECTIONS
-            | BluetoothProxyFeature.REMOTE_CACHING
-            | BluetoothProxyFeature.PAIRING
-            | BluetoothProxyFeature.CACHE_CLEARING
-            | BluetoothProxyFeature.RAW_ADVERTISEMENTS,
-        ),
-        api_version=APIVersion(1, 9),
-        title=ESP_NAME,
-        scanner=ESPHomeScanner(ESP_MAC_ADDRESS, ESP_NAME, connector, True),
-    )
-
-
-def _make_client(client_data: ESPHomeClientData) -> ESPHomeClient:
-    ble_device = generate_ble_device(
-        "CC:BB:AA:DD:EE:FF",
-        details={"source": ESP_MAC_ADDRESS, "address_type": 1},
-    )
-    return ESPHomeClient(ble_device, client_data=client_data)
+from .conftest import ESP_MAC_ADDRESS, _make_client, _make_client_backend
 
 
 @pytest.mark.asyncio
@@ -360,7 +319,7 @@ async def test_write_gatt_descriptor(
 @pytest.mark.asyncio
 async def test_start_notify_already_enabled_raises(
     client_data: ESPHomeClientData,
-    esphome_bluetooth_gatt_services: ESPHomeBluetoothGATTServices,  # noqa: F811
+    esphome_bluetooth_gatt_services: ESPHomeBluetoothGATTServices,
 ) -> None:
     """A second start_notify on the same handle raises BleakError."""
     client = _make_client(client_data)
@@ -382,7 +341,7 @@ async def test_start_notify_already_enabled_raises(
 @pytest.mark.asyncio
 async def test_start_notify_without_notify_property_raises(
     client_data: ESPHomeClientData,
-    esphome_bluetooth_gatt_services: ESPHomeBluetoothGATTServices,  # noqa: F811
+    esphome_bluetooth_gatt_services: ESPHomeBluetoothGATTServices,
 ) -> None:
     """Starting notify on a read-only characteristic raises BleakError."""
     client = _make_client(client_data)
@@ -405,7 +364,7 @@ async def test_start_notify_without_notify_property_raises(
 @pytest.mark.asyncio
 async def test_start_notify_skips_cccd_without_remote_caching(
     client_data: ESPHomeClientData,
-    esphome_bluetooth_gatt_services: ESPHomeBluetoothGATTServices,  # noqa: F811
+    esphome_bluetooth_gatt_services: ESPHomeBluetoothGATTServices,
 ) -> None:
     """Without REMOTE_CACHING the host does not write to the CCCD itself."""
     client = _make_client(client_data)
@@ -476,10 +435,6 @@ async def test_connect_get_services_failure_disconnects(
         "CC:BB:AA:DD:EE:FF",
         details={"source": ESP_MAC_ADDRESS, "address_type": 1},
     )
-    from bleak import BleakClient
-
-    from .test_client import _make_client_backend
-
     bleak_client = BleakClient(ble_device, backend=_make_client_backend(client_data))
     client: ESPHomeClient = bleak_client._backend
     client._bluetooth_device.ble_connections_free = 10
