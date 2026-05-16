@@ -34,7 +34,7 @@ from bleak.exc import BleakError
 from bleak_esphome.backend.client import ESPHomeClient, ESPHomeClientData
 
 from .. import generate_ble_device
-from .conftest import ESP_MAC_ADDRESS, _make_client, _make_client_backend
+from ._helpers import ESP_MAC_ADDRESS, _make_client, _make_client_backend
 
 
 @pytest.mark.asyncio

@@ -19,7 +19,7 @@ from bleak_esphome.backend.client import ESPHomeClient, ESPHomeClientData
 from bleak_esphome.backend.scanner import ESPHomeScanner
 
 from .. import generate_ble_device
-from .conftest import ESP_MAC_ADDRESS, ESP_NAME, _make_client_backend
+from ._helpers import ESP_MAC_ADDRESS, ESP_NAME, _make_client_backend
 
 
 def test_get_services() -> None:
