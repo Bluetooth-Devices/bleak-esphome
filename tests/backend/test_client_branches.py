@@ -194,7 +194,8 @@ async def test_on_bluetooth_connection_state_idempotent_when_future_done(
 async def test_on_bluetooth_connection_state_preserves_cached_mtu(
     client_data: ESPHomeClientData,
 ) -> None:
-    """A cached MTU is preserved when the connection-state callback fires.
+    """
+    A cached MTU is preserved when the connection-state callback fires.
 
     ``connect()`` seeds ``self._mtu`` from the cache before issuing the
     proxy ``bluetooth_device_connect`` call, so the connection-state
