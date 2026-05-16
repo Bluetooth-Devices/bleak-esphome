@@ -8,6 +8,7 @@ from aioesphomeapi import (
     BluetoothLEAdvertisement,
     BluetoothLERawAdvertisementsResponse,
     BluetoothScannerMode,
+    BluetoothScannerState,
     BluetoothScannerStateResponse,
 )
 from bluetooth_data_tools import (
@@ -59,16 +60,26 @@ class ESPHomeScanner(BaseHaRemoteScanner):
         return None
 
     def async_update_scanner_state(self, state: BluetoothScannerStateResponse) -> None:
-        """Update the scanner state."""
+        """
+        Update the scanner state.
+
+        ``state.mode`` reflects the scanner's configured mode (active vs passive)
+        and is reported as the requested mode. ``current_mode`` is only set when
+        ``state.state`` is ``RUNNING`` — IDLE, STARTING, STOPPING, STOPPED, and
+        FAILED all mean the proxy is not actively scanning, regardless of the
+        mode it was configured with.
+        """
         if state.mode == BluetoothScannerMode.ACTIVE:
-            self.set_requested_mode(BluetoothScanningMode.ACTIVE)
-            self.set_current_mode(BluetoothScanningMode.ACTIVE)
+            mode: BluetoothScanningMode | None = BluetoothScanningMode.ACTIVE
         elif state.mode == BluetoothScannerMode.PASSIVE:
-            self.set_requested_mode(BluetoothScanningMode.PASSIVE)
-            self.set_current_mode(BluetoothScanningMode.PASSIVE)
+            mode = BluetoothScanningMode.PASSIVE
+        else:
+            mode = None
+        self.set_requested_mode(mode)
+        if state.state == BluetoothScannerState.RUNNING:
+            self.set_current_mode(mode)
         else:
             self.set_current_mode(None)
-            self.set_requested_mode(None)
 
     def async_on_advertisement(self, adv: BluetoothLEAdvertisement) -> None:
         """Call the registered callback."""

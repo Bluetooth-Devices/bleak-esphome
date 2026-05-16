@@ -4,6 +4,7 @@ from aioesphomeapi import (
     BluetoothLERawAdvertisement,
     BluetoothLERawAdvertisementsResponse,
     BluetoothScannerMode,
+    BluetoothScannerState,
     BluetoothScannerStateResponse,
 )
 from bluetooth_data_tools import int_to_bluetooth_address
@@ -64,9 +65,11 @@ def test_scanner_async_on_advertisement(scanner: ESPHomeScanner) -> None:
 def test_scanner_async_update_scanner_state(
     scanner: ESPHomeScanner, mock_client: APIClient
 ) -> None:
+    """Running scanner reports both current and requested mode."""
     mock_client.subscribe_bluetooth_scanner_state(scanner.async_update_scanner_state)
     scanner.async_update_scanner_state(
         BluetoothScannerStateResponse(
+            state=BluetoothScannerState.RUNNING,
             mode=BluetoothScannerMode.ACTIVE,
         )
     )
@@ -74,14 +77,73 @@ def test_scanner_async_update_scanner_state(
     assert scanner.requested_mode == BluetoothScanningMode.ACTIVE
     scanner.async_update_scanner_state(
         BluetoothScannerStateResponse(
+            state=BluetoothScannerState.RUNNING,
             mode=BluetoothScannerMode.PASSIVE,
         )
     )
     assert scanner.current_mode == BluetoothScanningMode.PASSIVE
     assert scanner.requested_mode == BluetoothScanningMode.PASSIVE
-    scanner.async_update_scanner_state(BluetoothScannerStateResponse(mode=None))
+    scanner.async_update_scanner_state(
+        BluetoothScannerStateResponse(
+            state=BluetoothScannerState.RUNNING,
+            mode=None,
+        )
+    )
     assert scanner.current_mode is None
     assert scanner.requested_mode is None
+
+
+@pytest.mark.parametrize(
+    "non_running_state",
+    [
+        BluetoothScannerState.IDLE,
+        BluetoothScannerState.STARTING,
+        BluetoothScannerState.STOPPING,
+        BluetoothScannerState.STOPPED,
+        BluetoothScannerState.FAILED,
+    ],
+)
+def test_scanner_state_non_running_clears_current_mode(
+    scanner: ESPHomeScanner, non_running_state: BluetoothScannerState
+) -> None:
+    """Non-RUNNING scanner states keep requested_mode but clear current_mode."""
+    scanner.async_update_scanner_state(
+        BluetoothScannerStateResponse(
+            state=BluetoothScannerState.RUNNING,
+            mode=BluetoothScannerMode.ACTIVE,
+        )
+    )
+    assert scanner.current_mode == BluetoothScanningMode.ACTIVE
+    scanner.async_update_scanner_state(
+        BluetoothScannerStateResponse(
+            state=non_running_state,
+            mode=BluetoothScannerMode.ACTIVE,
+        )
+    )
+    assert scanner.current_mode is None
+    assert scanner.requested_mode == BluetoothScanningMode.ACTIVE
+
+
+def test_scanner_state_running_after_failed_restores_current_mode(
+    scanner: ESPHomeScanner,
+) -> None:
+    """current_mode comes back when the scanner resumes RUNNING."""
+    scanner.async_update_scanner_state(
+        BluetoothScannerStateResponse(
+            state=BluetoothScannerState.FAILED,
+            mode=BluetoothScannerMode.PASSIVE,
+        )
+    )
+    assert scanner.current_mode is None
+    assert scanner.requested_mode == BluetoothScanningMode.PASSIVE
+    scanner.async_update_scanner_state(
+        BluetoothScannerStateResponse(
+            state=BluetoothScannerState.RUNNING,
+            mode=BluetoothScannerMode.PASSIVE,
+        )
+    )
+    assert scanner.current_mode == BluetoothScanningMode.PASSIVE
+    assert scanner.requested_mode == BluetoothScanningMode.PASSIVE
 
 
 @pytest.mark.asyncio
