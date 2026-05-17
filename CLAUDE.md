@@ -15,8 +15,9 @@ Home Assistant dependency. See `docs/architecture.md` for the full picture.
 
 - `src/bleak_esphome/` — package source (importable as `bleak_esphome`).
 - `src/bleak_esphome/backend/` — Bleak scanner/client glue (`scanner.py`,
-  `client.py`, `device.py`, `cache.py`, `characteristic.py`, `descriptor.py`,
-  `service.py`).
+  `client.py`, `device.py`, `cache.py`). The standalone `characteristic.py`,
+  `descriptor.py`, and `service.py` shims were removed in the bleak 1.0
+  migration (PR #171) — GATT objects come from `bleak.backends.*` directly.
 - `src/bleak_esphome/connect.py` — public `connect_scanner()` entry point and
   feature-flag negotiation via
   `DeviceInfo.bluetooth_proxy_feature_flags_compat(api_version)`.
