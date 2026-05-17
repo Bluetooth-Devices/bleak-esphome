@@ -191,6 +191,30 @@ async def test_on_bluetooth_connection_state_idempotent_when_future_done(
 
 
 @pytest.mark.asyncio
+async def test_on_bluetooth_connection_state_preserves_cached_mtu(
+    client_data: ESPHomeClientData,
+) -> None:
+    """
+    A cached MTU is preserved when the connection-state callback fires.
+
+    ``connect()`` seeds ``self._mtu`` from the cache before issuing the
+    proxy ``bluetooth_device_connect`` call, so the connection-state
+    callback must not clobber that value (and must not write the
+    just-reported ``mtu`` back into the cache).
+    """
+    client = _make_client(client_data)
+    cached_mtu = 100
+    reported_mtu = 23
+    client._mtu = cached_mtu
+    client._cache.clear_gatt_mtu_cache(client._address_as_int)
+    fut: asyncio.Future[bool] = client._loop.create_future()
+    client._on_bluetooth_connection_state(fut, True, reported_mtu, 0)
+    assert fut.result() is True
+    assert client._mtu == cached_mtu
+    assert client._cache.get_gatt_mtu_cache(client._address_as_int) is None
+
+
+@pytest.mark.asyncio
 async def test_esp_disconnected_invokes_bleak_callback(
     client_data: ESPHomeClientData,
 ) -> None:
