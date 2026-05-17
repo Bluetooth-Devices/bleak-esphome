@@ -486,6 +486,76 @@ async def test_bleak_client_connect_raises_after_connected_future_resolved(
 
 
 @pytest.mark.asyncio
+async def test_bleak_client_connect_inner_cancelled_drains_resolved_future(
+    bleak_pair: tuple[BleakClient, ESPHomeClient],
+) -> None:
+    """
+    Test inner CancelledError after the callback fires drains the future.
+
+    Exercises the ``if connected_future.done():`` branch inside the
+    ``except asyncio.CancelledError`` handler around the
+    ``bluetooth_device_connect`` call. The callback resolves
+    ``connected_future`` with a ``BleakError`` (failed connection), then
+    ``bluetooth_device_connect`` raises ``CancelledError``. The
+    already-resolved future must be drained (BleakError suppressed) before
+    the CancelledError is converted to a ``BleakError`` for the caller.
+    """
+    bleak_client, client = bleak_pair
+
+    async def _fire_callback_then_cancel(
+        address: int,
+        on_bluetooth_connection_state: Any,
+        **kwargs: Any,
+    ) -> None:
+        on_bluetooth_connection_state(False, 0, 0)
+        raise asyncio.CancelledError()
+
+    with patch.object(
+        client._client,
+        "bluetooth_device_connect",
+        side_effect=_fire_callback_then_cancel,
+    ):
+        with pytest.raises(BleakError, match="cancelled"):
+            await bleak_client.connect(dangerous_use_bleak_cache=True)
+
+    assert not client.is_connected
+
+
+@pytest.mark.asyncio
+async def test_bleak_client_connect_outer_cancel_without_subscription(
+    bleak_pair: tuple[BleakClient, ESPHomeClient],
+) -> None:
+    """
+    Test outer cancel skips cleanup when no cancel handle was returned.
+
+    Exercises the ``if cancel_connection_state is not None`` guard inside
+    the outer ``await connected_future`` cancellation handler. When
+    ``bluetooth_device_connect`` returns ``None`` (no subscription handle),
+    ``self._cancel_connection_state`` stays ``None``; a real cancel of the
+    awaiting task must not attempt to call a missing cancel callable.
+    """
+    bleak_client, client = bleak_pair
+
+    with patch.object(
+        client._client,
+        "bluetooth_device_connect",
+        return_value=None,
+    ) as mock_connect:
+        task = asyncio.create_task(bleak_client.connect(dangerous_use_bleak_cache=True))
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        mock_connect.assert_called_once()
+        assert client._cancel_connection_state is None
+        assert task.cancel() is True
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert task.cancelled()
+
+    assert not client.is_connected
+    assert client._cancel_connection_state is None
+
+
+@pytest.mark.asyncio
 async def test_bleak_client_connect_get_services_cleanup_shielded(
     bleak_pair: tuple[BleakClient, ESPHomeClient],
 ) -> None:
