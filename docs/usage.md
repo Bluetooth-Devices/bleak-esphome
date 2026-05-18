@@ -67,6 +67,33 @@ logging.basicConfig(level=logging.DEBUG)
 asyncio.run(run())
 ```
 
+## Handling start cancellation
+
+`APIConnectionManager.start()` blocks until the first successful connection
+attempt completes. If `stop()` is called while a `start()` task is still
+awaiting that first connection, `start()` raises
+`bleak_esphome.ESPHomeStartAborted` instead of leaking a bare
+`asyncio.CancelledError`. The typed exception lets `TaskGroup` and
+`asyncio.timeout()` callers tell "we asked it to stop" apart from "the
+surrounding task was actually cancelled":
+
+```python
+from bleak_esphome import APIConnectionManager, ESPHomeStartAborted
+
+manager = APIConnectionManager({"address": "device.local.", "noise_psk": None})
+start_task = asyncio.create_task(manager.start())
+try:
+    await start_task
+except ESPHomeStartAborted:
+    # stop() was called before the first connection completed; nothing
+    # else to clean up here.
+    pass
+```
+
+The example above uses `asyncio.wait`, which keeps each task's exception on
+the task object rather than re-raising — you only see `ESPHomeStartAborted`
+if you later `await` the task or call `task.result()`.
+
 ## Extension Methods
 
 `ESPHomeClient` provides extension methods beyond the standard `BleakClient` interface. These are typically called via `BleakClientWithServiceCache` from `bleak-retry-connector`, which forwards them to `ESPHomeClient`.
