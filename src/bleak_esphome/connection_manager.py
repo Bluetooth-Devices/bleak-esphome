@@ -9,6 +9,8 @@ from aioesphomeapi import APIClient, ReconnectLogic
 
 import bleak_esphome
 
+from ._cancellation import is_spurious_cancellation
+
 
 class ESPHomeStartAborted(Exception):
     """Raised when ``APIConnectionManager.start()`` is aborted by ``stop()``."""
@@ -79,8 +81,7 @@ class APIConnectionManager:
             # ``_start_future`` directly. Convert it to ``ESPHomeStartAborted``
             # so it does not leak as a spurious cancellation that breaks
             # ``TaskGroup`` / ``asyncio.timeout`` semantics for callers.
-            current_task = asyncio.current_task()
-            if current_task is None or not current_task.cancelling():
+            if is_spurious_cancellation():
                 raise ESPHomeStartAborted("API connection start was aborted") from None
             raise
 
