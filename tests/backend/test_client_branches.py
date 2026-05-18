@@ -479,3 +479,28 @@ async def test_connect_get_services_failure_disconnects(
         with pytest.raises(RuntimeError, match="services boom"):
             await task
     mock_disc.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_del_warns_when_subscription_still_active(
+    client_data: ESPHomeClientData,
+) -> None:
+    """
+    ``__del__`` logs a warning when a connection-state subscription lingers.
+
+    Reaching ``__del__`` with ``_cancel_connection_state`` still set means the
+    bleak client was not properly disconnected before destruction; the warning
+    is the only signal the operator gets that the subscription leaked.
+    """
+    client = _make_client(client_data)
+    client._cancel_connection_state = Mock()
+
+    with patch(
+        "bleak_esphome.backend.client._LOGGER.warning"
+    ) as mock_warning:
+        client.__del__()
+
+    mock_warning.assert_called_once()
+    args, _ = mock_warning.call_args
+    assert "not properly" in args[0]
+    assert args[1] == client._description
