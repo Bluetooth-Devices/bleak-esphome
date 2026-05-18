@@ -134,3 +134,25 @@ await client.set_connection_params(
     timeout=600,  # 6000ms
 )
 ```
+
+## Feature Flag Reference
+
+The proxy firmware advertises a `BluetoothProxyFeature` bitmask through
+`DeviceInfo.bluetooth_proxy_feature_flags_compat(api_version)`. `bleak-esphome`
+checks these flags before calling proxy-side APIs and degrades gracefully when
+a flag is missing. The table below maps each public surface to the flag it
+requires and what happens when the proxy firmware does not advertise it.
+
+| Public surface                          | Required flag               | Behavior when flag is absent                                                                                                                                                                                                                                                      |
+| --------------------------------------- | --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `BleakClient.connect` / GATT operations | `ACTIVE_CONNECTIONS`        | The scanner is registered as non-connectable. Discovery still works; connect attempts are rejected by `bleak` before reaching this library.                                                                                                                                       |
+| Decoded vs. raw advertisements          | `RAW_ADVERTISEMENTS`        | Falls back to `subscribe_bluetooth_le_advertisements` (proxy-side decoded) instead of `subscribe_bluetooth_le_raw_advertisements`. Both paths feed the same scanner.                                                                                                              |
+| Scanner state / mode reporting          | `FEATURE_STATE_AND_MODE`    | `subscribe_bluetooth_scanner_state` is skipped; `current_mode` / `requested_mode` stay at their defaults. Connection-slot tracking is unaffected.                                                                                                                                 |
+| `connect(dangerous_use_bleak_cache=…)`  | `REMOTE_CACHING`            | The cached-services hint sent to the proxy is forced off, so the proxy re-discovers services on every connect. `dangerous_use_bleak_cache` still hits the on-host LRU in `_get_services` when populated, and `start_notify` skips the CCCD write because the firmware handles it. |
+| `BleakClient.pair` / `unpair`           | `PAIRING`                   | Raises `NotImplementedError("Pairing is not available in this version ESPHome; Upgrade the ESPHome version on the … device.")`.                                                                                                                                                   |
+| `ESPHomeClient.clear_cache`             | `CACHE_CLEARING`            | Returns `True` after clearing only the on-host LRU caches; logs `"On device cache clear is not available with this ESPHome version; … Only memory cache will be cleared"`. No proxy round-trip.                                                                                   |
+| `ESPHomeClient.set_connection_params`   | `CONNECTION_PARAMS_SETTING` | Silently returns after logging `"Setting connection parameters is not available with ESPHome version …; Upgrade the ESPHome version on the device"`. No exception is raised.                                                                                                      |
+
+If a method appears to silently do nothing, check the proxy's reported feature
+flags first — the warning is logged at WARNING level on the
+`bleak_esphome.backend.client` logger.
