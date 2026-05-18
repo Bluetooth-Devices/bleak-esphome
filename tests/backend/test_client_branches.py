@@ -495,9 +495,7 @@ async def test_del_warns_when_subscription_still_active(
     client = _make_client(client_data)
     client._cancel_connection_state = Mock()
 
-    with patch(
-        "bleak_esphome.backend.client._LOGGER.warning"
-    ) as mock_warning:
+    with patch("bleak_esphome.backend.client._LOGGER.warning") as mock_warning:
         client.__del__()
 
     mock_warning.assert_called_once()
