@@ -49,12 +49,13 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v6
-      - name: Set up Python
-        uses: actions/setup-python@v6
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v8
         with:
+          enable-cache: true
           python-version: ${{ matrix.python-version }}
-          allow-prereleases: true
-      - uses: snok/install-poetry@v1.4.1
+      - name: Install poetry
+        run: uv tool install poetry
       - name: Install Dependencies
         run: |
           if [ "${{ matrix.extension }}" = "skip_cython" ]; then
@@ -75,11 +76,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - name: Setup Python 3.14
-        uses: actions/setup-python@v6
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v8
         with:
+          enable-cache: true
           python-version: "3.14"
-      - uses: snok/install-poetry@v1.4.1
+      - name: Install poetry
+        run: uv tool install poetry
       - name: Install Dependencies
         run: |
           REQUIRE_CYTHON=1 poetry install --only=main,dev
