@@ -47,14 +47,22 @@ jobs:
           - "skip_cython"
           - "use_cython"
     runs-on: ${{ matrix.os }}
+    env:
+      POETRY_VIRTUALENVS_IN_PROJECT: "true"
     steps:
       - uses: actions/checkout@v6
-      - name: Set up Python
-        uses: actions/setup-python@v6
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v8.1.0
         with:
+          enable-cache: true
           python-version: ${{ matrix.python-version }}
-          allow-prereleases: true
-      - uses: snok/install-poetry@v1.4.1
+      - name: Install poetry
+        run: uv tool install poetry
+      - name: Cache poetry virtualenv
+        uses: actions/cache@v4
+        with:
+          path: .venv
+          key: poetry-${{ runner.os }}-${{ matrix.python-version }}-${{ matrix.extension }}-${{ hashFiles('poetry.lock') }}
       - name: Install Dependencies
         run: |
           if [ "${{ matrix.extension }}" = "skip_cython" ]; then
@@ -75,11 +83,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v8.1.0
+        with:
+          enable-cache: true
+      - name: Install poetry
+        run: uv tool install poetry
       - name: Setup Python 3.14
         uses: actions/setup-python@v6
         with:
           python-version: "3.14"
-      - uses: snok/install-poetry@v1.4.1
+          cache: "poetry"
       - name: Install Dependencies
         run: |
           REQUIRE_CYTHON=1 poetry install --only=main,dev
