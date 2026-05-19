@@ -10,6 +10,10 @@ concurrency:
   group: ${{ github.head_ref || github.run_id }}
   cancel-in-progress: true
 
+env:
+  POETRY_VIRTUALENVS_IN_PROJECT: "true"
+  UV_PYTHON_PREFERENCE: only-managed
+
 jobs:
   lint:
     runs-on: ubuntu-latest
@@ -47,23 +51,31 @@ jobs:
           - "skip_cython"
           - "use_cython"
     runs-on: ${{ matrix.os }}
-    env:
-      POETRY_VIRTUALENVS_IN_PROJECT: "true"
     steps:
       - uses: actions/checkout@v6
       - name: Set up uv
         uses: astral-sh/setup-uv@v8.1.0
         with:
           enable-cache: true
-          python-version: ${{ matrix.python-version }}
       - name: Install poetry
         run: uv tool install poetry
-      - name: Cache poetry virtualenv
+      - name: Set up Python
+        id: setup-python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: "poetry"
+          allow-prereleases: true
+      - name: Cache poetry venv
+        id: cache-venv
         uses: actions/cache@v4
         with:
-          path: .venv
-          key: poetry-${{ runner.os }}-${{ matrix.python-version }}-${{ matrix.extension }}-${{ hashFiles('poetry.lock') }}
+          path: |
+            .venv
+            src/bleak_esphome/**/*.so
+          key: venv-v2-${{ runner.os }}-py${{ steps.setup-python.outputs.python-version }}-${{ matrix.extension }}-${{ hashFiles('poetry.lock', 'pyproject.toml', 'build_ext.py', 'src/bleak_esphome/**/*.py', 'src/bleak_esphome/**/*.pxd') }}
       - name: Install Dependencies
+        if: steps.cache-venv.outputs.cache-hit != 'true'
         run: |
           if [ "${{ matrix.extension }}" = "skip_cython" ]; then
             SKIP_CYTHON=1 poetry install --only=main,dev
@@ -90,11 +102,22 @@ jobs:
       - name: Install poetry
         run: uv tool install poetry
       - name: Setup Python 3.14
+        id: setup-python
         uses: actions/setup-python@v6
         with:
           python-version: "3.14"
           cache: "poetry"
+          allow-prereleases: true
+      - name: Cache poetry venv
+        id: cache-venv
+        uses: actions/cache@v4
+        with:
+          path: |
+            .venv
+            src/bleak_esphome/**/*.so
+          key: venv-v2-${{ runner.os }}-benchmark-py${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('poetry.lock', 'pyproject.toml', 'build_ext.py', 'src/bleak_esphome/**/*.py', 'src/bleak_esphome/**/*.pxd') }}
       - name: Install Dependencies
+        if: steps.cache-venv.outputs.cache-hit != 'true'
         run: |
           REQUIRE_CYTHON=1 poetry install --only=main,dev
         shell: bash
