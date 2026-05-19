@@ -47,6 +47,8 @@ jobs:
           - "skip_cython"
           - "use_cython"
     runs-on: ${{ matrix.os }}
+    env:
+      POETRY_VIRTUALENVS_IN_PROJECT: "true"
     steps:
       - uses: actions/checkout@v6
       - name: Set up uv
@@ -56,6 +58,11 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - name: Install poetry
         run: uv tool install poetry
+      - name: Cache poetry virtualenv
+        uses: actions/cache@v4
+        with:
+          path: .venv
+          key: poetry-${{ runner.os }}-${{ matrix.python-version }}-${{ matrix.extension }}-${{ hashFiles('poetry.lock') }}
       - name: Install Dependencies
         run: |
           if [ "${{ matrix.extension }}" = "skip_cython" ]; then
@@ -74,6 +81,8 @@ jobs:
 
   benchmark:
     runs-on: ubuntu-latest
+    env:
+      POETRY_VIRTUALENVS_IN_PROJECT: "true"
     steps:
       - uses: actions/checkout@v6
       - name: Set up uv
@@ -83,6 +92,11 @@ jobs:
           python-version: "3.14"
       - name: Install poetry
         run: uv tool install poetry
+      - name: Cache poetry virtualenv
+        uses: actions/cache@v4
+        with:
+          path: .venv
+          key: poetry-benchmark-${{ runner.os }}-3.14-${{ hashFiles('poetry.lock') }}
       - name: Install Dependencies
         run: |
           REQUIRE_CYTHON=1 poetry install --only=main,dev
