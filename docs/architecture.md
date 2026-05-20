@@ -80,10 +80,22 @@ That bitmask drives every subsequent decision:
   non-connectable.
 - `RAW_ADVERTISEMENTS` — if set, the host subscribes to raw advertisement frames; if
   not, it falls back to per-advertisement decoded messages.
-- `FEATURE_STATE_AND_MODE` — if set, the host subscribes to scanner state changes
-  (active / passive scanning mode reported by the proxy).
+- `FEATURE_STATE_AND_MODE` — if set, the host subscribes to scanner state updates and
+  tracks both the current scanner state (`IDLE` / `STARTING` / `RUNNING` / `STOPPING`
+  / `STOPPED` / `FAILED`) and the active scanning mode (`PASSIVE` / `ACTIVE`).
+- `REMOTE_CACHING` — gates the cached-services hint sent on connect. When unset the
+  hint is forced off, so the proxy re-discovers services on every connect; the
+  on-host LRU cache still works.
+- `PAIRING` — required for `BleakClient.pair` and `unpair`. If unset, those calls
+  raise `NotImplementedError` rather than silently no-oping.
 - `CACHE_CLEARING` — required for {ref}`usage`'s `clear_cache()` extension.
 - `CONNECTION_PARAMS_SETTING` — required for `set_connection_params()`.
+
+The proxy-side `BluetoothProxyFeature` enum also defines `PASSIVE_SCAN`, but no
+host-side code path in this library currently checks it — passive scanning is
+inferred from the absence of `ACTIVE_CONNECTIONS` rather than from a dedicated
+flag. See the {ref}`usage` "Feature Flag Reference" table for what callers see
+when each flag is missing.
 
 Older proxy firmwares simply lack these flags; the library degrades gracefully (it
 logs a warning and skips the unsupported call) rather than refusing to start.
