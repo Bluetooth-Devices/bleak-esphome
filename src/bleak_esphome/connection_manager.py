@@ -75,8 +75,16 @@ class APIConnectionManager:
         Start the API connection.
 
         Constructs the ``APIClient`` and ``ReconnectLogic`` so no event loop
-        work happens at ``__init__`` time. Call once per manager instance.
+        work happens at ``__init__`` time. Call once per manager instance;
+        a second call raises ``RuntimeError`` to prevent leaking the prior
+        ``APIClient`` / ``ReconnectLogic`` (and its background reconnect
+        task) by overwriting them.
         """
+        if self._reconnect_logic is not None:
+            raise RuntimeError(
+                "APIConnectionManager.start() has already been called; "
+                "create a new manager instance to reconnect."
+            )
         self._cli = APIClient(
             address=self._address,
             port=6053,
