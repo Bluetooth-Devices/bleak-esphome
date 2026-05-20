@@ -502,3 +502,7 @@ async def test_del_warns_when_subscription_still_active(
     args, _ = mock_warning.call_args
     assert "not properly" in args[0]
     assert args[1] == client._description
+
+    # Clear the subscription so the implicit ``__del__`` that runs when
+    # ``client`` goes out of scope does not emit a second (unpatched) warning.
+    client._cancel_connection_state = None
