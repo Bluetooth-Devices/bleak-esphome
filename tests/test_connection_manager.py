@@ -363,3 +363,37 @@ async def test_stop_before_start_is_noop(
 
     # Must not raise even though every guarded branch is unset.
     await manager.stop()
+
+
+@pytest.mark.asyncio
+async def test_start_twice_raises_runtime_error() -> None:
+    """
+    Calling ``start()`` twice raises ``RuntimeError``.
+
+    A second ``start()`` would overwrite ``_cli`` / ``_reconnect_logic`` and
+    leak the prior reconnect task. Enforce single-start semantics instead.
+    """
+    config: ESPHomeDeviceConfig = {"address": "test.local", "noise_psk": None}
+
+    with (
+        patch("bleak_esphome.connection_manager.APIClient") as mock_api_client_cls,
+        patch(
+            "bleak_esphome.connection_manager.ReconnectLogic"
+        ) as mock_reconnect_logic_cls,
+    ):
+        mock_api_client_cls.return_value.disconnect = AsyncMock()
+        mock_reconnect_logic = mock_reconnect_logic_cls.return_value
+        mock_reconnect_logic.start = AsyncMock()
+        mock_reconnect_logic.stop = AsyncMock()
+        manager = APIConnectionManager(config)
+        start_task = asyncio.create_task(manager.start())
+        # Yield so start() reaches ``await self._start_future``.
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        with pytest.raises(RuntimeError, match="already been called"):
+            await manager.start()
+
+        await manager.stop()
+        with pytest.raises(ESPHomeStartAborted):
+            await start_task

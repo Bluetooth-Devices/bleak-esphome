@@ -134,14 +134,6 @@ jobs:
       - lint
       - commitlint
 
-    # Skip on PRs from forks: the checkout below uses the branch name without
-    # a repository, which resolves to the base repo where the fork's branch
-    # doesn't exist. The release environment's secrets are also unavailable
-    # to fork PRs, so the job can't do anything useful there.
-    if: >-
-      github.event_name != 'pull_request' ||
-      github.event.pull_request.head.repo.full_name == github.repository
-
     runs-on: ubuntu-latest
     environment: release
     concurrency:

@@ -86,11 +86,20 @@ class APIConnectionManager:
         a bare ``CancelledError`` so it does not surface as a spurious
         cancellation in ``TaskGroup`` or ``asyncio.timeout`` contexts.
 
+        Call once per manager instance; a second call raises ``RuntimeError``
+        to prevent leaking the prior ``APIClient`` / ``ReconnectLogic`` (and
+        its background reconnect task) by overwriting them.
+
         Raises:
             ESPHomeStartAborted: if ``stop()`` is called before the first
                 successful connect.
-
+            RuntimeError: if ``start()`` has already been called.
         """
+        if self._reconnect_logic is not None:
+            raise RuntimeError(
+                "APIConnectionManager.start() has already been called; "
+                "create a new manager instance to reconnect."
+            )
         self._cli = APIClient(
             address=self._address,
             port=6053,
