@@ -91,21 +91,18 @@ class APIConnectionManager:
                 successful connect.
 
         """
-        if self._cli is None:
-            self._cli = APIClient(
-                address=self._address,
-                port=6053,
-                password=None,
-                noise_psk=self._noise_psk,
-            )
-        if self._reconnect_logic is None:
-            self._reconnect_logic = ReconnectLogic(
-                client=self._cli,
-                on_disconnect=self._on_disconnect,
-                on_connect=self._on_connect,
-            )
-        if self._start_future is None:
-            self._start_future = asyncio.get_running_loop().create_future()
+        self._cli = APIClient(
+            address=self._address,
+            port=6053,
+            password=None,
+            noise_psk=self._noise_psk,
+        )
+        self._reconnect_logic = ReconnectLogic(
+            client=self._cli,
+            on_disconnect=self._on_disconnect,
+            on_connect=self._on_connect,
+        )
+        self._start_future = asyncio.get_running_loop().create_future()
 
         await self._reconnect_logic.start()
         try:
