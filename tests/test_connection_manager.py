@@ -25,9 +25,19 @@ def config() -> ESPHomeDeviceConfig:
 
 @pytest_asyncio.fixture
 async def conn_manager(config: ESPHomeDeviceConfig) -> APIConnectionManager:
-    """Build an ``APIConnectionManager`` under a patched ``ReconnectLogic``."""
-    with patch("bleak_esphome.connection_manager.ReconnectLogic"):
-        return APIConnectionManager(config)
+    """
+    Build an ``APIConnectionManager`` with pre-populated async state.
+
+    Construction is loop-free, so the lazy fields (``_cli``,
+    ``_reconnect_logic``, ``_start_future``) are populated here for tests
+    that exercise post-``start()`` behaviour without going through
+    ``start()`` itself.
+    """
+    manager = APIConnectionManager(config)
+    manager._cli = Mock()
+    manager._reconnect_logic = Mock()
+    manager._start_future = asyncio.get_running_loop().create_future()
+    return manager
 
 
 @pytest_asyncio.fixture
@@ -37,19 +47,19 @@ async def conn_manager_with_mocked_reconnect(
     """
     Yield ``(manager, mock_reconnect_logic, mock_disconnect)`` for ``stop()`` tests.
 
-    The manager has its ``_cli.disconnect`` patched with ``AsyncMock`` and a
-    resolved ``_start_future`` so ``stop()`` does not cancel it.
+    Pre-populates the lazy async state (mocked) and resolves
+    ``_start_future`` so ``stop()`` does not cancel it.
     """
-    with patch(
-        "bleak_esphome.connection_manager.ReconnectLogic"
-    ) as mock_reconnect_logic_cls:
-        mock_reconnect_logic = mock_reconnect_logic_cls.return_value
-        mock_reconnect_logic.stop = AsyncMock()
-        mgr = APIConnectionManager(config)
-        mgr._start_future.set_result(None)
-        mock_disconnect = AsyncMock()
-        with patch.object(mgr._cli, "disconnect", mock_disconnect):
-            yield mgr, mock_reconnect_logic, mock_disconnect
+    mock_reconnect_logic = Mock()
+    mock_reconnect_logic.stop = AsyncMock()
+    mock_disconnect = AsyncMock()
+    mgr = APIConnectionManager(config)
+    mgr._cli = Mock()
+    mgr._cli.disconnect = mock_disconnect
+    mgr._reconnect_logic = mock_reconnect_logic
+    mgr._start_future = asyncio.get_running_loop().create_future()
+    mgr._start_future.set_result(None)
+    yield mgr, mock_reconnect_logic, mock_disconnect
 
 
 @pytest.fixture
@@ -62,6 +72,34 @@ def patched_scanner_wiring() -> Iterator[tuple[Mock, Mock]]:
         ) as get_manager_mock,
     ):
         yield connect_scanner_mock, get_manager_mock
+
+
+def test_construct_without_running_loop_is_side_effect_free() -> None:
+    """
+    ``APIConnectionManager(config)`` does not require a running event loop.
+
+    Construction must be side-effect-free so callers can build the manager
+    from synchronous factories (config flows, dependency-injection setup)
+    before any event loop exists, mirroring dbus-fast's deferred
+    ``connect()`` pattern.
+    """
+    config: ESPHomeDeviceConfig = {"address": "test.local", "noise_psk": None}
+
+    with (
+        patch("bleak_esphome.connection_manager.APIClient") as mock_api_client_cls,
+        patch(
+            "bleak_esphome.connection_manager.ReconnectLogic"
+        ) as mock_reconnect_logic_cls,
+    ):
+        # No loop is running here (regular sync test, no asyncio mark).
+        manager = APIConnectionManager(config)
+
+        # Lazy fields are unset; ``APIClient`` / ``ReconnectLogic`` not yet built.
+        assert manager._cli is None
+        assert manager._reconnect_logic is None
+        assert manager._start_future is None
+        mock_api_client_cls.assert_not_called()
+        mock_reconnect_logic_cls.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -77,23 +115,26 @@ async def test_start_aborted_by_stop_raises_start_aborted() -> None:
     """
     config: ESPHomeDeviceConfig = {"address": "test.local", "noise_psk": None}
 
-    with patch(
-        "bleak_esphome.connection_manager.ReconnectLogic"
-    ) as mock_reconnect_logic_cls:
+    with (
+        patch("bleak_esphome.connection_manager.APIClient") as mock_api_client_cls,
+        patch(
+            "bleak_esphome.connection_manager.ReconnectLogic"
+        ) as mock_reconnect_logic_cls,
+    ):
+        mock_api_client_cls.return_value.disconnect = AsyncMock()
         mock_reconnect_logic = mock_reconnect_logic_cls.return_value
         mock_reconnect_logic.start = AsyncMock()
         mock_reconnect_logic.stop = AsyncMock()
         manager = APIConnectionManager(config)
-        with patch.object(manager._cli, "disconnect", AsyncMock()):
-            start_task = asyncio.create_task(manager.start())
-            # Yield so start() reaches ``await self._start_future``.
-            await asyncio.sleep(0)
-            await asyncio.sleep(0)
-            await manager.stop()
-            with pytest.raises(ESPHomeStartAborted):
-                await start_task
-            assert start_task.cancelling() == 0
-            assert not start_task.cancelled()
+        start_task = asyncio.create_task(manager.start())
+        # Yield so start() reaches ``await self._start_future``.
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        await manager.stop()
+        with pytest.raises(ESPHomeStartAborted):
+            await start_task
+        assert start_task.cancelling() == 0
+        assert not start_task.cancelled()
 
 
 @pytest.mark.asyncio
@@ -107,9 +148,12 @@ async def test_start_real_task_cancel_propagates_cancelled_error() -> None:
     """
     config: ESPHomeDeviceConfig = {"address": "test.local", "noise_psk": None}
 
-    with patch(
-        "bleak_esphome.connection_manager.ReconnectLogic"
-    ) as mock_reconnect_logic_cls:
+    with (
+        patch("bleak_esphome.connection_manager.APIClient"),
+        patch(
+            "bleak_esphome.connection_manager.ReconnectLogic"
+        ) as mock_reconnect_logic_cls,
+    ):
         mock_reconnect_logic = mock_reconnect_logic_cls.return_value
         mock_reconnect_logic.start = AsyncMock()
         manager = APIConnectionManager(config)
@@ -149,7 +193,7 @@ async def test_on_connect_registers_scanner_and_resolves_start(
     connect_scanner_mock.return_value = mock_client_data
     get_manager_mock.return_value = mock_habluetooth_manager
 
-    conn_manager._cli = Mock()
+    assert conn_manager._cli is not None
     conn_manager._cli.device_info = AsyncMock(return_value=Mock(name="device_info"))
 
     await conn_manager._on_connect()
@@ -163,6 +207,7 @@ async def test_on_connect_registers_scanner_and_resolves_start(
     )
     assert conn_manager._unregister_scanner is unregister_scanner
     assert conn_manager._disconnect_callbacks is mock_client_data.disconnect_callbacks
+    assert conn_manager._start_future is not None
     assert conn_manager._start_future.done()
     assert conn_manager._start_future.result() is None
 
@@ -178,8 +223,9 @@ async def test_on_connect_with_already_done_future_does_not_raise(
     On reconnection, ``_on_connect`` may fire again. The future is one-shot
     and must not raise ``InvalidStateError`` when already done.
     """
+    assert conn_manager._start_future is not None
     conn_manager._start_future.set_result(None)
-    conn_manager._cli = Mock()
+    assert conn_manager._cli is not None
     conn_manager._cli.device_info = AsyncMock(return_value=Mock())
 
     mock_client_data = Mock()
@@ -297,3 +343,23 @@ async def test_stop_without_scanner_does_not_call_unregister(
     assert manager._unregister_scanner is None
     mock_reconnect_logic.stop.assert_awaited_once_with()
     mock_disconnect.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+async def test_stop_before_start_is_noop(
+    config: ESPHomeDeviceConfig,
+) -> None:
+    """
+    ``stop()`` is safe to call before ``start()``.
+
+    A manager that was constructed but never started has no ``APIClient``,
+    ``ReconnectLogic``, or ``_start_future`` to tear down. ``stop()`` must
+    not raise.
+    """
+    manager = APIConnectionManager(config)
+    assert manager._cli is None
+    assert manager._reconnect_logic is None
+    assert manager._start_future is None
+
+    # Must not raise even though every guarded branch is unset.
+    await manager.stop()

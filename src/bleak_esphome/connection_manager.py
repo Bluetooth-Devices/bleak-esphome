@@ -25,22 +25,21 @@ class APIConnectionManager:
     """Manager for the API connection to an ESPHome device."""
 
     def __init__(self, config: ESPHomeDeviceConfig) -> None:
-        """Initialize the API connection manager."""
+        """
+        Initialize the API connection manager.
+
+        Construction is side-effect-free and does not require a running event
+        loop. The ``APIClient`` / ``ReconnectLogic`` instances and the start
+        future are created in :meth:`start` so the manager can be constructed
+        synchronously outside an async context.
+        """
         self._address = config["address"]
         self._noise_psk = config["noise_psk"]
-        self._cli: APIClient = APIClient(
-            address=self._address, port=6053, password=None, noise_psk=self._noise_psk
-        )
-        self._reconnect_logic = ReconnectLogic(
-            client=self._cli,
-            on_disconnect=self._on_disconnect,
-            on_connect=self._on_connect,
-        )
+        self._cli: APIClient | None = None
+        self._reconnect_logic: ReconnectLogic | None = None
         self._unregister_scanner: Callable[[], None] | None = None
         self._disconnect_callbacks: set[Callable[[], None]] | None = None
-        self._start_future: asyncio.Future[None] = (
-            asyncio.get_running_loop().create_future()
-        )
+        self._start_future: asyncio.Future[None] | None = None
 
     async def _on_disconnect(self, expected_disconnect: bool) -> None:
         """Handle the disconnection of the API client."""
@@ -56,6 +55,9 @@ class APIConnectionManager:
 
     async def _on_connect(self) -> None:
         """Handle the connection of the API client."""
+        # ``_on_connect`` is only ever invoked by ``ReconnectLogic`` after
+        # ``start()`` has constructed ``_cli`` / ``_start_future``.
+        assert self._cli is not None  # noqa: S101
         device_info = await self._cli.device_info()
         client_data = bleak_esphome.connect_scanner(self._cli, device_info, True)
         scanner = client_data.scanner
@@ -65,11 +67,33 @@ class APIConnectionManager:
             scanner
         )
         self._disconnect_callbacks = client_data.disconnect_callbacks
-        if not self._start_future.done():
+        if self._start_future is not None and not self._start_future.done():
             self._start_future.set_result(None)
 
     async def start(self) -> None:
-        """Start the API connection."""
+        """
+        Start the API connection.
+
+        Constructs the ``APIClient`` and ``ReconnectLogic`` on first call so
+        no event loop work happens at ``__init__`` time. Safe to call once
+        per manager instance.
+        """
+        if self._cli is None:
+            self._cli = APIClient(
+                address=self._address,
+                port=6053,
+                password=None,
+                noise_psk=self._noise_psk,
+            )
+        if self._reconnect_logic is None:
+            self._reconnect_logic = ReconnectLogic(
+                client=self._cli,
+                on_disconnect=self._on_disconnect,
+                on_connect=self._on_connect,
+            )
+        if self._start_future is None:
+            self._start_future = asyncio.get_running_loop().create_future()
+
         await self._reconnect_logic.start()
         try:
             await self._start_future
@@ -86,9 +110,11 @@ class APIConnectionManager:
 
     async def stop(self) -> None:
         """Stop the API connection."""
-        await self._reconnect_logic.stop()
-        await self._cli.disconnect()
-        if not self._start_future.done():
+        if self._reconnect_logic is not None:
+            await self._reconnect_logic.stop()
+        if self._cli is not None:
+            await self._cli.disconnect()
+        if self._start_future is not None and not self._start_future.done():
             self._start_future.cancel()
         if self._unregister_scanner is not None:
             self._unregister_scanner()
