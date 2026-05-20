@@ -94,6 +94,57 @@ The example above uses `asyncio.wait`, which keeps each task's exception on
 the task object rather than re-raising — you only see `ESPHomeStartAborted`
 if you later `await` the task or call `task.result()`.
 
+## Advanced: wiring `connect_scanner` directly
+
+`APIConnectionManager` is the recommended entry point — it owns the
+`APIClient`, drives `ReconnectLogic`, registers the scanner with
+`habluetooth`, and tears everything down on `stop()`. Reach for
+`connect_scanner` only when you already manage the `APIClient` lifecycle
+yourself (for example, when integrating into a host that has its own
+reconnect / discovery machinery).
+
+`connect_scanner(cli, device_info, available)` wires an
+`aioesphomeapi.APIClient` to an `ESPHomeScanner` + `ESPHomeClient` and
+subscribes to the proxy's advertisement, scanner-state, and connection-slot
+streams. It returns an `ESPHomeClientData` and leaves three jobs to the
+caller:
+
+1. Call `client_data.scanner.async_setup()` to attach the scanner to the
+   running loop.
+2. Register the scanner with the host-side Bluetooth manager (and
+   un-register it when the ESP disconnects).
+3. Fire every callback in `client_data.disconnect_callbacks` when the ESP
+   disconnects, so `ESPHomeClient` instances drop their subscriptions.
+   Iterate a snapshot of the set — each callback removes itself during
+   cleanup.
+
+```python
+import habluetooth
+from aioesphomeapi import APIClient
+
+import bleak_esphome
+
+cli = APIClient(address="device.local.", port=6053, password=None)
+await cli.connect(login=True)
+device_info = await cli.device_info()
+
+client_data = bleak_esphome.connect_scanner(cli, device_info, available=True)
+assert client_data.scanner is not None
+client_data.scanner.async_setup()
+unregister_scanner = habluetooth.get_manager().async_register_scanner(
+    client_data.scanner
+)
+
+# Later, when the ESP disconnects:
+for callback in list(client_data.disconnect_callbacks):
+    callback()
+unregister_scanner()
+```
+
+If you also want to override which `disconnect_callbacks` set is used —
+for example, to share one set across several scanners — reassign
+`client_data.disconnect_callbacks` **before** calling `async_setup()`.
+
 ## Extension Methods
 
 `ESPHomeClient` provides extension methods beyond the standard `BleakClient` interface. These are typically called via `BleakClientWithServiceCache` from `bleak-retry-connector`, which forwards them to `ESPHomeClient`.
