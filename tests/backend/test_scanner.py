@@ -201,7 +201,7 @@ async def test_scanner_get_allocations_with_device(scanner: ESPHomeScanner) -> N
     assert allocations.adapter == ESP_MAC_ADDRESS
     assert allocations.slots == 3
     assert allocations.free == 2
-    assert allocations.allocated == [123456789]
+    assert allocations.allocated == [int_to_bluetooth_address(123456789)]
 
 
 @pytest.mark.asyncio
@@ -219,7 +219,10 @@ async def test_scanner_get_allocations_no_free_slots(scanner: ESPHomeScanner) ->
     assert allocations.adapter == ESP_MAC_ADDRESS
     assert allocations.slots == 2
     assert allocations.free == 0
-    assert allocations.allocated == [111111111, 222222222]
+    assert allocations.allocated == [
+        int_to_bluetooth_address(111111111),
+        int_to_bluetooth_address(222222222),
+    ]
 
 
 @pytest.mark.asyncio
@@ -246,7 +249,7 @@ async def test_scanner_get_allocations_updates(scanner: ESPHomeScanner) -> None:
     allocations = scanner.get_allocations()
     assert allocations is not None
     assert allocations.free == 2
-    assert allocations.allocated == [987654321]
+    assert allocations.allocated == [int_to_bluetooth_address(987654321)]
 
     # Simulate another connection
     device.ble_connections_free = 1
@@ -255,4 +258,39 @@ async def test_scanner_get_allocations_updates(scanner: ESPHomeScanner) -> None:
     allocations = scanner.get_allocations()
     assert allocations is not None
     assert allocations.free == 1
-    assert allocations.allocated == [987654321, 876543210]
+    assert allocations.allocated == [
+        int_to_bluetooth_address(987654321),
+        int_to_bluetooth_address(876543210),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_scanner_get_allocations_matches_callback_format(
+    scanner: ESPHomeScanner,
+) -> None:
+    """
+    Pull (get_allocations) and push (callback) must report MAC strings.
+
+    Regression for #330: scanner.get_allocations() previously returned raw
+    int addresses while ESPHomeBluetoothDevice.async_update_ble_connection_limits
+    converted them via int_to_bluetooth_address. Consumers joining the two
+    sources saw type-incompatible values.
+    """
+    device = ESPHomeBluetoothDevice(ESP_NAME, ESP_MAC_ADDRESS)
+    captured: list[Allocations] = []
+    device.async_subscribe_connection_slots(captured.append)
+    scanner.set_bluetooth_device(device)
+
+    raw_addresses = [261602360644300, 246965243285491]
+    device.async_update_ble_connection_limits(free=1, limit=3, allocated=raw_addresses)
+
+    pulled = scanner.get_allocations()
+    assert pulled is not None
+    assert captured
+    pushed = captured[-1]
+
+    # Both paths must agree on the address format (MAC strings, not ints).
+    expected = [int_to_bluetooth_address(a) for a in raw_addresses]
+    assert pulled.allocated == expected
+    assert pushed.allocated == expected
+    assert all(isinstance(a, str) for a in pulled.allocated)

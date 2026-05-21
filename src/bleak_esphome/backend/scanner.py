@@ -55,7 +55,10 @@ class ESPHomeScanner(BaseHaRemoteScanner):
                 adapter=self.source,
                 slots=self._bluetooth_device.ble_connections_limit,
                 free=self._bluetooth_device.ble_connections_free,
-                allocated=list(self._bluetooth_device.ble_allocations),
+                allocated=[
+                    int_to_bluetooth_address(address)
+                    for address in self._bluetooth_device.ble_allocations
+                ],
             )
         return None
 
