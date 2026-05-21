@@ -1,5 +1,61 @@
 # Changelog
 
+## v3.7.6 (2026-05-21)
+
+### Performance improvements
+
+
+- Hoist max_write_without_response callable above char loop (#334) ([`8df6144`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/8df614450aae77bb47c0b003c1c6096d7481bcd5))
+
+
+### Bug fixes
+
+
+- Return mac strings from scanner.get_allocations (#330) ([`174371d`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/174371d68da24ae93082c41e7688282f49232b1d))
+
+
+### Testing
+
+
+- Cover __del__ leaked-subscription warning ([`cfdb8e9`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/cfdb8e9364183e18e52ad6c98deb128ff1181ef9))
+
+
+- Cover cached-mtu skip in connection-state callback ([`86d9ed3`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/86d9ed3d2cc90fba1d7ad13e84fed905df47536d))
+
+
+- Cover connect cancel edge branches ([`cd46643`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/cd466437466b50a0b933da1d7989831b4622582f))
+
+
+- Assert public bleak_esphome package surface ([`f3a1785`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/f3a1785d02d3756ac6502b35eeaaef73aad35135))
+
+
+- Dry up backend tests with shared fixtures and helpers ([`1d01b6e`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/1d01b6e6d03afe03418f4eccd7caeb653b9350cd))
+
+
+- Cover client decorator, error, and notify branches ([`b149beb`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/b149bebd82b3f27522333e8a3207f72467f71cab))
+
+
+- Cover scanner decoded path, _can_connect, and connect_scanner branches ([`de5b072`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/de5b0726ce49e8a5a29f1469bf45ccb1fef97e1d))
+
+
+### Documentation
+
+
+- List all gated feature flags in architecture overview ([`3048d03`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/3048d03c2c9f3a0b6859738e17099051e2ce166e))
+
+
+- Document low-level connect_scanner workflow ([`2a511fa`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/2a511fa0cc4c0cf809d80973513d7cba631eac23))
+
+
+- Document esphomestartaborted in usage guide ([`0130633`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/013063364df688f92e36b4202f00895195ae6ceb))
+
+
+- Add feature flag compatibility matrix to usage guide ([`f1dc52a`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/f1dc52aebe6cfc23a7364008a6f9eb92499668aa))
+
+
+- Drop stale backend module references from claude.md ([`650d408`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/650d4085939ed8030729c5755b853b8ffde62a8b))
+
+
 ## v3.7.5 (2026-05-16)
 
 ### Bug fixes
