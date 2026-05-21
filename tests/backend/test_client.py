@@ -12,6 +12,7 @@ from aioesphomeapi import (
     ESPHomeBluetoothGATTServices,
 )
 from bleak import BleakClient
+from bleak.backends.characteristic import BleakGATTCharacteristic
 from bleak.exc import BleakError
 from habluetooth import BaseHaRemoteScanner, HaBluetoothConnector
 
@@ -46,8 +47,6 @@ async def test_client_usage_while_not_connected(
     with pytest.raises(
         BleakError, match=f"{ESP_NAME}.*{ESP_MAC_ADDRESS}.*not connected"
     ):
-        from bleak.backends.characteristic import BleakGATTCharacteristic
-
         char = BleakGATTCharacteristic(None, 1, "test", [], lambda: 20, None)
         await esphome_client.write_gatt_char(char, b"test", False)
 

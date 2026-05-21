@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
+import bleak
 import habluetooth
 
 from bleak_esphome import APIConnectionManager, ESPHomeDeviceConfig
@@ -24,8 +25,6 @@ ESPHOME_DEVICES: list[ESPHomeDeviceConfig] = [
 
 async def example_app() -> None:
     """Example application here."""
-    import bleak
-
     await asyncio.sleep(5)  # Give time for the scanner to find devices
 
     # Use bleak normally here
