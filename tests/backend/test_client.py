@@ -16,7 +16,11 @@ from bleak.backends.characteristic import BleakGATTCharacteristic
 from bleak.exc import BleakError
 from habluetooth import BaseHaRemoteScanner, HaBluetoothConnector
 
-from bleak_esphome.backend.client import ESPHomeClient, ESPHomeClientData
+from bleak_esphome.backend.client import (
+    GATT_HEADER_SIZE,
+    ESPHomeClient,
+    ESPHomeClientData,
+)
 from bleak_esphome.backend.scanner import ESPHomeScanner
 
 from ._helpers import (
@@ -94,6 +98,25 @@ async def test_client_get_services_and_read_write(
         await connected_client.read_gatt_char(char)
 
     mock_read.assert_called_once_with(BLE_ADDRESS_AS_INT, 20, 30)
+
+
+@pytest.mark.asyncio
+async def test_client_get_services_max_write_without_response_size(
+    connected_client: ESPHomeClient,
+    esphome_bluetooth_gatt_services: ESPHomeBluetoothGATTServices,
+) -> None:
+    """Every discovered characteristic reports mtu_size - GATT_HEADER_SIZE."""
+    services = await fetch_services(connected_client, esphome_bluetooth_gatt_services)
+
+    expected = connected_client.mtu_size - GATT_HEADER_SIZE
+    chars = [
+        char
+        for service in services.services.values()
+        for char in service.characteristics
+    ]
+    assert chars, "fixture must expose at least one characteristic"
+    for char in chars:
+        assert char.max_write_without_response_size == expected
 
 
 @pytest.mark.asyncio
