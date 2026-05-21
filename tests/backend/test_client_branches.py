@@ -17,6 +17,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 from aioesphomeapi import (
+    BLEConnectionError,
     BluetoothConnectionDroppedError,
     BluetoothDeviceClearCache,
     BluetoothProxyFeature,
@@ -149,8 +150,6 @@ async def test_on_bluetooth_connection_state_known_error_uses_name(
     client_data: ESPHomeClientData,
 ) -> None:
     """A known BLEConnectionError code uses its symbolic name in the message."""
-    from aioesphomeapi import BLEConnectionError
-
     client = _make_client(client_data)
     fut: asyncio.Future[bool] = client._loop.create_future()
     client._on_bluetooth_connection_state(
