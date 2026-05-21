@@ -492,6 +492,10 @@ class ESPHomeClient(BaseBleakClient):
         )
         _LOGGER.debug("%s: Got services: %s", self._description, esphome_services)
         max_write_without_response = self.mtu_size - GATT_HEADER_SIZE
+
+        def get_max_write_without_response() -> int:
+            return max_write_without_response
+
         services = BleakGATTServiceCollection()
         for service in esphome_services.services:
             # Create BleakGATTService with the Bleak 1.0 signature
@@ -513,7 +517,7 @@ class ESPHomeClient(BaseBleakClient):
                     characteristic.handle,
                     characteristic.uuid,
                     props,
-                    lambda mtu=max_write_without_response: mtu,
+                    get_max_write_without_response,
                     bleak_service,
                 )
                 services.add_characteristic(bleak_char)
