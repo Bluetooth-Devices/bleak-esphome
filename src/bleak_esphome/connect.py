@@ -45,10 +45,7 @@ def connect_scanner(
 
     1. Calling ESPHomeClientData.scanner.async_setup()
     2. Calling ESPHomeClientData.disconnect_callbacks when the ESP is disconnected.
-    3. Calling every callback in ESPHomeClientData.unsubscribe_callbacks when
-       the ESP is disconnected, so subscriptions on the persistent APIClient do
-       not accumulate across reconnects.
-    4. Registering the scanner with the HA Bluetooth manager and also
+    3. Registering the scanner with the HA Bluetooth manager and also
        un-registering it when the ESP is disconnected.
 
     The caller may choose to override ESPHomeClientData.disconnect_callbacks
@@ -88,38 +85,30 @@ def connect_scanner(
     scanner = ESPHomeScanner(source, name, connector, connectable)
     scanner.set_bluetooth_device(bluetooth_device)
     client_data.scanner = scanner
-    # Each subscribe_* call returns an unsubscribe callback. The persistent
-    # APIClient outlives any single connection, so callers must invoke these
-    # on disconnect or subscriptions accumulate across every reconnect.
-    unsubscribe_callbacks = client_data.unsubscribe_callbacks
+    # These calls all return a callback that can be used to unsubscribe,
+    # but we never unsubscribe so we don't care about the return value: the
+    # underlying APIClient connection owns these subscriptions and tears them
+    # all down when it disconnects, so no per-subscription cleanup is needed.
 
     if connectable:
         # If its connectable be sure not to register the scanner
         # until we know the connection is fully setup since otherwise
         # there is a race condition where the connection can fail
-        unsubscribe_callbacks.append(
-            cli.subscribe_bluetooth_connections_free(
-                bluetooth_device.async_update_ble_connection_limits
-            )
+        cli.subscribe_bluetooth_connections_free(
+            bluetooth_device.async_update_ble_connection_limits
         )
 
     if feature_flags & BluetoothProxyFeature.FEATURE_STATE_AND_MODE:
         _LOGGER.debug(
             "%s [%s]: Bluetooth scanner state and mode support available", name, source
         )
-        unsubscribe_callbacks.append(
-            cli.subscribe_bluetooth_scanner_state(scanner.async_update_scanner_state)
-        )
+        cli.subscribe_bluetooth_scanner_state(scanner.async_update_scanner_state)
 
     if feature_flags & BluetoothProxyFeature.RAW_ADVERTISEMENTS:
-        unsubscribe_callbacks.append(
-            cli.subscribe_bluetooth_le_raw_advertisements(
-                scanner.async_on_raw_advertisements
-            )
+        cli.subscribe_bluetooth_le_raw_advertisements(
+            scanner.async_on_raw_advertisements
         )
     else:
-        unsubscribe_callbacks.append(
-            cli.subscribe_bluetooth_le_advertisements(scanner.async_on_advertisement)
-        )
+        cli.subscribe_bluetooth_le_advertisements(scanner.async_on_advertisement)
 
     return client_data

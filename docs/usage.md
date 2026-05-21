@@ -106,7 +106,7 @@ reconnect / discovery machinery).
 `connect_scanner(cli, device_info, available)` wires an
 `aioesphomeapi.APIClient` to an `ESPHomeScanner` + `ESPHomeClient` and
 subscribes to the proxy's advertisement, scanner-state, and connection-slot
-streams. It returns an `ESPHomeClientData` and leaves four jobs to the
+streams. It returns an `ESPHomeClientData` and leaves three jobs to the
 caller:
 
 1. Call `client_data.scanner.async_setup()` to attach the scanner to the
@@ -117,11 +117,6 @@ caller:
    disconnects, so `ESPHomeClient` instances drop their subscriptions.
    Iterate a snapshot of the set — each callback removes itself during
    cleanup.
-4. Fire every callback in `client_data.unsubscribe_callbacks` when the ESP
-   disconnects. The persistent `APIClient` outlives any single connection;
-   without this step, every reconnect adds a new set of advertisement,
-   scanner-state, and connection-slot subscriptions on top of the previous
-   ones.
 
 ```python
 import habluetooth
@@ -142,8 +137,6 @@ unregister_scanner = habluetooth.get_manager().async_register_scanner(
 
 # Later, when the ESP disconnects:
 for callback in list(client_data.disconnect_callbacks):
-    callback()
-for callback in client_data.unsubscribe_callbacks:
     callback()
 unregister_scanner()
 ```
