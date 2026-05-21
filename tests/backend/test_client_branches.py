@@ -12,6 +12,7 @@ guard clauses.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Iterator
 from typing import Any
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -480,9 +481,28 @@ async def test_connect_get_services_failure_disconnects(
     mock_disc.assert_awaited_once()
 
 
+@pytest.fixture
+def mock_logger_warning() -> Iterator[Mock]:
+    """Patch ``_LOGGER.warning`` and yield the mock."""
+    with patch("bleak_esphome.backend.client._LOGGER.warning") as mock:
+        yield mock
+
+
+@pytest.fixture
+def leaked_client(
+    client_data: ESPHomeClientData,
+) -> tuple[ESPHomeClient, Mock]:
+    """Return a client with ``_cancel_connection_state`` set to a Mock."""
+    client = _make_client(client_data)
+    cancel = Mock()
+    client._cancel_connection_state = cancel
+    return client, cancel
+
+
 @pytest.mark.asyncio
 async def test_del_warns_and_cancels_subscription(
-    client_data: ESPHomeClientData,
+    leaked_client: tuple[ESPHomeClient, Mock],
+    mock_logger_warning: Mock,
 ) -> None:
     """
     ``__del__`` cancels the lingering subscription and warns about the leak.
@@ -492,24 +512,22 @@ async def test_del_warns_and_cancels_subscription(
     callback must fire synchronously so the proxy-side handler is removed even
     if the scheduled cleanup never runs, and the operator gets a warning.
     """
-    client = _make_client(client_data)
-    cancel = Mock()
-    client._cancel_connection_state = cancel
+    client, cancel = leaked_client
 
-    with patch("bleak_esphome.backend.client._LOGGER.warning") as mock_warning:
-        client.__del__()
+    client.__del__()
 
     cancel.assert_called_once_with()
     assert client._cancel_connection_state is None
-    mock_warning.assert_called_once()
-    args, _ = mock_warning.call_args
+    mock_logger_warning.assert_called_once()
+    args, _ = mock_logger_warning.call_args
     assert "not properly" in args[0]
     assert args[1] == client._description
 
 
 @pytest.mark.asyncio
 async def test_del_noop_during_interpreter_shutdown(
-    client_data: ESPHomeClientData,
+    leaked_client: tuple[ESPHomeClient, Mock],
+    mock_logger_warning: Mock,
 ) -> None:
     """
     ``__del__`` bails out cleanly when the interpreter is finalizing.
@@ -518,25 +536,21 @@ async def test_del_noop_during_interpreter_shutdown(
     down; touching them raises ``Exception ignored in __del__`` tracebacks
     that mask the real cause. The cancel callback must not fire either.
     """
-    client = _make_client(client_data)
-    cancel = Mock()
-    client._cancel_connection_state = cancel
+    client, cancel = leaked_client
 
-    with (
-        patch("bleak_esphome.backend.client.sys.is_finalizing", return_value=True),
-        patch("bleak_esphome.backend.client._LOGGER.warning") as mock_warning,
-    ):
+    with patch("bleak_esphome.backend.client.sys.is_finalizing", return_value=True):
         client.__del__()
 
     cancel.assert_not_called()
-    mock_warning.assert_not_called()
+    mock_logger_warning.assert_not_called()
     # Cleanup before the implicit ``__del__`` runs on scope exit.
     client._cancel_connection_state = None
 
 
 @pytest.mark.asyncio
 async def test_del_survives_cancel_failure(
-    client_data: ESPHomeClientData,
+    leaked_client: tuple[ESPHomeClient, Mock],
+    mock_logger_warning: Mock,
 ) -> None:
     """
     ``__del__`` swallows exceptions raised by the cancel callback.
@@ -545,12 +559,10 @@ async def test_del_survives_cancel_failure(
     broken state during teardown; raising from GC would just turn into an
     ``Exception ignored in __del__`` traceback.
     """
-    client = _make_client(client_data)
-    cancel = Mock(side_effect=RuntimeError("client gone"))
-    client._cancel_connection_state = cancel
+    client, cancel = leaked_client
+    cancel.side_effect = RuntimeError("client gone")
 
-    with patch("bleak_esphome.backend.client._LOGGER.warning"):
-        client.__del__()
+    client.__del__()
 
     cancel.assert_called_once_with()
     assert client._cancel_connection_state is None
@@ -558,7 +570,8 @@ async def test_del_survives_cancel_failure(
 
 @pytest.mark.asyncio
 async def test_del_survives_logger_failure(
-    client_data: ESPHomeClientData,
+    leaked_client: tuple[ESPHomeClient, Mock],
+    mock_logger_warning: Mock,
 ) -> None:
     """
     ``__del__`` swallows logger exceptions raised during shutdown.
@@ -567,15 +580,10 @@ async def test_del_survives_logger_failure(
     are gone. The destructor must still clear the subscription instead of
     propagating an ``Exception ignored in __del__`` traceback.
     """
-    client = _make_client(client_data)
-    cancel = Mock()
-    client._cancel_connection_state = cancel
+    client, cancel = leaked_client
+    mock_logger_warning.side_effect = RuntimeError("handlers gone")
 
-    with patch(
-        "bleak_esphome.backend.client._LOGGER.warning",
-        side_effect=RuntimeError("handlers gone"),
-    ):
-        client.__del__()
+    client.__del__()
 
     cancel.assert_called_once_with()
     assert client._cancel_connection_state is None
@@ -583,7 +591,8 @@ async def test_del_survives_logger_failure(
 
 @pytest.mark.asyncio
 async def test_del_cancels_subscription_when_loop_closed(
-    client_data: ESPHomeClientData,
+    leaked_client: tuple[ESPHomeClient, Mock],
+    mock_logger_warning: Mock,
 ) -> None:
     """
     ``__del__`` cancels the subscription even if the loop is already closed.
@@ -592,13 +601,10 @@ async def test_del_cancels_subscription_when_loop_closed(
     ``call_soon_threadsafe`` is skipped and the proxy-side handler leaks for
     the lifetime of the persistent ``APIClient``.
     """
-    client = _make_client(client_data)
-    cancel = Mock()
-    client._cancel_connection_state = cancel
+    client, cancel = leaked_client
 
     with patch.object(client._loop, "is_closed", return_value=True):
-        with patch("bleak_esphome.backend.client._LOGGER.warning"):
-            client.__del__()
+        client.__del__()
 
     cancel.assert_called_once_with()
     assert client._cancel_connection_state is None
