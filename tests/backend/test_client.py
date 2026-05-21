@@ -16,7 +16,11 @@ from bleak.backends.characteristic import BleakGATTCharacteristic
 from bleak.exc import BleakError
 from habluetooth import BaseHaRemoteScanner, HaBluetoothConnector
 
-from bleak_esphome.backend.client import ESPHomeClient, ESPHomeClientData
+from bleak_esphome.backend.client import (
+    GATT_HEADER_SIZE,
+    ESPHomeClient,
+    ESPHomeClientData,
+)
 from bleak_esphome.backend.scanner import ESPHomeScanner
 
 from ._helpers import (
@@ -102,8 +106,6 @@ async def test_client_get_services_max_write_without_response_size(
     esphome_bluetooth_gatt_services: ESPHomeBluetoothGATTServices,
 ) -> None:
     """Every discovered characteristic reports mtu_size - GATT_HEADER_SIZE."""
-    from bleak_esphome.backend.client import GATT_HEADER_SIZE
-
     services = await fetch_services(connected_client, esphome_bluetooth_gatt_services)
 
     expected = connected_client.mtu_size - GATT_HEADER_SIZE
