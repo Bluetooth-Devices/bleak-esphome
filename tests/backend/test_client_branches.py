@@ -517,11 +517,11 @@ async def test_del_warns_and_cancels_subscription(
     client.__del__()
 
     cancel.assert_called_once_with()
-    assert client._cancel_connection_state is None
     mock_logger_warning.assert_called_once()
     args, _ = mock_logger_warning.call_args
     assert "not properly" in args[0]
     assert args[1] == client._description
+    assert client._cancel_connection_state is None
 
 
 @pytest.mark.asyncio
