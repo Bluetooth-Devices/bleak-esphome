@@ -750,12 +750,12 @@ class ESPHomeClient(BaseBleakClient):
                 "does not have notify or indicate property set."
             )
 
-        self._notify_cancels[ble_handle] = (
-            await self._client.bluetooth_gatt_start_notify(
-                self._address_as_int,
-                ble_handle,
-                lambda handle, data: callback(data),
-            )
+        self._notify_cancels[
+            ble_handle
+        ] = await self._client.bluetooth_gatt_start_notify(
+            self._address_as_int,
+            ble_handle,
+            lambda handle, data: callback(data),
         )
 
         if not self._feature_flags & BluetoothProxyFeature.REMOTE_CACHING.value:
@@ -824,13 +824,36 @@ class ESPHomeClient(BaseBleakClient):
 
     def __del__(self) -> None:
         """Destructor to make sure the connection state is unsubscribed."""
-        if self._cancel_connection_state:
-            _LOGGER.warning(
-                (
+        # Interpreter is tearing down: logging handlers, the event loop, and
+        # the APIClient's connection may already be gone. Bailing out keeps
+        # ``Exception ignored in __del__`` tracebacks from masking the real
+        # shutdown cause.
+        if sys.is_finalizing():
+            return
+        cancel = self._cancel_connection_state
+        if cancel is not None:
+            # Cancel the subscription synchronously so the proxy-side handler
+            # is removed even if the loop is closed and the scheduled cleanup
+            # never runs. ``_async_disconnected_cleanup`` is a no-op for this
+            # field once we clear it below.
+            self._cancel_connection_state = None
+            try:
+                cancel()
+            except Exception:  # noqa: S110 - destructor must not raise
+                pass
+            try:
+                _LOGGER.warning(
                     "%s: ESPHomeClient bleak client was not properly"
-                    " disconnected before destruction"
-                ),
-                self._description,
-            )
-        if not self._loop.is_closed():
+                    " disconnected before destruction",
+                    self._description,
+                )
+            except Exception:  # noqa: S110 - destructor must not raise
+                pass
+        if self._loop.is_closed():
+            return
+        try:
             self._loop.call_soon_threadsafe(self._async_disconnected_cleanup)
+        except RuntimeError:
+            # Loop closed between the ``is_closed`` check above and the
+            # scheduling call.
+            pass
