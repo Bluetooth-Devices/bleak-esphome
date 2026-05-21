@@ -32,6 +32,7 @@ from aioesphomeapi.core import (
 from bleak import BleakClient
 from bleak.backends.characteristic import BleakGATTCharacteristic
 from bleak.exc import BleakError
+from pytest_asyncio import fixture as aio_fixture
 
 from bleak_esphome.backend.client import ESPHomeClient, ESPHomeClientData
 
@@ -488,8 +489,8 @@ def mock_logger_warning() -> Iterator[Mock]:
         yield mock
 
 
-@pytest.fixture
-def leaked_client(
+@aio_fixture
+async def leaked_client(
     client_data: ESPHomeClientData,
 ) -> tuple[ESPHomeClient, Mock]:
     """Return a client with ``_cancel_connection_state`` set to a Mock."""
