@@ -85,8 +85,10 @@ def connect_scanner(
     scanner = ESPHomeScanner(source, name, connector, connectable)
     scanner.set_bluetooth_device(bluetooth_device)
     client_data.scanner = scanner
-    # These calls all return a callback that can be used to unsubscribe
-    # but we never unsubscribe so we don't care about the return value
+    # These calls all return a callback that can be used to unsubscribe,
+    # but we never unsubscribe so we don't care about the return value: the
+    # underlying APIClient connection owns these subscriptions and tears them
+    # all down when it disconnects, so no per-subscription cleanup is needed.
 
     if connectable:
         # If its connectable be sure not to register the scanner
