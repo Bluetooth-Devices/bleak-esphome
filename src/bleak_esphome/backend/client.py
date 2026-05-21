@@ -119,6 +119,7 @@ class ESPHomeClientData:
     title: str
     scanner: ESPHomeScanner | None
     disconnect_callbacks: set[Callable[[], None]] = field(default_factory=set)
+    unsubscribe_callbacks: list[Callable[[], None]] = field(default_factory=list)
 
 
 class ESPHomeClient(BaseBleakClient):

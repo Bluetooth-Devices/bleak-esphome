@@ -139,6 +139,7 @@ async def test_on_connect_registers_scanner_and_resolves_start(
     mock_client_data = Mock()
     mock_client_data.scanner = mock_scanner
     mock_client_data.disconnect_callbacks = set()
+    mock_client_data.unsubscribe_callbacks = []
     unregister_scanner = Mock()
     mock_habluetooth_manager = Mock()
     mock_habluetooth_manager.async_register_scanner = Mock(
@@ -163,6 +164,7 @@ async def test_on_connect_registers_scanner_and_resolves_start(
     )
     assert conn_manager._unregister_scanner is unregister_scanner
     assert conn_manager._disconnect_callbacks is mock_client_data.disconnect_callbacks
+    assert conn_manager._unsubscribe_callbacks is mock_client_data.unsubscribe_callbacks
     assert conn_manager._start_future.done()
     assert conn_manager._start_future.result() is None
 
@@ -185,6 +187,7 @@ async def test_on_connect_with_already_done_future_does_not_raise(
     mock_client_data = Mock()
     mock_client_data.scanner = Mock()
     mock_client_data.disconnect_callbacks = set()
+    mock_client_data.unsubscribe_callbacks = []
 
     connect_scanner_mock, get_manager_mock = patched_scanner_wiring
     connect_scanner_mock.return_value = mock_client_data
@@ -267,6 +270,38 @@ async def test_on_disconnect_tolerates_callback_self_removal(
 
 
 @pytest.mark.asyncio
+async def test_on_disconnect_invokes_unsubscribe_callbacks(
+    conn_manager: APIConnectionManager,
+) -> None:
+    """
+    ``_on_disconnect`` tears down every APIClient subscription captured.
+
+    Without this, subscriptions on the persistent ``APIClient`` accumulate on
+    every reconnect — old scanners keep receiving advertisement callbacks and
+    old devices keep receiving slot-update callbacks.
+    """
+    unsub_one = Mock()
+    unsub_two = Mock()
+    conn_manager._unsubscribe_callbacks = [unsub_one, unsub_two]
+
+    await conn_manager._on_disconnect(expected_disconnect=False)
+
+    unsub_one.assert_called_once_with()
+    unsub_two.assert_called_once_with()
+    assert conn_manager._unsubscribe_callbacks is None
+
+
+@pytest.mark.asyncio
+async def test_on_disconnect_without_unsubscribe_callbacks_is_noop(
+    conn_manager: APIConnectionManager,
+) -> None:
+    """``_on_disconnect`` is safe when no subscriptions were captured yet."""
+    assert conn_manager._unsubscribe_callbacks is None
+    await conn_manager._on_disconnect(expected_disconnect=False)
+    assert conn_manager._unsubscribe_callbacks is None
+
+
+@pytest.mark.asyncio
 async def test_stop_unregisters_scanner_if_registered(
     conn_manager_with_mocked_reconnect: tuple[APIConnectionManager, Mock, AsyncMock],
 ) -> None:
@@ -297,3 +332,24 @@ async def test_stop_without_scanner_does_not_call_unregister(
     assert manager._unregister_scanner is None
     mock_reconnect_logic.stop.assert_awaited_once_with()
     mock_disconnect.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+async def test_stop_invokes_unsubscribe_callbacks(
+    conn_manager_with_mocked_reconnect: tuple[APIConnectionManager, Mock, AsyncMock],
+) -> None:
+    """
+    ``stop()`` tears down captured subscriptions before the unregister branch.
+
+    Symmetric with how the scanner unregister branch is handled in both
+    ``_on_disconnect`` and ``stop()`` — protects against the case where
+    ``stop()`` is reached without ``_on_disconnect`` having fired.
+    """
+    manager, _logic, _disconnect = conn_manager_with_mocked_reconnect
+    unsub = Mock()
+    manager._unsubscribe_callbacks = [unsub]
+
+    await manager.stop()
+
+    unsub.assert_called_once_with()
+    assert manager._unsubscribe_callbacks is None

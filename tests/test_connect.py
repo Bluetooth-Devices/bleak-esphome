@@ -56,6 +56,40 @@ async def test_connect_decoded_advertisements(
 
 
 @pytest.mark.asyncio
+async def test_connect_captures_unsubscribe_callbacks(
+    mock_client: APIClient, mock_device_info: DeviceInfo
+) -> None:
+    """
+    ``connect_scanner`` captures unsubscribe handles for every subscription.
+
+    The persistent ``APIClient`` is reused across reconnects, so subscriptions
+    must be torn down on disconnect. Capturing the handles is what makes that
+    possible.
+    """
+    client_data = connect_scanner(mock_client, mock_device_info, available=True)
+    # mock_device_info enables ACTIVE_CONNECTIONS, FEATURE_STATE_AND_MODE and
+    # RAW_ADVERTISEMENTS — three feature-gated subscriptions in total.
+    assert len(client_data.unsubscribe_callbacks) == 3
+    assert all(callable(cb) for cb in client_data.unsubscribe_callbacks)
+
+
+@pytest.mark.asyncio
+async def test_connect_passive_only_captures_single_unsubscribe(
+    mock_client: APIClient, mock_device_info: DeviceInfo
+) -> None:
+    """Passive proxy only subscribes to raw advertisements, so one unsubscribe."""
+    info = dataclasses.replace(
+        mock_device_info,
+        bluetooth_proxy_feature_flags=(
+            BluetoothProxyFeature.PASSIVE_SCAN
+            | BluetoothProxyFeature.RAW_ADVERTISEMENTS
+        ),
+    )
+    client_data = connect_scanner(mock_client, info, available=True)
+    assert len(client_data.unsubscribe_callbacks) == 1
+
+
+@pytest.mark.asyncio
 async def test_can_connect_true() -> None:
     """`_can_connect` returns True when device is available and has a free slot."""
     device = ESPHomeBluetoothDevice("proxy", "AA:BB:CC:DD:EE:FF", available=True)
