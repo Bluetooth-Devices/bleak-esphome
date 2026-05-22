@@ -5,16 +5,9 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-import sys
-from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
 from functools import partial
 from typing import TYPE_CHECKING, Any, Concatenate, ParamSpec, TypeVar
-
-if sys.version_info < (3, 12):
-    from typing_extensions import Buffer
-else:
-    from collections.abc import Buffer
 
 from aioesphomeapi import (
     ESP_CONNECTION_ERROR_DESCRIPTION,
@@ -35,13 +28,23 @@ from bleak.assigned_numbers import CHARACTERISTIC_PROPERTIES
 from bleak.backends.characteristic import BleakGATTCharacteristic
 from bleak.backends.client import BaseBleakClient, NotifyCallback
 from bleak.backends.descriptor import BleakGATTDescriptor
-from bleak.backends.device import BLEDevice
 from bleak.backends.service import BleakGATTService, BleakGATTServiceCollection
 from bleak.exc import BleakError
 from bluetooth_data_tools import mac_to_int
 
-from .device import ESPHomeBluetoothDevice
-from .scanner import ESPHomeScanner
+if TYPE_CHECKING:
+    import sys
+    from collections.abc import Callable, Coroutine
+
+    from bleak.backends.device import BLEDevice
+
+    from .device import ESPHomeBluetoothDevice
+    from .scanner import ESPHomeScanner
+
+    if sys.version_info < (3, 12):
+        from typing_extensions import Buffer
+    else:
+        from collections.abc import Buffer
 
 DEFAULT_MTU = 23
 GATT_HEADER_SIZE = 3
@@ -247,8 +250,7 @@ class ESPHomeClient(BaseBleakClient):
                 )
             connected_future.set_exception(
                 BleakError(
-                    f"Error {ble_connection_error_name} while connecting:"
-                    f" {human_error}"
+                    f"Error {ble_connection_error_name} while connecting: {human_error}"
                 )
             )
             return
@@ -272,17 +274,14 @@ class ESPHomeClient(BaseBleakClient):
         Connect to a specified Peripheral.
 
         Args:
-            pair: If True, attempt to pair with the device after connecting.
-                  Note: Explicit pairing during connect is not available in ESPHome.
-                  Use the pair() method after connecting if pairing is needed.
+            pair: If True, call ``pair()`` after the link is established.
+                  Requires the proxy firmware to advertise the ``PAIRING``
+                  feature flag; older firmware raises ``NotImplementedError``.
             dangerous_use_bleak_cache: Use cached services if available.
             **kwargs:
-                timeout (float): Timeout for required
-                    ``BleakScanner.find_device_by_address`` call. Defaults to 10.0.
-
-        Returns:
-        -------
-            Boolean representing connection status.
+                timeout (float): Timeout for the underlying
+                    ``bluetooth_device_connect`` call. Defaults to the
+                    instance ``_timeout`` (10.0s by default).
 
         """
         await self._wait_for_free_connection_slot(CONNECT_FREE_SLOT_TIMEOUT)
@@ -435,8 +434,9 @@ class ESPHomeClient(BaseBleakClient):
         """
         Attempt to pair with the device.
 
-        Note: Pairing is not available in ESPHome versions < 2024.3.0.
-        Use the `pair()` method after connecting if pairing is needed.
+        Requires the proxy firmware to advertise the ``PAIRING`` feature
+        flag (ESPHome 2024.3.0 or newer); older firmware raises
+        ``NotImplementedError``.
         """
         await self._pair()
 
@@ -454,7 +454,13 @@ class ESPHomeClient(BaseBleakClient):
 
     @api_error_as_bleak_error
     async def unpair(self) -> None:
-        """Attempt to unpair."""
+        """
+        Attempt to unpair.
+
+        Requires the proxy firmware to advertise the ``PAIRING`` feature
+        flag (ESPHome 2024.3.0 or newer); older firmware raises
+        ``NotImplementedError``.
+        """
         if not self._feature_flags & BluetoothProxyFeature.PAIRING.value:
             raise NotImplementedError(
                 "Unpairing is not available in this version ESPHome; "
@@ -469,9 +475,10 @@ class ESPHomeClient(BaseBleakClient):
         self, dangerous_use_bleak_cache: bool = False, **kwargs: Any
     ) -> BleakGATTServiceCollection:
         """
-        Get all services registered for this GATT server.
+        Populate ``self.services`` from the on-host cache or the proxy.
 
-        Must only be called from get_services or connected
+        Must only be called by ``connect()`` while the GATT connection is
+        up; ``_raise_if_not_connected()`` enforces the latter.
         """
         self._raise_if_not_connected()
         address_as_int = self._address_as_int
@@ -542,7 +549,15 @@ class ESPHomeClient(BaseBleakClient):
 
     @api_error_as_bleak_error
     async def clear_cache(self) -> bool:
-        """Clear the GATT cache."""
+        """
+        Clear the GATT cache.
+
+        Always clears the in-memory cache held by this process. If the
+        proxy firmware does not advertise the ``CACHE_CLEARING`` feature
+        flag, the on-device cache cannot be cleared and a warning is
+        logged; the call still returns ``True`` because the memory cache
+        was cleared.
+        """
         cache = self._cache
         cache.clear_gatt_services_cache(self._address_as_int)
         cache.clear_gatt_mtu_cache(self._address_as_int)
@@ -573,7 +588,14 @@ class ESPHomeClient(BaseBleakClient):
         latency: int,
         timeout: int,
     ) -> None:
-        """Set BLE connection parameters on a connected device."""
+        """
+        Set BLE connection parameters on a connected device.
+
+        Requires the proxy firmware to advertise the
+        ``CONNECTION_PARAMS_SETTING`` feature flag; older firmware logs
+        a warning and silently returns without changing the connection
+        parameters.
+        """
         if (
             not self._feature_flags
             & BluetoothProxyFeature.CONNECTION_PARAMS_SETTING.value
@@ -774,6 +796,10 @@ class ESPHomeClient(BaseBleakClient):
     async def stop_notify(self, characteristic: BleakGATTCharacteristic) -> None:
         """
         Deactivate notification/indication on a specified characteristic.
+
+        Silently returns when no notifications are active on the given
+        handle, matching the BlueZ backend's behavior. Callers do not
+        need to track which characteristics they have subscribed to.
 
         Args:
         ----
