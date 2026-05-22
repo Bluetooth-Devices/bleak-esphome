@@ -110,8 +110,9 @@ class ESPHomeScanner(BaseHaRemoteScanner):
         Called by habluetooth's auto-mode scheduler. Restores the proxy
         to whatever mode it last reported via ``async_update_scanner_state``;
         if the prior mode is unknown the proxy is returned to PASSIVE.
-        Concurrent requests are serialized on a per-scanner lock so the
-        proxy only ever sees one mode transition at a time.
+        Only one window may be open at a time; a request that arrives
+        while another window is in flight returns ``False`` immediately
+        so the caller can decide whether to retry.
         """
         client = self._client
         if client is None:
@@ -120,6 +121,8 @@ class ESPHomeScanner(BaseHaRemoteScanner):
         # durations that an external caller might pass. Negative or NaN
         # would otherwise propagate into a confusing scheduler error.
         if not math.isfinite(duration) or duration < 0:
+            return False
+        if self._active_window_lock.locked():
             return False
         async with self._active_window_lock:
             prior = self.requested_mode
@@ -138,10 +141,13 @@ class ESPHomeScanner(BaseHaRemoteScanner):
                     if prior is BluetoothScanningMode.ACTIVE
                     else BluetoothScannerMode.PASSIVE
                 )
+                # Shield the restore so an outer cancellation (e.g. shutdown)
+                # cannot abandon the proxy stuck in ACTIVE; the cancellation
+                # still propagates to the caller once the restore completes.
                 try:
-                    await client.bluetooth_scanner_set_mode(restore)
+                    await asyncio.shield(client.bluetooth_scanner_set_mode(restore))
                 except APIConnectionError as ex:
-                    _LOGGER.debug(
+                    _LOGGER.warning(
                         "%s: failed to restore scan mode after active window: %s",
                         self.name,
                         ex,

@@ -1,3 +1,4 @@
+import asyncio
 from unittest.mock import AsyncMock
 
 import pytest
@@ -387,3 +388,44 @@ async def test_async_request_active_window_restore_failure_swallowed(
     scanner.set_client(mock_client)
     assert await scanner.async_request_active_window(0.0) is True
     assert call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_async_request_active_window_rejects_overlap(
+    scanner: ESPHomeScanner, mock_client: APIClient
+) -> None:
+    """A second request while a window is open returns False without flipping."""
+    gate = asyncio.Event()
+
+    async def fake_set_mode(mode: BluetoothScannerMode) -> None:
+        if mode is BluetoothScannerMode.ACTIVE:
+            await gate.wait()
+
+    mock_client.bluetooth_scanner_set_mode = AsyncMock(side_effect=fake_set_mode)
+    scanner.set_client(mock_client)
+    first = asyncio.create_task(scanner.async_request_active_window(0.0))
+    # Yield so the first task acquires the lock and blocks inside the entry call.
+    await asyncio.sleep(0)
+    assert await scanner.async_request_active_window(0.0) is False
+    # Only the first task has called bluetooth_scanner_set_mode (the entry flip).
+    assert mock_client.bluetooth_scanner_set_mode.await_count == 1
+    gate.set()
+    assert await first is True
+
+
+@pytest.mark.asyncio
+async def test_async_request_active_window_restore_runs_under_cancellation(
+    scanner: ESPHomeScanner, mock_client: APIClient
+) -> None:
+    """Cancelling the task during the window still fires the restore call."""
+    mock_client.bluetooth_scanner_set_mode = AsyncMock()
+    scanner.set_client(mock_client)
+    task = asyncio.create_task(scanner.async_request_active_window(3600.0))
+    # Let the entry call complete and the task enter the sleep.
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    calls = [c.args for c in mock_client.bluetooth_scanner_set_mode.await_args_list]
+    assert calls == [(BluetoothScannerMode.ACTIVE,), (BluetoothScannerMode.PASSIVE,)]
