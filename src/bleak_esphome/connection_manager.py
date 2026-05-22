@@ -69,7 +69,21 @@ class APIConnectionManager:
             self._start_future.set_result(None)
 
     async def start(self) -> None:
-        """Start the API connection."""
+        """
+        Start the API connection and wait for the first successful connect.
+
+        Returns once ``_on_connect`` has fired (scanner registered,
+        ``disconnect_callbacks`` captured). If ``stop()`` is called before
+        the first connect completes, the awaiting task is unblocked with
+        ``ESPHomeStartAborted`` rather than a bare ``CancelledError`` so it
+        does not surface as a spurious cancellation in ``TaskGroup`` or
+        ``asyncio.timeout`` contexts.
+
+        Raises:
+            ESPHomeStartAborted: if ``stop()`` is called before the first
+                successful connect.
+
+        """
         await self._reconnect_logic.start()
         try:
             await self._start_future

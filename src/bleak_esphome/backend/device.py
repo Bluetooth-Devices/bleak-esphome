@@ -70,8 +70,6 @@ class ESPHomeBluetoothDevice:
         if (changed or not self._called_callback) and (
             connection_slots_callback := self._connection_slots_callback
         ):
-            # Currently we don't know which connections are in use, so we
-            # just return an empty list.
             self._called_callback = True
             connection_slots_callback(
                 Allocations(
@@ -88,7 +86,17 @@ class ESPHomeBluetoothDevice:
             fut.set_exception(TimeoutError())
 
     async def wait_for_ble_connections_free(self, timeout: float) -> int:
-        """Wait until there are free BLE connections."""
+        """
+        Wait until there are free BLE connection slots on this device.
+
+        Returns immediately with the current free count if slots are already
+        available. Otherwise waits up to ``timeout`` seconds for the proxy to
+        report at least one free slot via ``async_update_ble_connection_limits``.
+
+        Raises:
+            TimeoutError: if no slot becomes free within ``timeout`` seconds.
+
+        """
         if self.ble_connections_free > 0:
             return self.ble_connections_free
         fut: asyncio.Future[int] = self.loop.create_future()
