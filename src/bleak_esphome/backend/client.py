@@ -729,12 +729,12 @@ class ESPHomeClient(BaseBleakClient):
                 "does not have notify or indicate property set."
             )
 
-        self._notify_cancels[
-            ble_handle
-        ] = await self._client.bluetooth_gatt_start_notify(
-            self._address_as_int,
-            ble_handle,
-            lambda handle, data: callback(data),
+        self._notify_cancels[ble_handle] = (
+            await self._client.bluetooth_gatt_start_notify(
+                self._address_as_int,
+                ble_handle,
+                lambda handle, data: callback(data),
+            )
         )
 
         if not self._feature_flags & BluetoothProxyFeature.REMOTE_CACHING.value:
