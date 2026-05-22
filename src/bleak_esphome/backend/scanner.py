@@ -131,7 +131,7 @@ class ESPHomeScanner(BaseHaRemoteScanner):
         async with self._active_window_lock:
             prior = self.requested_mode
             try:
-                await client.bluetooth_scanner_set_mode(BluetoothScannerMode.ACTIVE)
+                client.bluetooth_scanner_set_mode(BluetoothScannerMode.ACTIVE)
             except APIConnectionError as ex:
                 _LOGGER.debug(
                     "%s: failed to enter active scan window: %s", self.name, ex
@@ -145,15 +145,13 @@ class ESPHomeScanner(BaseHaRemoteScanner):
                     if prior is BluetoothScanningMode.ACTIVE
                     else BluetoothScannerMode.PASSIVE
                 )
-                # Shield the restore from ordinary task cancellation so
-                # the proxy is not abandoned in ACTIVE; the cancellation
-                # still propagates to the caller once the restore
-                # completes. This does NOT cover full interpreter / event
-                # loop shutdown: once the loop is closing, the detached
-                # restore task will not get scheduled and the proxy may
-                # be left in ACTIVE until the connection drops.
+                # bluetooth_scanner_set_mode is a sync method that just
+                # queues the request on the API connection and returns
+                # None, so the only failure mode here is an immediate
+                # APIConnectionError if the connection has gone away.
+                # No shield is needed because nothing here yields.
                 try:
-                    await asyncio.shield(client.bluetooth_scanner_set_mode(restore))
+                    client.bluetooth_scanner_set_mode(restore)
                 except APIConnectionError as ex:
                     _LOGGER.warning(
                         "%s: failed to restore scan mode after active window: %s",
