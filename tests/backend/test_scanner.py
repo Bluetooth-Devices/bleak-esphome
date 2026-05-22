@@ -418,12 +418,19 @@ async def test_async_request_active_window_restore_runs_under_cancellation(
     scanner: ESPHomeScanner, mock_client: APIClient
 ) -> None:
     """Cancelling the task during the window still fires the restore call."""
-    mock_client.bluetooth_scanner_set_mode = AsyncMock()
+    # Gate the entry call explicitly so the cancel happens after we
+    # know the worker has entered the asyncio.sleep, instead of
+    # relying on AsyncMock resolving in some specific number of loop
+    # iterations.
+    entered = asyncio.Event()
+
+    async def gated_set_mode(_mode: BluetoothScannerMode) -> None:
+        entered.set()
+
+    mock_client.bluetooth_scanner_set_mode = AsyncMock(side_effect=gated_set_mode)
     scanner.set_client(mock_client)
     task = asyncio.create_task(scanner.async_request_active_window(3600.0))
-    # Let the entry call complete and the task enter the sleep.
-    await asyncio.sleep(0)
-    await asyncio.sleep(0)
+    await entered.wait()
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task

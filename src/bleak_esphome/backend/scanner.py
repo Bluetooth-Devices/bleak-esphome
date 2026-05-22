@@ -122,6 +122,10 @@ class ESPHomeScanner(BaseHaRemoteScanner):
         # would otherwise propagate into a confusing scheduler error.
         if not math.isfinite(duration) or duration < 0:
             return False
+        # Safe: no await between the .locked() check and the acquire
+        # inside `async with`, so asyncio cannot schedule another
+        # coroutine in between and the check / acquire is effectively
+        # atomic on this lock.
         if self._active_window_lock.locked():
             return False
         async with self._active_window_lock:
@@ -141,9 +145,13 @@ class ESPHomeScanner(BaseHaRemoteScanner):
                     if prior is BluetoothScanningMode.ACTIVE
                     else BluetoothScannerMode.PASSIVE
                 )
-                # Shield the restore so an outer cancellation (e.g. shutdown)
-                # cannot abandon the proxy stuck in ACTIVE; the cancellation
-                # still propagates to the caller once the restore completes.
+                # Shield the restore from ordinary task cancellation so
+                # the proxy is not abandoned in ACTIVE; the cancellation
+                # still propagates to the caller once the restore
+                # completes. This does NOT cover full interpreter / event
+                # loop shutdown: once the loop is closing, the detached
+                # restore task will not get scheduled and the proxy may
+                # be left in ACTIVE until the connection drops.
                 try:
                     await asyncio.shield(client.bluetooth_scanner_set_mode(restore))
                 except APIConnectionError as ex:
