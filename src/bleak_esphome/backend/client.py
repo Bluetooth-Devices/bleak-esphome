@@ -469,9 +469,10 @@ class ESPHomeClient(BaseBleakClient):
         self, dangerous_use_bleak_cache: bool = False, **kwargs: Any
     ) -> BleakGATTServiceCollection:
         """
-        Get all services registered for this GATT server.
+        Populate ``self.services`` from the on-host cache or the proxy.
 
-        Must only be called from get_services or connected
+        Must only be called by ``connect()`` while the GATT connection is
+        up; ``_raise_if_not_connected()`` enforces the latter.
         """
         self._raise_if_not_connected()
         address_as_int = self._address_as_int
@@ -774,6 +775,10 @@ class ESPHomeClient(BaseBleakClient):
     async def stop_notify(self, characteristic: BleakGATTCharacteristic) -> None:
         """
         Deactivate notification/indication on a specified characteristic.
+
+        Silently returns when no notifications are active on the given
+        handle, matching the BlueZ backend's behavior. Callers do not
+        need to track which characteristics they have subscribed to.
 
         Args:
         ----
