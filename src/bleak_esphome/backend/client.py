@@ -274,9 +274,9 @@ class ESPHomeClient(BaseBleakClient):
         Connect to a specified Peripheral.
 
         Args:
-            pair: If True, attempt to pair with the device after connecting.
-                  Note: Explicit pairing during connect is not available in ESPHome.
-                  Use the pair() method after connecting if pairing is needed.
+            pair: If True, call ``pair()`` after the link is established.
+                  Requires the proxy firmware to advertise the ``PAIRING``
+                  feature flag; older firmware raises ``NotImplementedError``.
             dangerous_use_bleak_cache: Use cached services if available.
             **kwargs:
                 timeout (float): Timeout for required
@@ -437,8 +437,9 @@ class ESPHomeClient(BaseBleakClient):
         """
         Attempt to pair with the device.
 
-        Note: Pairing is not available in ESPHome versions < 2024.3.0.
-        Use the `pair()` method after connecting if pairing is needed.
+        Requires the proxy firmware to advertise the ``PAIRING`` feature
+        flag (ESPHome 2024.3.0 or newer); older firmware raises
+        ``NotImplementedError``.
         """
         await self._pair()
 
@@ -456,7 +457,13 @@ class ESPHomeClient(BaseBleakClient):
 
     @api_error_as_bleak_error
     async def unpair(self) -> None:
-        """Attempt to unpair."""
+        """
+        Attempt to unpair.
+
+        Requires the proxy firmware to advertise the ``PAIRING`` feature
+        flag (ESPHome 2024.3.0 or newer); older firmware raises
+        ``NotImplementedError``.
+        """
         if not self._feature_flags & BluetoothProxyFeature.PAIRING.value:
             raise NotImplementedError(
                 "Unpairing is not available in this version ESPHome; "
@@ -545,7 +552,15 @@ class ESPHomeClient(BaseBleakClient):
 
     @api_error_as_bleak_error
     async def clear_cache(self) -> bool:
-        """Clear the GATT cache."""
+        """
+        Clear the GATT cache.
+
+        Always clears the in-memory cache held by this process. If the
+        proxy firmware does not advertise the ``CACHE_CLEARING`` feature
+        flag, the on-device cache cannot be cleared and a warning is
+        logged; the call still returns ``True`` because the memory cache
+        was cleared.
+        """
         cache = self._cache
         cache.clear_gatt_services_cache(self._address_as_int)
         cache.clear_gatt_mtu_cache(self._address_as_int)
@@ -576,7 +591,14 @@ class ESPHomeClient(BaseBleakClient):
         latency: int,
         timeout: int,
     ) -> None:
-        """Set BLE connection parameters on a connected device."""
+        """
+        Set BLE connection parameters on a connected device.
+
+        Requires the proxy firmware to advertise the
+        ``CONNECTION_PARAMS_SETTING`` feature flag; older firmware logs
+        a warning and silently returns without changing the connection
+        parameters.
+        """
         if (
             not self._feature_flags
             & BluetoothProxyFeature.CONNECTION_PARAMS_SETTING.value
