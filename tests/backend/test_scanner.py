@@ -358,6 +358,19 @@ async def test_async_request_active_window_set_failure_returns_false(
 
 
 @pytest.mark.asyncio
+async def test_async_request_active_window_rejects_invalid_duration(
+    scanner: ESPHomeScanner, mock_client: APIClient
+) -> None:
+    """Negative or non-finite durations are rejected without touching the proxy."""
+    mock_client.bluetooth_scanner_set_mode = AsyncMock()
+    scanner.set_client(mock_client)
+    assert await scanner.async_request_active_window(-1.0) is False
+    assert await scanner.async_request_active_window(float("nan")) is False
+    assert await scanner.async_request_active_window(float("inf")) is False
+    mock_client.bluetooth_scanner_set_mode.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_async_request_active_window_restore_failure_swallowed(
     scanner: ESPHomeScanner, mock_client: APIClient
 ) -> None:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 from typing import TYPE_CHECKING, Any
 
 from aioesphomeapi import (
@@ -114,6 +115,11 @@ class ESPHomeScanner(BaseHaRemoteScanner):
         """
         client = self._client
         if client is None:
+            return False
+        # Defensive: guard the asyncio.sleep against non-finite / negative
+        # durations that an external caller might pass. Negative or NaN
+        # would otherwise propagate into a confusing scheduler error.
+        if not math.isfinite(duration) or duration < 0:
             return False
         async with self._active_window_lock:
             prior = self.requested_mode
