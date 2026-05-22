@@ -27,12 +27,21 @@ if TYPE_CHECKING:
 class ESPHomeScanner(BaseHaRemoteScanner):
     """Scanner for esphome."""
 
-    __slots__ = ("_bluetooth_device",)
+    __slots__ = ("_address_type_details", "_bluetooth_device")
 
     def __init__(self, *args: Any, **kwargs: Any):
         """Initialize the scanner."""
         super().__init__(*args, **kwargs)
         self._bluetooth_device: ESPHomeBluetoothDevice | None = None
+        # Per-address-type ``{"address_type": int}`` dict cache. The base
+        # scanner copies ``details`` via ``{**self._details, **details}`` on
+        # the first advertisement for an address and never mutates it again
+        # (subsequent advertisements reuse the previously-built ``BLEDevice``
+        # and ignore ``details`` entirely), so the cached dict can be shared
+        # safely across iterations. BLE address types are a small bounded
+        # set (PUBLIC=0, RANDOM=1, plus the two identity variants), so the
+        # cache stays tiny.
+        self._address_type_details: dict[int, dict[str, int]] = {}
 
     def set_bluetooth_device(self, device: ESPHomeBluetoothDevice) -> None:
         """Set the bluetooth device for this scanner."""
@@ -87,6 +96,11 @@ class ESPHomeScanner(BaseHaRemoteScanner):
     def async_on_advertisement(self, adv: BluetoothLEAdvertisement) -> None:
         """Call the registered callback."""
         # The mac address is a uint64, but we need a string
+        address_type = adv.address_type
+        details_cache = self._address_type_details
+        if (details := details_cache.get(address_type)) is None:
+            details = {"address_type": address_type}
+            details_cache[address_type] = details
         self._async_on_advertisement(
             int_to_bluetooth_address(adv.address),
             adv.rssi,
@@ -95,7 +109,7 @@ class ESPHomeScanner(BaseHaRemoteScanner):
             adv.service_data,
             adv.manufacturer_data,
             None,
-            {"address_type": adv.address_type},
+            details,
             MONOTONIC_TIME(),
         )
 
@@ -113,12 +127,17 @@ class ESPHomeScanner(BaseHaRemoteScanner):
         # the repeated field since `PyUpb_RepeatedContainer_Subscript`
         # does not trigger the debug logging.
         on_raw = self._async_on_raw_advertisement
+        details_cache = self._address_type_details
         for i in range(len(advertisements)):
             adv = advertisements[i]
+            address_type = adv.address_type
+            if (details := details_cache.get(address_type)) is None:
+                details = {"address_type": address_type}
+                details_cache[address_type] = details
             on_raw(
                 int_to_bluetooth_address(adv.address),
                 adv.rssi,
                 adv.data,
-                {"address_type": adv.address_type},
+                details,
                 now,
             )

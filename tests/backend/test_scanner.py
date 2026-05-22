@@ -85,6 +85,49 @@ def test_scanner_async_on_raw_advertisements(scanner: ESPHomeScanner) -> None:
     )
 
 
+def test_scanner_caches_address_type_details_dict(scanner: ESPHomeScanner) -> None:
+    """
+    Raw and decoded paths reuse one ``details`` dict per address_type.
+
+    The base scanner copies ``details`` via ``{**self._details, **details}``
+    on the first advertisement for an address, so sharing the dict across
+    advertisements is safe and skips a per-advertisement dict allocation.
+    """
+    raw = BluetoothLERawAdvertisementsResponse(
+        advertisements=[
+            BluetoothLERawAdvertisement(
+                address=261602360644300, rssi=-96, address_type=1, data=b"\x02\x01\x04"
+            ),
+            BluetoothLERawAdvertisement(
+                address=246965243285491, rssi=-88, address_type=1, data=b"\x02\x01\x1a"
+            ),
+            BluetoothLERawAdvertisement(
+                address=111222333444555, rssi=-70, address_type=0, data=b"\x02\x01\x06"
+            ),
+        ]
+    )
+    scanner.async_on_raw_advertisements(raw)
+
+    cache = scanner._address_type_details
+    assert set(cache) == {0, 1}
+    assert cache[0] == {"address_type": 0}
+    assert cache[1] == {"address_type": 1}
+
+    # Same dict instance is returned for the same address_type on later calls.
+    type_1_dict = cache[1]
+    decoded = BluetoothLEAdvertisement(
+        address=261602360644300,
+        rssi=-72,
+        address_type=1,
+        name="decoded",
+        service_uuids=[],
+        service_data={},
+        manufacturer_data={},
+    )
+    scanner.async_on_advertisement(decoded)
+    assert cache[1] is type_1_dict
+
+
 def test_scanner_async_update_scanner_state(
     scanner: ESPHomeScanner, mock_client: APIClient
 ) -> None:
