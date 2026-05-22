@@ -279,12 +279,9 @@ class ESPHomeClient(BaseBleakClient):
                   feature flag; older firmware raises ``NotImplementedError``.
             dangerous_use_bleak_cache: Use cached services if available.
             **kwargs:
-                timeout (float): Timeout for required
-                    ``BleakScanner.find_device_by_address`` call. Defaults to 10.0.
-
-        Returns:
-        -------
-            Boolean representing connection status.
+                timeout (float): Timeout for the underlying
+                    ``bluetooth_device_connect`` call. Defaults to the
+                    instance ``_timeout`` (10.0s by default).
 
         """
         await self._wait_for_free_connection_slot(CONNECT_FREE_SLOT_TIMEOUT)
