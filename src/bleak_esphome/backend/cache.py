@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
-from collections.abc import MutableMapping
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
-from bleak.backends.service import BleakGATTServiceCollection
 from lru import LRU  # pylint: disable=no-name-in-module
+
+if TYPE_CHECKING:
+    from collections.abc import MutableMapping
+
+    from bleak.backends.service import BleakGATTServiceCollection
 
 MAX_CACHED_SERVICES = 128
 

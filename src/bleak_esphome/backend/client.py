@@ -5,16 +5,9 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-import sys
-from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
 from functools import partial
 from typing import TYPE_CHECKING, Any, Concatenate, ParamSpec, TypeVar
-
-if sys.version_info < (3, 12):
-    from typing_extensions import Buffer
-else:
-    from collections.abc import Buffer
 
 from aioesphomeapi import (
     ESP_CONNECTION_ERROR_DESCRIPTION,
@@ -35,13 +28,23 @@ from bleak.assigned_numbers import CHARACTERISTIC_PROPERTIES
 from bleak.backends.characteristic import BleakGATTCharacteristic
 from bleak.backends.client import BaseBleakClient, NotifyCallback
 from bleak.backends.descriptor import BleakGATTDescriptor
-from bleak.backends.device import BLEDevice
 from bleak.backends.service import BleakGATTService, BleakGATTServiceCollection
 from bleak.exc import BleakError
 from bluetooth_data_tools import mac_to_int
 
-from .device import ESPHomeBluetoothDevice
-from .scanner import ESPHomeScanner
+if TYPE_CHECKING:
+    import sys
+    from collections.abc import Callable, Coroutine
+
+    from bleak.backends.device import BLEDevice
+
+    from .device import ESPHomeBluetoothDevice
+    from .scanner import ESPHomeScanner
+
+    if sys.version_info < (3, 12):
+        from typing_extensions import Buffer
+    else:
+        from collections.abc import Buffer
 
 DEFAULT_MTU = 23
 GATT_HEADER_SIZE = 3
@@ -247,8 +250,7 @@ class ESPHomeClient(BaseBleakClient):
                 )
             connected_future.set_exception(
                 BleakError(
-                    f"Error {ble_connection_error_name} while connecting:"
-                    f" {human_error}"
+                    f"Error {ble_connection_error_name} while connecting: {human_error}"
                 )
             )
             return
@@ -727,12 +729,12 @@ class ESPHomeClient(BaseBleakClient):
                 "does not have notify or indicate property set."
             )
 
-        self._notify_cancels[ble_handle] = (
-            await self._client.bluetooth_gatt_start_notify(
-                self._address_as_int,
-                ble_handle,
-                lambda handle, data: callback(data),
-            )
+        self._notify_cancels[
+            ble_handle
+        ] = await self._client.bluetooth_gatt_start_notify(
+            self._address_as_int,
+            ble_handle,
+            lambda handle, data: callback(data),
         )
 
         if not self._feature_flags & BluetoothProxyFeature.REMOTE_CACHING.value:

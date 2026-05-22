@@ -4,13 +4,16 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Callable
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from bleak_retry_connector import Allocations
 from bluetooth_data_tools import int_to_bluetooth_address
 
 from .cache import ESPHomeBluetoothCache
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 _LOGGER = logging.getLogger(__name__)
 
