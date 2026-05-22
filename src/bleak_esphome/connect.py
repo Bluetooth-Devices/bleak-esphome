@@ -103,6 +103,7 @@ def connect_scanner(
             "%s [%s]: Bluetooth scanner state and mode support available", name, source
         )
         cli.subscribe_bluetooth_scanner_state(scanner.async_update_scanner_state)
+        scanner.set_client(cli)
 
     if feature_flags & BluetoothProxyFeature.RAW_ADVERTISEMENTS:
         cli.subscribe_bluetooth_le_raw_advertisements(

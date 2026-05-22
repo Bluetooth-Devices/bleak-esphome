@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from typing import TYPE_CHECKING, Any
 
 from aioesphomeapi import (
+    APIClient,
+    APIConnectionError,
     BluetoothLEAdvertisement,
     BluetoothLERawAdvertisementsResponse,
     BluetoothScannerMode,
@@ -23,20 +27,34 @@ from habluetooth.base_scanner import BaseHaRemoteScanner
 if TYPE_CHECKING:
     from .device import ESPHomeBluetoothDevice
 
+_LOGGER = logging.getLogger(__name__)
+
 
 class ESPHomeScanner(BaseHaRemoteScanner):
     """Scanner for esphome."""
 
-    __slots__ = ("_bluetooth_device",)
+    __slots__ = ("_active_window_lock", "_bluetooth_device", "_client")
 
     def __init__(self, *args: Any, **kwargs: Any):
         """Initialize the scanner."""
         super().__init__(*args, **kwargs)
         self._bluetooth_device: ESPHomeBluetoothDevice | None = None
+        self._client: APIClient | None = None
+        self._active_window_lock = asyncio.Lock()
 
     def set_bluetooth_device(self, device: ESPHomeBluetoothDevice) -> None:
         """Set the bluetooth device for this scanner."""
         self._bluetooth_device = device
+
+    def set_client(self, client: APIClient) -> None:
+        """
+        Bind the API client used to send scanner-mode requests.
+
+        Required for ``async_request_active_window`` to actually flip the
+        proxy; without it, requests are silently ignored. Only meaningful
+        for proxies that advertise the ``FEATURE_STATE_AND_MODE`` flag.
+        """
+        self._client = client
 
     def get_allocations(self) -> Allocations | None:
         """
@@ -83,6 +101,46 @@ class ESPHomeScanner(BaseHaRemoteScanner):
             self.set_current_mode(mode)
         else:
             self.set_current_mode(None)
+
+    async def async_request_active_window(self, duration: float) -> bool:
+        """
+        Flip the proxy to ACTIVE for ``duration`` seconds, then restore.
+
+        Called by habluetooth's auto-mode scheduler. Restores the proxy
+        to whatever mode it last reported via ``async_update_scanner_state``;
+        if the prior mode is unknown the proxy is returned to PASSIVE.
+        Concurrent requests are serialized on a per-scanner lock so the
+        proxy only ever sees one mode transition at a time.
+        """
+        client = self._client
+        if client is None:
+            return False
+        async with self._active_window_lock:
+            prior = self.requested_mode
+            try:
+                await client.bluetooth_scanner_set_mode(BluetoothScannerMode.ACTIVE)
+            except APIConnectionError as ex:
+                _LOGGER.debug(
+                    "%s: failed to enter active scan window: %s", self.name, ex
+                )
+                return False
+            try:
+                await asyncio.sleep(duration)
+            finally:
+                restore = (
+                    BluetoothScannerMode.ACTIVE
+                    if prior is BluetoothScanningMode.ACTIVE
+                    else BluetoothScannerMode.PASSIVE
+                )
+                try:
+                    await client.bluetooth_scanner_set_mode(restore)
+                except APIConnectionError as ex:
+                    _LOGGER.debug(
+                        "%s: failed to restore scan mode after active window: %s",
+                        self.name,
+                        ex,
+                    )
+        return True
 
     def async_on_advertisement(self, adv: BluetoothLEAdvertisement) -> None:
         """Call the registered callback."""
