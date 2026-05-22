@@ -121,6 +121,7 @@ select = [
     "I",       # isort
     "RUF",     # ruff specific
     "PLC0415", # pylint: import should be at top-level of file
+    "TC",      # flake8-type-checking
 ]
 
 [tool.ruff.lint.per-file-ignores]
@@ -131,6 +132,7 @@ select = [
     "D103",
     "D104",
     "S101",
+    "TC",
 ]
 "setup.py" = ["D100"]
 "conftest.py" = ["D100"]

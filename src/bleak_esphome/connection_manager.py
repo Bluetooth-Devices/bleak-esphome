@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
-from typing import TypedDict
+from typing import TYPE_CHECKING, TypedDict
 
 import habluetooth
 from aioesphomeapi import APIClient, ReconnectLogic
 
 import bleak_esphome
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 
 class ESPHomeStartAborted(Exception):
