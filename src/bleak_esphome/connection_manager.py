@@ -38,6 +38,7 @@ class APIConnectionManager:
         )
         self._unregister_scanner: Callable[[], None] | None = None
         self._disconnect_callbacks: set[Callable[[], None]] | None = None
+        self._unsubscribe_callbacks: list[Callable[[], None]] | None = None
         self._start_future: asyncio.Future[None] = (
             asyncio.get_running_loop().create_future()
         )
@@ -50,6 +51,13 @@ class APIConnectionManager:
             for callback in list(self._disconnect_callbacks):
                 callback()
             self._disconnect_callbacks = None
+        if self._unsubscribe_callbacks is not None:
+            # The ``APIClient`` survives across reconnects; without draining
+            # these, every reconnect cycle leaves stale scanner/device
+            # callbacks subscribed on the persistent client.
+            for unsubscribe in self._unsubscribe_callbacks:
+                unsubscribe()
+            self._unsubscribe_callbacks = None
         if self._unregister_scanner is not None:
             self._unregister_scanner()
             self._unregister_scanner = None
@@ -65,6 +73,7 @@ class APIConnectionManager:
             scanner
         )
         self._disconnect_callbacks = client_data.disconnect_callbacks
+        self._unsubscribe_callbacks = client_data.unsubscribe_callbacks
         if not self._start_future.done():
             self._start_future.set_result(None)
 
@@ -90,6 +99,10 @@ class APIConnectionManager:
         await self._cli.disconnect()
         if not self._start_future.done():
             self._start_future.cancel()
+        if self._unsubscribe_callbacks is not None:
+            for unsubscribe in self._unsubscribe_callbacks:
+                unsubscribe()
+            self._unsubscribe_callbacks = None
         if self._unregister_scanner is not None:
             self._unregister_scanner()
             self._unregister_scanner = None

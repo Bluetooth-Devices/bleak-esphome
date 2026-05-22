@@ -56,6 +56,53 @@ async def test_connect_decoded_advertisements(
 
 
 @pytest.mark.asyncio
+async def test_connect_captures_unsubscribe_callbacks(
+    mock_client: APIClient, mock_device_info: DeviceInfo
+) -> None:
+    """Each ``cli.subscribe_*`` return value is captured for later cleanup."""
+    client_data = connect_scanner(mock_client, mock_device_info, available=True)
+    expected = [
+        mock_client.subscribe_bluetooth_connections_free.return_value,
+        mock_client.subscribe_bluetooth_scanner_state.return_value,
+        mock_client.subscribe_bluetooth_le_raw_advertisements.return_value,
+    ]
+    assert client_data.unsubscribe_callbacks == expected
+
+
+@pytest.mark.asyncio
+async def test_connect_passive_only_captures_advert_unsubscribe(
+    mock_client: APIClient, mock_device_info: DeviceInfo
+) -> None:
+    """Passive-only proxies still capture the raw-advertisement unsubscribe."""
+    info = dataclasses.replace(
+        mock_device_info,
+        bluetooth_proxy_feature_flags=(
+            BluetoothProxyFeature.PASSIVE_SCAN
+            | BluetoothProxyFeature.RAW_ADVERTISEMENTS
+        ),
+    )
+    client_data = connect_scanner(mock_client, info, available=True)
+    assert client_data.unsubscribe_callbacks == [
+        mock_client.subscribe_bluetooth_le_raw_advertisements.return_value
+    ]
+
+
+@pytest.mark.asyncio
+async def test_connect_decoded_advertisements_captures_unsubscribe(
+    mock_client: APIClient, mock_device_info: DeviceInfo
+) -> None:
+    """Decoded advertisement subscription return is captured for cleanup."""
+    info = dataclasses.replace(
+        mock_device_info,
+        bluetooth_proxy_feature_flags=BluetoothProxyFeature.PASSIVE_SCAN,
+    )
+    client_data = connect_scanner(mock_client, info, available=True)
+    assert client_data.unsubscribe_callbacks == [
+        mock_client.subscribe_bluetooth_le_advertisements.return_value
+    ]
+
+
+@pytest.mark.asyncio
 async def test_can_connect_true() -> None:
     """`_can_connect` returns True when device is available and has a free slot."""
     device = ESPHomeBluetoothDevice("proxy", "AA:BB:CC:DD:EE:FF", available=True)

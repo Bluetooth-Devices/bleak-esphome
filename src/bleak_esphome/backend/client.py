@@ -119,6 +119,7 @@ class ESPHomeClientData:
     title: str
     scanner: ESPHomeScanner | None
     disconnect_callbacks: set[Callable[[], None]] = field(default_factory=set)
+    unsubscribe_callbacks: list[Callable[[], None]] = field(default_factory=list)
 
 
 class ESPHomeClient(BaseBleakClient):
@@ -247,8 +248,7 @@ class ESPHomeClient(BaseBleakClient):
                 )
             connected_future.set_exception(
                 BleakError(
-                    f"Error {ble_connection_error_name} while connecting:"
-                    f" {human_error}"
+                    f"Error {ble_connection_error_name} while connecting: {human_error}"
                 )
             )
             return
@@ -727,12 +727,12 @@ class ESPHomeClient(BaseBleakClient):
                 "does not have notify or indicate property set."
             )
 
-        self._notify_cancels[ble_handle] = (
-            await self._client.bluetooth_gatt_start_notify(
-                self._address_as_int,
-                ble_handle,
-                lambda handle, data: callback(data),
-            )
+        self._notify_cancels[
+            ble_handle
+        ] = await self._client.bluetooth_gatt_start_notify(
+            self._address_as_int,
+            ble_handle,
+            lambda handle, data: callback(data),
         )
 
         if not self._feature_flags & BluetoothProxyFeature.REMOTE_CACHING.value:
