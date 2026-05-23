@@ -70,7 +70,17 @@ class ESPHomeScanner(BaseHaRemoteScanner):
 
     @property
     def configured_mode(self) -> BluetoothScanningMode | None:
-        """The proxy's last-reported configured firmware mode."""
+        """
+        The proxy's last-reported configured firmware mode.
+
+        Caveat: the ``configured_mode`` proto field was added in esphome
+        2025.9 (PR #10490). Firmware that advertises
+        ``FEATURE_STATE_AND_MODE`` but predates that release does not set
+        the field on the wire; proto3 then decodes it as the default
+        enum value (``PASSIVE=0``), which is indistinguishable from an
+        explicitly-configured PASSIVE proxy. Callers cannot tell the two
+        cases apart from the response alone.
+        """
         return self._configured_mode
 
     def async_set_scanning_mode(self, mode: BluetoothScanningMode) -> None:
@@ -102,6 +112,14 @@ class ESPHomeScanner(BaseHaRemoteScanner):
         Intended for HA shutdown so the proxy doesn't stay pinned to the
         mode HA last set (e.g. PASSIVE while AUTO was in use). No-op if no
         configured_mode has been observed or no API client is bound.
+
+        Caveat: relies on the proto ``configured_mode`` field, which only
+        ships in esphome 2025.9+. Older firmware in the ``FEATURE_STATE_AND_MODE``
+        window (esphome 2025.5 to 2025.8) leaves the field unset and it
+        decodes as the proto3 default ``PASSIVE``, so a proxy that was
+        actually configured ACTIVE in YAML can be restored as PASSIVE on
+        shutdown. Callers that care should gate this on a known-good
+        firmware/API version.
         """
         client = self._client
         original = self._original_configured_mode
