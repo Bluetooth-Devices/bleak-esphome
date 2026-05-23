@@ -1,5 +1,13 @@
 # Changelog
 
+## v3.8.1 (2026-05-23)
+
+### Bug fixes
+
+
+- Parallelize cython build_ext and clean up redundant pass ([`61f2b14`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/61f2b14f6d6c56926238bd3c645152bbff4208e1))
+
+
 ## v3.8.0 (2026-05-23)
 
 ### Features
