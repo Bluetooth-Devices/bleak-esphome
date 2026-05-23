@@ -1,5 +1,13 @@
 # Changelog
 
+## v3.9.0 (2026-05-23)
+
+### Features
+
+
+- Add auto scanning mode support ([`eab513a`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/eab513abcbcb5317485f3f64febc5bb6f7012640))
+
+
 ## v3.8.4 (2026-05-23)
 
 ### Bug fixes
