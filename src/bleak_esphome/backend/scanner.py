@@ -55,7 +55,6 @@ class ESPHomeScanner(BaseHaRemoteScanner):
         "_client",
         "_configured_mode",
         "_intent",
-        "_original_configured_mode",
     )
 
     def __init__(self, *args: Any, **kwargs: Any):
@@ -65,7 +64,6 @@ class ESPHomeScanner(BaseHaRemoteScanner):
         self._client: APIClient | None = None
         self._active_window_lock = asyncio.Lock()
         self._configured_mode: BluetoothScanningMode | None = None
-        self._original_configured_mode: BluetoothScanningMode | None = None
         self._intent: BluetoothScanningMode | None = None
 
     @property
@@ -73,13 +71,12 @@ class ESPHomeScanner(BaseHaRemoteScanner):
         """
         The proxy's last-reported configured firmware mode.
 
-        Caveat: the ``configured_mode`` proto field was added in esphome
-        2025.9 (PR #10490). Firmware that advertises
-        ``FEATURE_STATE_AND_MODE`` but predates that release does not set
-        the field on the wire; proto3 then decodes it as the default
-        enum value (``PASSIVE=0``), which is indistinguishable from an
-        explicitly-configured PASSIVE proxy. Callers cannot tell the two
-        cases apart from the response alone.
+        Useful for one-shot migration logic at integration setup (e.g.
+        "if the proxy was configured ACTIVE, switch the HA option to
+        AUTO"). Caveat: the proto field shipped in esphome 2025.9;
+        ``FEATURE_STATE_AND_MODE`` firmware older than that leaves it
+        unset, which proto3 decodes as the default ``PASSIVE``,
+        indistinguishable from an explicit PASSIVE config.
         """
         return self._configured_mode
 
@@ -104,31 +101,6 @@ class ESPHomeScanner(BaseHaRemoteScanner):
             client.bluetooth_scanner_set_mode(firmware_mode)
         except APIConnectionError as ex:
             _LOGGER.debug("%s: failed to set scan mode: %s", self.name, ex)
-
-    def async_restore_configured_mode(self) -> None:
-        """
-        Replay the first-observed ``configured_mode`` to the proxy.
-
-        Intended for HA shutdown so the proxy doesn't stay pinned to the
-        mode HA last set (e.g. PASSIVE while AUTO was in use). No-op if no
-        configured_mode has been observed or no API client is bound.
-
-        Caveat: relies on the proto ``configured_mode`` field, which only
-        ships in esphome 2025.9+. Older firmware in the ``FEATURE_STATE_AND_MODE``
-        window (esphome 2025.5 to 2025.8) leaves the field unset and it
-        decodes as the proto3 default ``PASSIVE``, so a proxy that was
-        actually configured ACTIVE in YAML can be restored as PASSIVE on
-        shutdown. Callers that care should gate this on a known-good
-        firmware/API version.
-        """
-        client = self._client
-        original = self._original_configured_mode
-        if client is None or original is None or original is self._configured_mode:
-            return
-        try:
-            client.bluetooth_scanner_set_mode(_HA_TO_FIRMWARE_MODE[original])
-        except APIConnectionError as ex:
-            _LOGGER.debug("%s: failed to restore configured mode: %s", self.name, ex)
 
     def set_bluetooth_device(self, device: ESPHomeBluetoothDevice) -> None:
         """Set the bluetooth device for this scanner."""
@@ -179,10 +151,7 @@ class ESPHomeScanner(BaseHaRemoteScanner):
         :meth:`async_set_scanning_mode` has been called, otherwise it
         falls back to ``state.mode``.
         """
-        configured = _FIRMWARE_TO_HA_MODE.get(state.configured_mode)
-        self._configured_mode = configured
-        if self._original_configured_mode is None and configured is not None:
-            self._original_configured_mode = configured
+        self._configured_mode = _FIRMWARE_TO_HA_MODE.get(state.configured_mode)
         mode = _FIRMWARE_TO_HA_MODE.get(state.mode)
         if self._intent is None:
             self.set_requested_mode(mode)
