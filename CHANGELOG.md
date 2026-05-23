@@ -1,5 +1,13 @@
 # Changelog
 
+## v3.8.3 (2026-05-23)
+
+### Bug fixes
+
+
+- Harden esphomeclient.__del__ against shutdown and leaks (#333) ([`fa24a97`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/fa24a9792673d8bcd58760f15036059f49598eb3))
+
+
 ## v3.8.2 (2026-05-23)
 
 ### Documentation
