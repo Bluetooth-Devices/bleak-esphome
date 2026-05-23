@@ -21,12 +21,12 @@ from aioesphomeapi import (
     BLEConnectionError,
     BluetoothConnectionDroppedError,
     BluetoothDeviceClearCache,
+    BluetoothGATTError,
     BluetoothProxyFeature,
     ESPHomeBluetoothGATTServices,
 )
 from aioesphomeapi.core import (
     BluetoothGATTAPIError,
-    BluetoothGATTError,
     TimeoutAPIError,
 )
 from bleak import BleakClient
