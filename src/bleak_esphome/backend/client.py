@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import sys
 from dataclasses import dataclass, field
 from functools import partial, wraps
 from typing import TYPE_CHECKING, Any, Concatenate, ParamSpec, TypeVar
@@ -33,7 +34,6 @@ from bleak.exc import BleakError
 from bluetooth_data_tools import mac_to_int
 
 if TYPE_CHECKING:
-    import sys
     from collections.abc import Callable, Coroutine
 
     from bleak.backends.device import BLEDevice
@@ -837,23 +837,19 @@ class ESPHomeClient(BaseBleakClient):
             # never runs. ``_async_disconnected_cleanup`` is a no-op for this
             # field once we clear it below.
             self._cancel_connection_state = None
-            try:
+            # A destructor must not raise; suppress everything from the cancel
+            # callback and the logger, both of which can blow up mid-teardown.
+            with contextlib.suppress(Exception):
                 cancel()
-            except Exception:  # noqa: S110 - destructor must not raise
-                pass
-            try:
+            with contextlib.suppress(Exception):
                 _LOGGER.warning(
                     "%s: ESPHomeClient bleak client was not properly"
                     " disconnected before destruction",
                     self._description,
                 )
-            except Exception:  # noqa: S110 - destructor must not raise
-                pass
         if self._loop.is_closed():
             return
-        try:
+        # Loop can close between the ``is_closed`` check above and the
+        # scheduling call; swallow that race.
+        with contextlib.suppress(RuntimeError):
             self._loop.call_soon_threadsafe(self._async_disconnected_cleanup)
-        except RuntimeError:
-            # Loop closed between the ``is_closed`` check above and the
-            # scheduling call.
-            pass
