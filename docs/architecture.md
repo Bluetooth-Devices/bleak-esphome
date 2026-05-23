@@ -82,7 +82,9 @@ That bitmask drives every subsequent decision:
   not, it falls back to per-advertisement decoded messages.
 - `FEATURE_STATE_AND_MODE` — if set, the host subscribes to scanner state updates and
   tracks both the current scanner state (`IDLE` / `STARTING` / `RUNNING` / `STOPPING`
-  / `STOPPED` / `FAILED`) and the active scanning mode (`PASSIVE` / `ACTIVE`).
+  / `STOPPED` / `FAILED`) and the active scanning mode (`PASSIVE` / `ACTIVE`). It also
+  binds the `APIClient` to the scanner so `habluetooth` can request bounded on-demand
+  active-scan windows (see "On-demand active scanning" below).
 - `REMOTE_CACHING` — gates the cached-services hint sent on connect. When unset the
   hint is forced off, so the proxy re-discovers services on every connect; the
   on-host LRU cache still works.
@@ -99,6 +101,28 @@ when each flag is missing.
 
 Older proxy firmwares simply lack these flags; the library degrades gracefully (it
 logs a warning and skips the unsupported call) rather than refusing to start.
+
+## On-demand active scanning
+
+A passive scanner sees advertisement payloads but never the scan-response data
+that some devices only return when actively probed. Continuously scanning in
+`ACTIVE` mode costs the proxy radio time and power, so `bleak-esphome` lets
+`habluetooth` open `ACTIVE` mode only when it is needed and for a bounded window.
+
+This is gated behind `FEATURE_STATE_AND_MODE`: when the proxy advertises that
+flag, `connect_scanner()` binds the `APIClient` to the scanner. `habluetooth`'s
+auto-mode scheduler then calls `ESPHomeScanner.async_request_active_window`
+with a duration, and the scanner:
+
+1. Flips the proxy to `ACTIVE` via `bluetooth_scanner_set_mode`.
+2. Sleeps for the requested duration.
+3. Restores the previously requested mode (or `PASSIVE` if none is known),
+   even if the sleep is cancelled.
+
+Only one window may be open at a time — a request that arrives while another is
+in flight returns `False` immediately. Proxies without `FEATURE_STATE_AND_MODE`
+ignore the request (it returns `False`), so they keep whatever fixed mode they
+were configured with.
 
 ## Who can use it
 
