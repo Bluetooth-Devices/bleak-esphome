@@ -1,5 +1,22 @@
 # Changelog
 
+## v3.8.2 (2026-05-23)
+
+### Documentation
+
+
+- Document on-demand active scan window (feature_state_and_mode) ([`916ad6b`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/916ad6bcb03e9715a39d958828375f9a0ffcc1f5))
+
+
+- Add autodoc api reference for public package surface ([`f09d779`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/f09d779ebd015ebced3e8b56fcfa5b880ed0039c))
+
+
+### Bug fixes
+
+
+- Preserve method metadata in api_error_as_bleak_error decorator ([`3d1a0fd`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/3d1a0fdc912e50c96496f24a88bbd53df0e49592))
+
+
 ## v3.8.1 (2026-05-23)
 
 ### Bug fixes
