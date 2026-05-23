@@ -1,5 +1,19 @@
 # Changelog
 
+## v3.8.4 (2026-05-23)
+
+### Bug fixes
+
+
+- Defer loop-coupled state in apiconnectionmanager to start() ([`dbb3bf1`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/dbb3bf11f4d48302e6880fb90caca0faf87e7a20))
+
+
+### Refactoring
+
+
+- Extract spurious-cancellation predicate to shared helper ([`af0c4b0`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/af0c4b0b947de5e6f1f2654822170da549292440))
+
+
 ## v3.8.3 (2026-05-23)
 
 ### Bug fixes
