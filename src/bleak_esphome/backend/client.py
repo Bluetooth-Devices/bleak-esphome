@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import sys
 from dataclasses import dataclass, field
 from functools import partial, wraps
 from typing import TYPE_CHECKING, Any, Concatenate, ParamSpec, TypeVar
@@ -33,7 +34,6 @@ from bleak.exc import BleakError
 from bluetooth_data_tools import mac_to_int
 
 if TYPE_CHECKING:
-    import sys
     from collections.abc import Callable, Coroutine
 
     from bleak.backends.device import BLEDevice
@@ -824,13 +824,32 @@ class ESPHomeClient(BaseBleakClient):
 
     def __del__(self) -> None:
         """Destructor to make sure the connection state is unsubscribed."""
-        if self._cancel_connection_state:
-            _LOGGER.warning(
-                (
+        # Interpreter is tearing down: logging handlers, the event loop, and
+        # the APIClient's connection may already be gone. Bailing out keeps
+        # ``Exception ignored in __del__`` tracebacks from masking the real
+        # shutdown cause.
+        if sys.is_finalizing():
+            return
+        cancel = self._cancel_connection_state
+        if cancel is not None:
+            # Cancel the subscription synchronously so the proxy-side handler
+            # is removed even if the loop is closed and the scheduled cleanup
+            # never runs. ``_async_disconnected_cleanup`` is a no-op for this
+            # field once we clear it below.
+            self._cancel_connection_state = None
+            # A destructor must not raise; suppress everything from the cancel
+            # callback and the logger, both of which can blow up mid-teardown.
+            with contextlib.suppress(Exception):
+                cancel()
+            with contextlib.suppress(Exception):
+                _LOGGER.warning(
                     "%s: ESPHomeClient bleak client was not properly"
-                    " disconnected before destruction"
-                ),
-                self._description,
-            )
-        if not self._loop.is_closed():
+                    " disconnected before destruction",
+                    self._description,
+                )
+        if self._loop.is_closed():
+            return
+        # Loop can close between the ``is_closed`` check above and the
+        # scheduling call; swallow that race.
+        with contextlib.suppress(RuntimeError):
             self._loop.call_soon_threadsafe(self._async_disconnected_cleanup)

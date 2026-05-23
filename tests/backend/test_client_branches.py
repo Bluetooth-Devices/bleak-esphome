@@ -12,6 +12,7 @@ guard clauses.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Iterator
 from typing import Any
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -31,6 +32,7 @@ from aioesphomeapi.core import (
 from bleak import BleakClient
 from bleak.backends.characteristic import BleakGATTCharacteristic
 from bleak.exc import BleakError
+from pytest_asyncio import fixture as aio_fixture
 
 from bleak_esphome.backend.client import ESPHomeClient, ESPHomeClientData
 
@@ -480,28 +482,152 @@ async def test_connect_get_services_failure_disconnects(
     mock_disc.assert_awaited_once()
 
 
+@pytest.fixture
+def mock_logger_warning() -> Iterator[Mock]:
+    """Patch ``_LOGGER.warning`` and yield the mock."""
+    with patch("bleak_esphome.backend.client._LOGGER.warning") as mock:
+        yield mock
+
+
+@aio_fixture
+async def leaked_client(
+    client_data: ESPHomeClientData,
+) -> tuple[ESPHomeClient, Mock]:
+    """Return a client with ``_cancel_connection_state`` set to a Mock."""
+    client = _make_client(client_data)
+    cancel = Mock()
+    client._cancel_connection_state = cancel
+    return client, cancel
+
+
 @pytest.mark.asyncio
-async def test_del_warns_when_subscription_still_active(
+async def test_del_warns_and_cancels_subscription(
+    leaked_client: tuple[ESPHomeClient, Mock],
+    mock_logger_warning: Mock,
+) -> None:
+    """
+    ``__del__`` cancels the lingering subscription and warns about the leak.
+
+    Reaching ``__del__`` with ``_cancel_connection_state`` still set means the
+    bleak client was not properly disconnected before destruction. The cancel
+    callback must fire synchronously so the proxy-side handler is removed even
+    if the scheduled cleanup never runs, and the operator gets a warning.
+    """
+    client, cancel = leaked_client
+
+    client.__del__()
+
+    cancel.assert_called_once_with()
+    mock_logger_warning.assert_called_once()
+    args, _ = mock_logger_warning.call_args
+    assert "not properly" in args[0]
+    assert args[1] == client._description
+    assert client._cancel_connection_state is None
+
+
+@pytest.mark.asyncio
+async def test_del_noop_during_interpreter_shutdown(
+    leaked_client: tuple[ESPHomeClient, Mock],
+    mock_logger_warning: Mock,
+) -> None:
+    """
+    ``__del__`` bails out cleanly when the interpreter is finalizing.
+
+    During shutdown, logging handlers and the event loop may already be torn
+    down; touching them raises ``Exception ignored in __del__`` tracebacks
+    that mask the real cause. The cancel callback must not fire either.
+    """
+    client, cancel = leaked_client
+
+    with patch("bleak_esphome.backend.client.sys.is_finalizing", return_value=True):
+        client.__del__()
+
+    cancel.assert_not_called()
+    mock_logger_warning.assert_not_called()
+    # Cleanup before the implicit ``__del__`` runs on scope exit.
+    client._cancel_connection_state = None
+
+
+@pytest.mark.asyncio
+async def test_del_survives_cancel_failure(
+    leaked_client: tuple[ESPHomeClient, Mock],
+    mock_logger_warning: Mock,
+) -> None:
+    """
+    ``__del__`` swallows exceptions raised by the cancel callback.
+
+    The cancel callback touches APIClient internals that may already be in a
+    broken state during teardown; raising from GC would just turn into an
+    ``Exception ignored in __del__`` traceback.
+    """
+    client, cancel = leaked_client
+    cancel.side_effect = RuntimeError("client gone")
+
+    client.__del__()
+
+    cancel.assert_called_once_with()
+    assert client._cancel_connection_state is None
+
+
+@pytest.mark.asyncio
+async def test_del_survives_logger_failure(
+    leaked_client: tuple[ESPHomeClient, Mock],
+    mock_logger_warning: Mock,
+) -> None:
+    """
+    ``__del__`` swallows logger exceptions raised during shutdown.
+
+    The logging subsystem can raise during interpreter teardown when handlers
+    are gone. The destructor must still clear the subscription instead of
+    propagating an ``Exception ignored in __del__`` traceback.
+    """
+    client, cancel = leaked_client
+    mock_logger_warning.side_effect = RuntimeError("handlers gone")
+
+    client.__del__()
+
+    cancel.assert_called_once_with()
+    assert client._cancel_connection_state is None
+
+
+@pytest.mark.asyncio
+async def test_del_cancels_subscription_when_loop_closed(
+    leaked_client: tuple[ESPHomeClient, Mock],
+    mock_logger_warning: Mock,
+) -> None:
+    """
+    ``__del__`` cancels the subscription even if the loop is already closed.
+
+    Without the synchronous cancel, a closed loop would mean
+    ``call_soon_threadsafe`` is skipped and the proxy-side handler leaks for
+    the lifetime of the persistent ``APIClient``.
+    """
+    client, cancel = leaked_client
+
+    with patch.object(client._loop, "is_closed", return_value=True):
+        client.__del__()
+
+    cancel.assert_called_once_with()
+    assert client._cancel_connection_state is None
+
+
+@pytest.mark.asyncio
+async def test_del_handles_loop_closed_race(
     client_data: ESPHomeClientData,
 ) -> None:
     """
-    ``__del__`` logs a warning when a connection-state subscription lingers.
+    ``__del__`` tolerates the loop closing between the check and scheduling.
 
-    Reaching ``__del__`` with ``_cancel_connection_state`` still set means the
-    bleak client was not properly disconnected before destruction; the warning
-    is the only signal the operator gets that the subscription leaked.
+    ``loop.is_closed()`` can return ``False`` and then ``call_soon_threadsafe``
+    can still raise ``RuntimeError`` if the loop closes in between. The
+    destructor must swallow that race instead of bubbling it from GC.
     """
     client = _make_client(client_data)
-    client._cancel_connection_state = Mock()
+    client._cancel_connection_state = None  # only exercise the scheduling arm
 
-    with patch("bleak_esphome.backend.client._LOGGER.warning") as mock_warning:
-        client.__del__()
-
-    mock_warning.assert_called_once()
-    args, _ = mock_warning.call_args
-    assert "not properly" in args[0]
-    assert args[1] == client._description
-
-    # Clear the subscription so the implicit ``__del__`` that runs when
-    # ``client`` goes out of scope does not emit a second (unpatched) warning.
-    client._cancel_connection_state = None
+    with patch.object(
+        client._loop,
+        "call_soon_threadsafe",
+        side_effect=RuntimeError("loop closed"),
+    ):
+        client.__del__()  # must not raise
