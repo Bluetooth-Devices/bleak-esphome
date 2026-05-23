@@ -40,6 +40,7 @@ class ESPHomeScanner(BaseHaRemoteScanner):
         "_client",
         "_configured_mode",
         "_intent",
+        "_original_configured_mode",
     )
 
     def __init__(self, *args: Any, **kwargs: Any):
@@ -49,6 +50,7 @@ class ESPHomeScanner(BaseHaRemoteScanner):
         self._client: APIClient | None = None
         self._active_window_lock = asyncio.Lock()
         self._configured_mode: BluetoothScanningMode | None = None
+        self._original_configured_mode: BluetoothScanningMode | None = None
         self._intent: BluetoothScanningMode | None = None
 
     @property
@@ -90,6 +92,32 @@ class ESPHomeScanner(BaseHaRemoteScanner):
             client.bluetooth_scanner_set_mode(firmware_mode)
         except APIConnectionError as ex:
             _LOGGER.debug("%s: failed to set scan mode: %s", self.name, ex)
+
+    async def async_restore_configured_mode(self) -> None:
+        """
+        Restore the proxy to the mode it was first observed configured for.
+
+        Called by the integration on Home Assistant shutdown so the proxy
+        does not stay pinned to whatever mode the integration last set
+        (for example PASSIVE while AUTO was in use). The snapshot is
+        taken from the first ``configured_mode`` reported by the firmware
+        and is never updated after that, so it reflects the proxy's
+        natural configuration. If no configured_mode has been observed
+        or no API client is bound, this is a no-op.
+        """
+        client = self._client
+        original = self._original_configured_mode
+        if client is None or original is None:
+            return
+        firmware_mode = (
+            BluetoothScannerMode.ACTIVE
+            if original is BluetoothScanningMode.ACTIVE
+            else BluetoothScannerMode.PASSIVE
+        )
+        try:
+            client.bluetooth_scanner_set_mode(firmware_mode)
+        except APIConnectionError as ex:
+            _LOGGER.debug("%s: failed to restore configured mode: %s", self.name, ex)
 
     def set_bluetooth_device(self, device: ESPHomeBluetoothDevice) -> None:
         """Set the bluetooth device for this scanner."""
@@ -151,6 +179,8 @@ class ESPHomeScanner(BaseHaRemoteScanner):
             self._configured_mode = BluetoothScanningMode.PASSIVE
         else:
             self._configured_mode = None
+        if self._original_configured_mode is None and self._configured_mode is not None:
+            self._original_configured_mode = self._configured_mode
         if state.mode == BluetoothScannerMode.ACTIVE:
             mode: BluetoothScanningMode | None = BluetoothScanningMode.ACTIVE
         elif state.mode == BluetoothScannerMode.PASSIVE:
