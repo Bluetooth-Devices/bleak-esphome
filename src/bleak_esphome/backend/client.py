@@ -33,6 +33,8 @@ from bleak.backends.service import BleakGATTService, BleakGATTServiceCollection
 from bleak.exc import BleakError
 from bluetooth_data_tools import mac_to_int
 
+from .._cancellation import is_spurious_cancellation
+
 if TYPE_CHECKING:
     from collections.abc import Callable, Coroutine
 
@@ -323,8 +325,7 @@ class ESPHomeClient(BaseBleakClient):
                 # connect_future being cancelled externally). Convert
                 # it to a BleakError so bleak_retry_connector's retry
                 # logic can handle it instead of aborting the caller.
-                current_task = asyncio.current_task()
-                if current_task is None or not current_task.cancelling():
+                if is_spurious_cancellation():
                     raise BleakError(
                         f"{self._description}: Connect attempt was cancelled"
                     ) from None
@@ -360,8 +361,7 @@ class ESPHomeClient(BaseBleakClient):
                 # treat a cancellation of connected_future as a normal
                 # connection failure so bleak_retry_connector can retry
                 # rather than letting CancelledError leak to the caller.
-                current_task = asyncio.current_task()
-                if current_task is None or not current_task.cancelling():
+                if is_spurious_cancellation():
                     raise BleakError(
                         f"{self._description}: Connect attempt was cancelled"
                     ) from None
