@@ -431,3 +431,113 @@ async def test_async_request_active_window_restore_runs_under_cancellation(
         await task
     calls = [c.args for c in mock_client.bluetooth_scanner_set_mode.call_args_list]
     assert calls == [(BluetoothScannerMode.ACTIVE,), (BluetoothScannerMode.PASSIVE,)]
+
+
+def test_scanner_tracks_configured_mode(scanner: ESPHomeScanner) -> None:
+    """configured_mode mirrors state.configured_mode from the proxy."""
+    assert scanner.configured_mode is None
+    scanner.async_update_scanner_state(
+        BluetoothScannerStateResponse(
+            state=BluetoothScannerState.RUNNING,
+            mode=BluetoothScannerMode.PASSIVE,
+            configured_mode=BluetoothScannerMode.PASSIVE,
+        )
+    )
+    assert scanner.configured_mode == BluetoothScanningMode.PASSIVE
+    scanner.async_update_scanner_state(
+        BluetoothScannerStateResponse(
+            state=BluetoothScannerState.RUNNING,
+            mode=BluetoothScannerMode.ACTIVE,
+            configured_mode=BluetoothScannerMode.ACTIVE,
+        )
+    )
+    assert scanner.configured_mode == BluetoothScanningMode.ACTIVE
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("intent", "expected_firmware_mode"),
+    [
+        (BluetoothScanningMode.ACTIVE, BluetoothScannerMode.ACTIVE),
+        (BluetoothScanningMode.PASSIVE, BluetoothScannerMode.PASSIVE),
+        (BluetoothScanningMode.AUTO, BluetoothScannerMode.PASSIVE),
+    ],
+)
+async def test_async_set_scanning_mode_sends_firmware_command(
+    scanner: ESPHomeScanner,
+    mock_client: APIClient,
+    intent: BluetoothScanningMode,
+    expected_firmware_mode: BluetoothScannerMode,
+) -> None:
+    """ACTIVE and PASSIVE pass through; AUTO maps to PASSIVE on the firmware."""
+    mock_client.bluetooth_scanner_set_mode = MagicMock()
+    scanner.set_client(mock_client)
+    await scanner.async_set_scanning_mode(intent)
+    assert scanner.requested_mode == intent
+    mock_client.bluetooth_scanner_set_mode.assert_called_once_with(
+        expected_firmware_mode
+    )
+
+
+@pytest.mark.asyncio
+async def test_async_set_scanning_mode_no_client_no_command(
+    scanner: ESPHomeScanner,
+) -> None:
+    """Without a client the intent is stored but no firmware call is made."""
+    await scanner.async_set_scanning_mode(BluetoothScanningMode.AUTO)
+    assert scanner.requested_mode == BluetoothScanningMode.AUTO
+
+
+@pytest.mark.asyncio
+async def test_async_set_scanning_mode_swallows_api_error(
+    scanner: ESPHomeScanner, mock_client: APIClient
+) -> None:
+    """An APIConnectionError during firmware set is logged, intent still applied."""
+    mock_client.bluetooth_scanner_set_mode = MagicMock(
+        side_effect=APIConnectionError("boom")
+    )
+    scanner.set_client(mock_client)
+    await scanner.async_set_scanning_mode(BluetoothScanningMode.AUTO)
+    assert scanner.requested_mode == BluetoothScanningMode.AUTO
+
+
+@pytest.mark.asyncio
+async def test_intent_pins_requested_mode_across_state_updates(
+    scanner: ESPHomeScanner, mock_client: APIClient
+) -> None:
+    """After async_set_scanning_mode(AUTO), firmware state changes don't lower it."""
+    mock_client.bluetooth_scanner_set_mode = MagicMock()
+    scanner.set_client(mock_client)
+    await scanner.async_set_scanning_mode(BluetoothScanningMode.AUTO)
+    scanner.async_update_scanner_state(
+        BluetoothScannerStateResponse(
+            state=BluetoothScannerState.RUNNING,
+            mode=BluetoothScannerMode.PASSIVE,
+            configured_mode=BluetoothScannerMode.PASSIVE,
+        )
+    )
+    assert scanner.requested_mode == BluetoothScanningMode.AUTO
+    assert scanner.current_mode == BluetoothScanningMode.PASSIVE
+    scanner.async_update_scanner_state(
+        BluetoothScannerStateResponse(
+            state=BluetoothScannerState.RUNNING,
+            mode=BluetoothScannerMode.ACTIVE,
+            configured_mode=BluetoothScannerMode.PASSIVE,
+        )
+    )
+    assert scanner.requested_mode == BluetoothScanningMode.AUTO
+    assert scanner.current_mode == BluetoothScanningMode.ACTIVE
+
+
+@pytest.mark.asyncio
+async def test_active_window_restore_uses_intent(
+    scanner: ESPHomeScanner, mock_client: APIClient
+) -> None:
+    """In AUTO the active window restores to PASSIVE even if current_mode flipped."""
+    mock_client.bluetooth_scanner_set_mode = MagicMock()
+    scanner.set_client(mock_client)
+    await scanner.async_set_scanning_mode(BluetoothScanningMode.AUTO)
+    mock_client.bluetooth_scanner_set_mode.reset_mock()
+    assert await scanner.async_request_active_window(0.0) is True
+    calls = [c.args for c in mock_client.bluetooth_scanner_set_mode.call_args_list]
+    assert calls == [(BluetoothScannerMode.ACTIVE,), (BluetoothScannerMode.PASSIVE,)]

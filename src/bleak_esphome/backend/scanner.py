@@ -34,7 +34,13 @@ _LOGGER = logging.getLogger(__name__)
 class ESPHomeScanner(BaseHaRemoteScanner):
     """Scanner for esphome."""
 
-    __slots__ = ("_active_window_lock", "_bluetooth_device", "_client")
+    __slots__ = (
+        "_active_window_lock",
+        "_bluetooth_device",
+        "_client",
+        "_configured_mode",
+        "_intent",
+    )
 
     def __init__(self, *args: Any, **kwargs: Any):
         """Initialize the scanner."""
@@ -42,6 +48,48 @@ class ESPHomeScanner(BaseHaRemoteScanner):
         self._bluetooth_device: ESPHomeBluetoothDevice | None = None
         self._client: APIClient | None = None
         self._active_window_lock = asyncio.Lock()
+        self._configured_mode: BluetoothScanningMode | None = None
+        self._intent: BluetoothScanningMode | None = None
+
+    @property
+    def configured_mode(self) -> BluetoothScanningMode | None:
+        """
+        Return the proxy's configured scanning mode, as last reported.
+
+        Populated from ``BluetoothScannerStateResponse.configured_mode``
+        (aioesphomeapi 45.2.0+). The configured mode is the mode the proxy
+        was set to via ``bluetooth_scanner_set_mode``, distinct from
+        ``current_mode`` which can briefly differ during an on-demand
+        active window. Useful for migrating a previously-configured proxy
+        to a different default the first time it is observed.
+        """
+        return self._configured_mode
+
+    async def async_set_scanning_mode(self, mode: BluetoothScanningMode) -> None:
+        """
+        Set the scanning mode this scanner should run in.
+
+        ``AUTO`` keeps the proxy in PASSIVE on the firmware and relies on
+        habluetooth's auto-mode scheduler to flip it to ACTIVE on demand
+        via :meth:`async_request_active_window`. ``ACTIVE`` and ``PASSIVE``
+        configure the proxy directly. Once called, ``requested_mode`` is
+        pinned to the integration's intent and is no longer overwritten by
+        firmware state updates.
+        """
+        self._intent = mode
+        self.set_requested_mode(mode)
+        client = self._client
+        if client is None:
+            return
+        firmware_mode = (
+            BluetoothScannerMode.ACTIVE
+            if mode is BluetoothScanningMode.ACTIVE
+            else BluetoothScannerMode.PASSIVE
+        )
+        try:
+            client.bluetooth_scanner_set_mode(firmware_mode)
+        except APIConnectionError as ex:
+            _LOGGER.debug("%s: failed to set scan mode: %s", self.name, ex)
 
     def set_bluetooth_device(self, device: ESPHomeBluetoothDevice) -> None:
         """Set the bluetooth device for this scanner."""
@@ -85,19 +133,32 @@ class ESPHomeScanner(BaseHaRemoteScanner):
         """
         Update the scanner state.
 
-        ``state.mode`` reflects the scanner's configured mode (active vs passive)
-        and is reported as the requested mode. ``current_mode`` is only set when
-        ``state.state`` is ``RUNNING`` — IDLE, STARTING, STOPPING, STOPPED, and
-        FAILED all mean the proxy is not actively scanning, regardless of the
-        mode it was configured with.
+        ``state.mode`` is the proxy's current scanning mode, which can flip
+        between ACTIVE and PASSIVE during an on-demand active window even
+        when ``configured_mode`` stays the same. ``current_mode`` is only
+        set when ``state.state`` is ``RUNNING`` — IDLE, STARTING, STOPPING,
+        STOPPED, and FAILED all mean the proxy is not actively scanning.
+
+        ``requested_mode`` reflects the integration's intent once
+        :meth:`async_set_scanning_mode` has been called. Before that, it
+        falls back to ``state.mode`` so callers that never set an explicit
+        intent keep the historical behavior.
         """
+        configured_pb = state.configured_mode
+        if configured_pb == BluetoothScannerMode.ACTIVE:
+            self._configured_mode = BluetoothScanningMode.ACTIVE
+        elif configured_pb == BluetoothScannerMode.PASSIVE:
+            self._configured_mode = BluetoothScanningMode.PASSIVE
+        else:
+            self._configured_mode = None
         if state.mode == BluetoothScannerMode.ACTIVE:
             mode: BluetoothScanningMode | None = BluetoothScanningMode.ACTIVE
         elif state.mode == BluetoothScannerMode.PASSIVE:
             mode = BluetoothScanningMode.PASSIVE
         else:
             mode = None
-        self.set_requested_mode(mode)
+        if self._intent is None:
+            self.set_requested_mode(mode)
         if state.state == BluetoothScannerState.RUNNING:
             self.set_current_mode(mode)
         else:
@@ -129,7 +190,7 @@ class ESPHomeScanner(BaseHaRemoteScanner):
         if self._active_window_lock.locked():
             return False
         async with self._active_window_lock:
-            prior = self.requested_mode
+            prior = self._intent if self._intent is not None else self.requested_mode
             try:
                 client.bluetooth_scanner_set_mode(BluetoothScannerMode.ACTIVE)
             except APIConnectionError as ex:
