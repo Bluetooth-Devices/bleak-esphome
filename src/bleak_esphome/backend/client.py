@@ -6,7 +6,7 @@ import asyncio
 import contextlib
 import logging
 from dataclasses import dataclass, field
-from functools import partial
+from functools import partial, wraps
 from typing import TYPE_CHECKING, Any, Concatenate, ParamSpec, TypeVar
 
 from aioesphomeapi import (
@@ -72,6 +72,7 @@ def api_error_as_bleak_error(
 ) -> Callable[Concatenate[_ESPHomeClient, _P], Coroutine[Any, Any, _R]]:
     """Define a wrapper throw esphome api errors as BleakErrors."""
 
+    @wraps(func)
     async def _async_wrap_bluetooth_operation(
         self: _ESPHomeClient, *args: _P.args, **kwargs: _P.kwargs
     ) -> _R:

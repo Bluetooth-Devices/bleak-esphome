@@ -1,4 +1,5 @@
 import asyncio
+import inspect
 from typing import Any
 from unittest.mock import AsyncMock, Mock, patch
 from uuid import UUID
@@ -35,6 +36,35 @@ PRIMARY_CHAR_UUID = "090b7847-e12b-09a8-b04b-8e0922a9abab"
 INDICATE_CHAR_UUID = "00002a05-0000-1000-8000-00805f9b34fb"
 CCCD_UUID = "00002902-0000-1000-8000-00805f9b34fb"
 BLE_ADDRESS_AS_INT = 225106397622015
+
+
+def test_api_error_decorated_methods_preserve_metadata() -> None:
+    """
+    Decorated GATT methods expose their own name, docstring, and signature.
+
+    ``api_error_as_bleak_error`` must wrap with ``functools.wraps`` so that
+    ``help()``, tracebacks, and signature introspection report the real
+    method instead of the internal error-translation wrapper.
+    """
+    for name in (
+        "connect",
+        "disconnect",
+        "pair",
+        "unpair",
+        "clear_cache",
+        "set_connection_params",
+        "read_gatt_char",
+        "write_gatt_char",
+        "start_notify",
+        "stop_notify",
+    ):
+        method = getattr(ESPHomeClient, name)
+        assert method.__name__ == name
+        assert method.__doc__ is not None
+
+    # The wrapper must not mask the real signature with (*args, **kwargs).
+    params = inspect.signature(ESPHomeClient.connect).parameters
+    assert "pair" in params
 
 
 def test_get_services() -> None:
