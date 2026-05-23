@@ -94,6 +94,7 @@ class APIConnectionManager:
             ESPHomeStartAborted: if ``stop()`` is called before the first
                 successful connect.
             RuntimeError: if ``start()`` has already been called.
+
         """
         if self._reconnect_logic is not None:
             raise RuntimeError(
