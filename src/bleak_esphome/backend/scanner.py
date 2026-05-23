@@ -94,11 +94,8 @@ class ESPHomeScanner(BaseHaRemoteScanner):
         client = self._client
         if client is None:
             return
-        firmware_mode = _HA_TO_FIRMWARE_MODE[mode]
-        if self._configured_mode is _FIRMWARE_TO_HA_MODE[firmware_mode]:
-            return
         try:
-            client.bluetooth_scanner_set_mode(firmware_mode)
+            client.bluetooth_scanner_set_mode(_HA_TO_FIRMWARE_MODE[mode])
         except APIConnectionError as ex:
             _LOGGER.debug("%s: failed to set scan mode: %s", self.name, ex)
 
@@ -164,12 +161,16 @@ class ESPHomeScanner(BaseHaRemoteScanner):
         """
         Flip the proxy to ACTIVE for ``duration`` seconds, then restore.
 
-        Called by habluetooth's auto-mode scheduler. Restores the proxy
-        to whatever mode it last reported via ``async_update_scanner_state``;
-        if the prior mode is unknown the proxy is returned to PASSIVE.
-        Only one window may be open at a time; a request that arrives
-        while another window is in flight returns ``False`` immediately
-        so the caller can decide whether to retry.
+        Called by habluetooth's auto-mode scheduler. The restore mode
+        prefers the integration's pinned intent (set via
+        :meth:`async_set_scanning_mode`) — so AUTO returns to PASSIVE on
+        the firmware even though ``requested_mode`` stays AUTO — and
+        falls back to the last firmware-reported ``requested_mode`` when
+        no intent has been pinned. If no prior mode is known the proxy
+        is returned to PASSIVE. Only one window may be open at a time;
+        a request that arrives while another window is in flight
+        returns ``False`` immediately so the caller can decide whether
+        to retry.
         """
         client = self._client
         if client is None:

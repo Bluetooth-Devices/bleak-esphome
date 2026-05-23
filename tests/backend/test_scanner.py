@@ -486,29 +486,6 @@ def test_async_set_scanning_mode_no_client_no_command(
     assert scanner.requested_mode == BluetoothScanningMode.AUTO
 
 
-def test_async_set_scanning_mode_skips_when_firmware_already_matches(
-    scanner: ESPHomeScanner, mock_client: APIClient
-) -> None:
-    """No wire traffic if the firmware is already configured for the target mode."""
-    mock_client.bluetooth_scanner_set_mode = MagicMock()
-    scanner.set_client(mock_client)
-    scanner.async_update_scanner_state(
-        BluetoothScannerStateResponse(
-            state=BluetoothScannerState.RUNNING,
-            mode=BluetoothScannerMode.PASSIVE,
-            configured_mode=BluetoothScannerMode.PASSIVE,
-        )
-    )
-    # AUTO -> firmware PASSIVE, which the proxy is already in.
-    scanner.async_set_scanning_mode(BluetoothScanningMode.AUTO)
-    mock_client.bluetooth_scanner_set_mode.assert_not_called()
-    # Switching to ACTIVE still sends the command.
-    scanner.async_set_scanning_mode(BluetoothScanningMode.ACTIVE)
-    mock_client.bluetooth_scanner_set_mode.assert_called_once_with(
-        BluetoothScannerMode.ACTIVE
-    )
-
-
 def test_async_set_scanning_mode_swallows_api_error(
     scanner: ESPHomeScanner, mock_client: APIClient
 ) -> None:
