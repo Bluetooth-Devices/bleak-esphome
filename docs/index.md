@@ -7,6 +7,7 @@
 installation
 usage
 architecture
+api
 ```
 
 ```{toctree}
