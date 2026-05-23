@@ -1,5 +1,31 @@
 # Changelog
 
+## v3.8.0 (2026-05-23)
+
+### Features
+
+
+- Implement on-demand active scan window via proxy mode set ([`8b6725f`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/8b6725feec1ebbf10eebe884efc94f319f609334))
+
+
+### Documentation
+
+
+- Correct stale connect() docstring (returns + find_device_by_address) ([`1fc998f`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/1fc998f2780f4cc1e347b1f7cfbf315cc507c466))
+
+
+- Correct misleading docstrings on pair/cache/conn-params ([`ee69d1a`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/ee69d1aef1dc0e2c5b7c19d2c97f28a082488a3d))
+
+
+- Clarify _get_services and stop_notify behavior ([`98ad872`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/98ad872347d8bbd4cb62b5dda8d346227316e4a6))
+
+
+- Correct stale comment and thin docstrings on device/conn-mgr ([`8d5f221`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/8d5f221c0a6d46eba4a3bbeac0b033f56bcad309))
+
+
+- Document that callbacks are ignored in connect_scanner because they auto teardown on connect ([`e0a8e41`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/e0a8e4128e748424b90445602ffa01180c25f7d1))
+
+
 ## v3.7.6 (2026-05-21)
 
 ### Performance improvements
