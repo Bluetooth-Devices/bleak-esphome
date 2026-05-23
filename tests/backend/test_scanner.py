@@ -1,6 +1,10 @@
+import asyncio
+from unittest.mock import MagicMock
+
 import pytest
 from aioesphomeapi import (
     APIClient,
+    APIConnectionError,
     BluetoothLEAdvertisement,
     BluetoothLERawAdvertisement,
     BluetoothLERawAdvertisementsResponse,
@@ -294,3 +298,136 @@ async def test_scanner_get_allocations_matches_callback_format(
     assert pulled.allocated == expected
     assert pushed.allocated == expected
     assert all(isinstance(a, str) for a in pulled.allocated)
+
+
+@pytest.mark.asyncio
+async def test_async_request_active_window_no_client(
+    scanner: ESPHomeScanner,
+) -> None:
+    """Without a bound API client the request is a no-op returning False."""
+    assert await scanner.async_request_active_window(1.0) is False
+
+
+@pytest.mark.asyncio
+async def test_async_request_active_window_flips_then_restores_passive(
+    scanner: ESPHomeScanner, mock_client: APIClient
+) -> None:
+    """A passive scanner is flipped to ACTIVE for the window then restored."""
+    mock_client.bluetooth_scanner_set_mode = MagicMock()
+    scanner.set_client(mock_client)
+    # Start from PASSIVE
+    scanner.async_update_scanner_state(
+        BluetoothScannerStateResponse(
+            state=BluetoothScannerState.RUNNING,
+            mode=BluetoothScannerMode.PASSIVE,
+        )
+    )
+    assert await scanner.async_request_active_window(0.0) is True
+    calls = [c.args for c in mock_client.bluetooth_scanner_set_mode.call_args_list]
+    assert calls == [(BluetoothScannerMode.ACTIVE,), (BluetoothScannerMode.PASSIVE,)]
+
+
+@pytest.mark.asyncio
+async def test_async_request_active_window_restores_active_when_proxy_active(
+    scanner: ESPHomeScanner, mock_client: APIClient
+) -> None:
+    """A proxy already configured ACTIVE returns to ACTIVE after the window."""
+    mock_client.bluetooth_scanner_set_mode = MagicMock()
+    scanner.set_client(mock_client)
+    scanner.async_update_scanner_state(
+        BluetoothScannerStateResponse(
+            state=BluetoothScannerState.RUNNING,
+            mode=BluetoothScannerMode.ACTIVE,
+        )
+    )
+    assert await scanner.async_request_active_window(0.0) is True
+    calls = [c.args for c in mock_client.bluetooth_scanner_set_mode.call_args_list]
+    assert calls == [(BluetoothScannerMode.ACTIVE,), (BluetoothScannerMode.ACTIVE,)]
+
+
+@pytest.mark.asyncio
+async def test_async_request_active_window_set_failure_returns_false(
+    scanner: ESPHomeScanner, mock_client: APIClient
+) -> None:
+    """An APIConnectionError on the entry call yields False; no sleep, no restore."""
+    mock_client.bluetooth_scanner_set_mode = MagicMock(
+        side_effect=APIConnectionError("boom")
+    )
+    scanner.set_client(mock_client)
+    assert await scanner.async_request_active_window(0.0) is False
+    assert mock_client.bluetooth_scanner_set_mode.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_async_request_active_window_rejects_invalid_duration(
+    scanner: ESPHomeScanner, mock_client: APIClient
+) -> None:
+    """Negative or non-finite durations are rejected without touching the proxy."""
+    mock_client.bluetooth_scanner_set_mode = MagicMock()
+    scanner.set_client(mock_client)
+    assert await scanner.async_request_active_window(-1.0) is False
+    assert await scanner.async_request_active_window(float("nan")) is False
+    assert await scanner.async_request_active_window(float("inf")) is False
+    mock_client.bluetooth_scanner_set_mode.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_async_request_active_window_restore_failure_swallowed(
+    scanner: ESPHomeScanner, mock_client: APIClient
+) -> None:
+    """If the restore call fails the window still reports success."""
+    call_count = 0
+
+    def fake_set_mode(_mode: BluetoothScannerMode) -> None:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 2:
+            raise APIConnectionError("restore failed")
+
+    mock_client.bluetooth_scanner_set_mode = MagicMock(side_effect=fake_set_mode)
+    scanner.set_client(mock_client)
+    assert await scanner.async_request_active_window(0.0) is True
+    assert call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_async_request_active_window_rejects_overlap(
+    scanner: ESPHomeScanner, mock_client: APIClient
+) -> None:
+    """A second request while a window is open returns False without flipping."""
+    mock_client.bluetooth_scanner_set_mode = MagicMock()
+    scanner.set_client(mock_client)
+    # Long duration so the first window is still inside asyncio.sleep
+    # when the second request arrives. The lock is held for the whole
+    # sleep, so the second call sees .locked() and fast-fails.
+    first = asyncio.create_task(scanner.async_request_active_window(3600.0))
+    # Wait until the first task has run the entry set_mode call;
+    # next line in the worker is the asyncio.sleep that holds the lock.
+    while mock_client.bluetooth_scanner_set_mode.call_count == 0:
+        await asyncio.sleep(0)
+    assert await scanner.async_request_active_window(0.0) is False
+    # Only the first task has called bluetooth_scanner_set_mode (the entry flip).
+    assert mock_client.bluetooth_scanner_set_mode.call_count == 1
+    first.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await first
+
+
+@pytest.mark.asyncio
+async def test_async_request_active_window_restore_runs_under_cancellation(
+    scanner: ESPHomeScanner, mock_client: APIClient
+) -> None:
+    """Cancelling the task during the window still fires the restore call."""
+    mock_client.bluetooth_scanner_set_mode = MagicMock()
+    scanner.set_client(mock_client)
+    task = asyncio.create_task(scanner.async_request_active_window(3600.0))
+    # Wait until the entry call has fired (worker is now inside the
+    # asyncio.sleep) so the cancel hits the sleep rather than racing
+    # with the entry call's set_mode.
+    while mock_client.bluetooth_scanner_set_mode.call_count == 0:
+        await asyncio.sleep(0)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    calls = [c.args for c in mock_client.bluetooth_scanner_set_mode.call_args_list]
+    assert calls == [(BluetoothScannerMode.ACTIVE,), (BluetoothScannerMode.PASSIVE,)]
