@@ -148,8 +148,14 @@ class ESPHomeScanner(BaseHaRemoteScanner):
         :meth:`async_set_scanning_mode` has been called, otherwise it
         falls back to ``state.mode``.
         """
-        self._configured_mode = _FIRMWARE_TO_HA_MODE.get(state.configured_mode)
-        mode = _FIRMWARE_TO_HA_MODE.get(state.mode)
+        configured_pb = state.configured_mode
+        self._configured_mode = (
+            _FIRMWARE_TO_HA_MODE.get(configured_pb)
+            if configured_pb is not None
+            else None
+        )
+        mode_pb = state.mode
+        mode = _FIRMWARE_TO_HA_MODE.get(mode_pb) if mode_pb is not None else None
         if self._intent is None:
             self.set_requested_mode(mode)
         if state.state == BluetoothScannerState.RUNNING:
@@ -198,7 +204,11 @@ class ESPHomeScanner(BaseHaRemoteScanner):
             try:
                 await asyncio.sleep(duration)
             finally:
-                restore = _HA_TO_FIRMWARE_MODE.get(prior, BluetoothScannerMode.PASSIVE)
+                restore = (
+                    _HA_TO_FIRMWARE_MODE.get(prior, BluetoothScannerMode.PASSIVE)
+                    if prior is not None
+                    else BluetoothScannerMode.PASSIVE
+                )
                 # bluetooth_scanner_set_mode is a sync method that just
                 # queues the request on the API connection and returns
                 # None, so the only failure mode here is an immediate
