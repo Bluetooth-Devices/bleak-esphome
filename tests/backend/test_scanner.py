@@ -637,10 +637,17 @@ def test_restore_configured_mode_swallows_api_error(
     scanner: ESPHomeScanner, mock_client: APIClient
 ) -> None:
     """An APIConnectionError on the restore path is logged, not raised."""
-    mock_client.bluetooth_scanner_set_mode = MagicMock(
-        side_effect=APIConnectionError("boom")
-    )
+    mock_client.bluetooth_scanner_set_mode = MagicMock()
     scanner.set_client(mock_client)
+    # First observation: proxy was configured ACTIVE.
+    scanner.async_update_scanner_state(
+        BluetoothScannerStateResponse(
+            state=BluetoothScannerState.RUNNING,
+            mode=BluetoothScannerMode.ACTIVE,
+            configured_mode=BluetoothScannerMode.ACTIVE,
+        )
+    )
+    # HA moved the proxy to PASSIVE so the restore path will actually fire.
     scanner.async_update_scanner_state(
         BluetoothScannerStateResponse(
             state=BluetoothScannerState.RUNNING,
@@ -648,4 +655,5 @@ def test_restore_configured_mode_swallows_api_error(
             configured_mode=BluetoothScannerMode.PASSIVE,
         )
     )
+    mock_client.bluetooth_scanner_set_mode.side_effect = APIConnectionError("boom")
     scanner.async_restore_configured_mode()
