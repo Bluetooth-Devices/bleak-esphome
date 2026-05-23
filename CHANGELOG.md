@@ -1,5 +1,13 @@
 # Changelog
 
+## v3.9.1 (2026-05-23)
+
+### Bug fixes
+
+
+- Narrow optional before dict.get lookups ([`91d6551`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/91d6551a4e2e63a2345871364ad9f76f3b28ccec))
+
+
 ## v3.9.0 (2026-05-23)
 
 ### Features
