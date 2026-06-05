@@ -437,12 +437,7 @@ async def test_async_request_active_window_restore_runs_under_cancellation(
 async def test_async_request_active_window_honors_midwindow_repin(
     scanner: ESPHomeScanner, mock_client: APIClient
 ) -> None:
-    """A repin during the window is preserved, not reverted to the snapshot.
-
-    ``async_set_scanning_mode`` is synchronous and lock-free, so it can run
-    while a window is open. The restore must honor the live intent rather
-    than the mode snapshotted when the window opened.
-    """
+    """A repin during the window is preserved, not reverted to the snapshot."""
     mock_client.bluetooth_scanner_set_mode = MagicMock()
     scanner.set_client(mock_client)
     # Pin PASSIVE first, so the window's restore snapshot would be PASSIVE.
