@@ -433,6 +433,35 @@ async def test_async_request_active_window_restore_runs_under_cancellation(
     assert calls == [(BluetoothScannerMode.ACTIVE,), (BluetoothScannerMode.PASSIVE,)]
 
 
+@pytest.mark.asyncio
+async def test_async_request_active_window_honors_midwindow_repin(
+    scanner: ESPHomeScanner, mock_client: APIClient
+) -> None:
+    """A repin during the window is preserved, not reverted to the snapshot.
+
+    ``async_set_scanning_mode`` is synchronous and lock-free, so it can run
+    while a window is open. The restore must honor the live intent rather
+    than the mode snapshotted when the window opened.
+    """
+    mock_client.bluetooth_scanner_set_mode = MagicMock()
+    scanner.set_client(mock_client)
+    # Pin PASSIVE first, so the window's restore snapshot would be PASSIVE.
+    scanner.async_set_scanning_mode(BluetoothScanningMode.PASSIVE)
+    task = asyncio.create_task(scanner.async_request_active_window(3600.0))
+    # Wait until the entry ACTIVE flip has fired (worker now in sleep).
+    while mock_client.bluetooth_scanner_set_mode.call_count < 2:
+        await asyncio.sleep(0)
+    # Repin to ACTIVE mid-window.
+    scanner.async_set_scanning_mode(BluetoothScanningMode.ACTIVE)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    # Last call is the finally restore — it must be ACTIVE (the repin),
+    # not PASSIVE (the stale snapshot).
+    last_call = mock_client.bluetooth_scanner_set_mode.call_args_list[-1].args
+    assert last_call == (BluetoothScannerMode.ACTIVE,)
+
+
 def test_scanner_tracks_configured_mode(scanner: ESPHomeScanner) -> None:
     """configured_mode mirrors state.configured_mode from the proxy."""
     assert scanner.configured_mode is None
