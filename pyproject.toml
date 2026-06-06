@@ -34,7 +34,7 @@ script = "build_ext.py"
 [tool.poetry.dependencies]
 python = ">=3.11,<3.15"
 aioesphomeapi = ">=45.2.0"
-bleak = ">=1"
+bleak = ">=3.0.2"
 bluetooth-data-tools = ">=1.18.0"
 habluetooth = ">=6.7.2"
 lru-dict = ">=1.2.0"
