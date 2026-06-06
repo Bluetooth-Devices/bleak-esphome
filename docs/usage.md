@@ -152,7 +152,7 @@ third, host-side mode on top:
 
 - **`PASSIVE`** — the proxy only listens for unsolicited advertisements.
   Lowest radio overhead, but advertisement payloads that a peripheral only
-  emits in a *scan response* (often the local name) are never seen.
+  emits in a _scan response_ (often the local name) are never seen.
 - **`ACTIVE`** — the proxy sends scan requests and collects scan responses,
   so it picks up scan-response-only data at the cost of more airtime.
 - **`AUTO`** — a `habluetooth`-only mode with no firmware equivalent. It maps
@@ -169,7 +169,7 @@ The modes live in `habluetooth.BluetoothScanningMode`.
 Once a scanner is registered with the host-side
 `habluetooth.BluetoothManager`, the manager drives the mode for you — you
 normally don't call anything. When you manage the scanner yourself (see
-*Advanced: wiring `connect_scanner` directly* above), pin a mode explicitly
+_Advanced: wiring `connect_scanner` directly_ above), pin a mode explicitly
 with `async_set_scanning_mode`:
 
 ```python
@@ -192,7 +192,7 @@ firmware if no `APIClient` has been bound (the proxy lacks
 ### Reading the configured firmware mode
 
 `scanner.configured_mode` reports the proxy's last firmware-reported
-*configured* mode (`ACTIVE` / `PASSIVE`, or `None` before the first state
+_configured_ mode (`ACTIVE` / `PASSIVE`, or `None` before the first state
 update). It's intended for one-shot migration logic at setup — for example,
 "if the proxy was configured `ACTIVE`, switch the host option to `AUTO`".
 
@@ -203,7 +203,7 @@ proto3 decodes as the default `PASSIVE` — indistinguishable from an explicit
 
 All of the above requires the proxy to advertise `FEATURE_STATE_AND_MODE`.
 Without it the `APIClient` is never bound to the scanner, so mode requests and
-active-scan windows are silently ignored — see the *Feature Flag Reference*
+active-scan windows are silently ignored — see the _Feature Flag Reference_
 section below.
 
 ## Extension Methods
