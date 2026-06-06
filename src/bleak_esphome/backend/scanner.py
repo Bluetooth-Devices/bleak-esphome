@@ -220,8 +220,10 @@ class ESPHomeScanner(BaseHaRemoteScanner):
             finally:
                 # Honor a live repin (async_set_scanning_mode is sync and
                 # lock-free, so it can land mid-window) over the snapshot
-                # taken when the window opened. Fall back to ``prior`` only
-                # when no intent is pinned (the AUTO case).
+                # taken when the window opened. Fall back to the open-time
+                # snapshot only when no intent was ever pinned — there
+                # requested_mode tracks firmware and reports ACTIVE
+                # mid-window, so a live read would pin ACTIVE forever.
                 target = self._intent if self._intent is not None else prior
                 restore = (
                     _HA_TO_FIRMWARE_MODE.get(target, BluetoothScannerMode.PASSIVE)
