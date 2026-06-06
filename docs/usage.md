@@ -196,15 +196,15 @@ _configured_ mode (`ACTIVE` / `PASSIVE`, or `None` before the first state
 update). It's intended for one-shot migration logic at setup — for example,
 "if the proxy was configured `ACTIVE`, switch the host option to `AUTO`".
 
-Caveat: the underlying proto field shipped in esphome 2025.9.
+Caveat: the underlying proto field shipped in ESPHome 2025.9.
 `FEATURE_STATE_AND_MODE` firmware older than that leaves it unset, which
 proto3 decodes as the default `PASSIVE` — indistinguishable from an explicit
 `PASSIVE` configuration.
 
 All of the above requires the proxy to advertise `FEATURE_STATE_AND_MODE`.
-Without it the `APIClient` is never bound to the scanner, so mode requests and
-active-scan windows are silently ignored — see the _Feature Flag Reference_
-section below.
+Without it the `APIClient` is never bound to the scanner, so mode requests
+have no firmware effect and `async_request_active_window` returns `False`
+instead of opening a window — see the _Feature Flag Reference_ section below.
 
 ## Extension Methods
 
