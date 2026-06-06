@@ -145,6 +145,67 @@ If you also want to override which `disconnect_callbacks` set is used —
 for example, to share one set across several scanners — reassign
 `client_data.disconnect_callbacks` **before** calling `async_setup()`.
 
+## Scanning Modes
+
+The proxy can scan in one of two firmware modes, and `habluetooth` adds a
+third, host-side mode on top:
+
+- **`PASSIVE`** — the proxy only listens for unsolicited advertisements.
+  Lowest radio overhead, but advertisement payloads that a peripheral only
+  emits in a _scan response_ (often the local name) are never seen.
+- **`ACTIVE`** — the proxy sends scan requests and collects scan responses,
+  so it picks up scan-response-only data at the cost of more airtime.
+- **`AUTO`** — a `habluetooth`-only mode with no firmware equivalent. It maps
+  to `PASSIVE` on the proxy; `habluetooth`'s auto-mode scheduler then opens
+  brief `ACTIVE` windows on demand (via `async_request_active_window`) when a
+  device actually needs scan-response data, and restores `PASSIVE` when the
+  window closes. This gives most of `ACTIVE`'s coverage with most of
+  `PASSIVE`'s efficiency.
+
+The modes live in `habluetooth.BluetoothScanningMode`.
+
+### Driving the mode
+
+Once a scanner is registered with the host-side
+`habluetooth.BluetoothManager`, the manager drives the mode for you — you
+normally don't call anything. When you manage the scanner yourself (see
+_Advanced: wiring `connect_scanner` directly_ above), pin a mode explicitly
+with `async_set_scanning_mode`:
+
+```python
+from habluetooth import BluetoothScanningMode
+
+# client_data is the result of bleak_esphome.connect_scanner(...)
+scanner = client_data.scanner
+assert scanner is not None
+
+scanner.async_set_scanning_mode(BluetoothScanningMode.AUTO)
+```
+
+`async_set_scanning_mode` is synchronous: it records the intent, updates
+`requested_mode`, and queues the firmware request on the bound `APIClient`.
+Once called, `requested_mode` is no longer overwritten by incoming firmware
+state updates — your pinned intent wins. The call is a no-op against the
+firmware if no `APIClient` has been bound (the proxy lacks
+`FEATURE_STATE_AND_MODE`); the local intent is still recorded.
+
+### Reading the configured firmware mode
+
+`scanner.configured_mode` reports the proxy's last firmware-reported
+_configured_ mode (`ACTIVE` / `PASSIVE`, or `None` before the first state
+update). It's intended for one-shot migration logic at setup — for example,
+"if the proxy was configured `ACTIVE`, switch the host option to `AUTO`".
+
+Caveat: the underlying proto field shipped in ESPHome 2025.9.
+`FEATURE_STATE_AND_MODE` firmware older than that leaves it unset, which
+proto3 decodes as the default `PASSIVE` — indistinguishable from an explicit
+`PASSIVE` configuration.
+
+All of the above requires the proxy to advertise `FEATURE_STATE_AND_MODE`.
+Without it the `APIClient` is never bound to the scanner, so mode requests
+have no firmware effect and `async_request_active_window` returns `False`
+instead of opening a window — see the _Feature Flag Reference_ section below.
+
 ## Extension Methods
 
 `ESPHomeClient` provides extension methods beyond the standard `BleakClient` interface. These are typically called via `BleakClientWithServiceCache` from `bleak-retry-connector`, which forwards them to `ESPHomeClient`.
