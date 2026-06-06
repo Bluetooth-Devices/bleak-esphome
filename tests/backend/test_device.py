@@ -40,8 +40,17 @@ async def test_wait_for_ble_connections_free_timeout(
     bluetooth_device: ESPHomeBluetoothDevice,
 ) -> None:
     """Waiting with no available slot raises ``TimeoutError`` after deadline."""
-    with pytest.raises(TimeoutError):
+    bluetooth_device.ble_connections_limit = 3
+    bluetooth_device.ble_connections_free = 0
+    with pytest.raises(TimeoutError) as exc_info:
         await bluetooth_device.wait_for_ble_connections_free(0.001)
+    # The timeout must name the saturated proxy and its slot state so the
+    # failure is actionable rather than an anonymous timeout.
+    message = str(exc_info.value)
+    assert "proxy" in message
+    assert "AA:BB:CC:DD:EE:FF" in message
+    assert "limit=3" in message
+    assert "in use=3" in message
     assert bluetooth_device._ble_connection_free_futures == set()
 
 

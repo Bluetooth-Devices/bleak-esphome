@@ -86,7 +86,16 @@ class ESPHomeBluetoothDevice:
     def _wait_for_ble_connections_free_timeout(self, fut: asyncio.Future[int]) -> None:
         """Timeout the wait_for_ble_connections_free future."""
         if not fut.done():
-            fut.set_exception(TimeoutError())
+            # A bare ``TimeoutError()`` surfaces to the bleak consumer with no
+            # context; name the saturated proxy and its current slot state so
+            # the failure is actionable instead of an anonymous timeout.
+            fut.set_exception(
+                TimeoutError(
+                    f"{self.name} [{self.mac_address}]: No free BLE connection "
+                    f"slot became available (limit={self.ble_connections_limit}, "
+                    f"in use={self.ble_connections_limit - self.ble_connections_free})"
+                )
+            )
 
     async def wait_for_ble_connections_free(self, timeout: float) -> int:
         """
