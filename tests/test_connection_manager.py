@@ -207,6 +207,7 @@ async def test_on_connect_registers_scanner_and_resolves_start(
     )
     assert conn_manager._unregister_scanner is unregister_scanner
     assert conn_manager._disconnect_callbacks is mock_client_data.disconnect_callbacks
+    assert conn_manager.scanner is mock_scanner
     assert conn_manager._start_future is not None
     assert conn_manager._start_future.done()
     assert conn_manager._start_future.result() is None
@@ -238,6 +239,71 @@ async def test_on_connect_with_already_done_future_does_not_raise(
 
     # Must not raise InvalidStateError on the already-resolved future.
     await conn_manager._on_connect()
+
+
+@pytest.mark.asyncio
+async def test_scanner_is_none_before_connect(
+    config: ESPHomeDeviceConfig,
+) -> None:
+    """``scanner`` is ``None`` on a freshly constructed manager."""
+    manager = APIConnectionManager(config)
+    assert manager.scanner is None
+
+
+@pytest.mark.asyncio
+async def test_scanner_exposed_after_connect_for_mode_control(
+    conn_manager: APIConnectionManager,
+    patched_scanner_wiring: tuple[Mock, Mock],
+) -> None:
+    """
+    ``scanner`` exposes the registered scanner so callers can pin a mode.
+
+    The high-level manager is the supported entry point; without an
+    accessor the scanning-mode controls (``async_set_scanning_mode`` /
+    ``configured_mode``) on the scanner would be unreachable.
+    """
+    mock_scanner = Mock()
+    mock_client_data = Mock()
+    mock_client_data.scanner = mock_scanner
+    mock_client_data.disconnect_callbacks = set()
+
+    connect_scanner_mock, get_manager_mock = patched_scanner_wiring
+    connect_scanner_mock.return_value = mock_client_data
+    get_manager_mock.return_value = MagicMock()
+
+    assert conn_manager._cli is not None
+    conn_manager._cli.device_info = AsyncMock(return_value=Mock())
+
+    await conn_manager._on_connect()
+
+    assert conn_manager.scanner is mock_scanner
+
+
+@pytest.mark.asyncio
+async def test_scanner_cleared_on_disconnect(
+    conn_manager: APIConnectionManager,
+) -> None:
+    """``_on_disconnect`` clears the exposed scanner reference."""
+    conn_manager._scanner = Mock()
+
+    await conn_manager._on_disconnect(expected_disconnect=True)
+
+    assert conn_manager.scanner is None
+
+
+@pytest.mark.asyncio
+async def test_scanner_cleared_on_stop(
+    conn_manager_with_mocked_reconnect: tuple[APIConnectionManager, Mock, AsyncMock],
+) -> None:
+    """``stop()`` clears the exposed scanner reference."""
+    manager, _mock_reconnect_logic, _mock_disconnect = (
+        conn_manager_with_mocked_reconnect
+    )
+    manager._scanner = Mock()
+
+    await manager.stop()
+
+    assert manager.scanner is None
 
 
 @pytest.mark.asyncio

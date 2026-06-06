@@ -13,6 +13,8 @@ from ._cancellation import is_spurious_cancellation
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from .backend.scanner import ESPHomeScanner
+
 
 class ESPHomeStartAborted(Exception):
     """Raised when ``APIConnectionManager.start()`` is aborted by ``stop()``."""
@@ -44,6 +46,22 @@ class APIConnectionManager:
         self._unregister_scanner: Callable[[], None] | None = None
         self._disconnect_callbacks: set[Callable[[], None]] | None = None
         self._start_future: asyncio.Future[None] | None = None
+        self._scanner: ESPHomeScanner | None = None
+
+    @property
+    def scanner(self) -> ESPHomeScanner | None:
+        """
+        The registered scanner for the current connection, if any.
+
+        Populated once the first connect completes (after :meth:`start`
+        returns) and cleared on disconnect or :meth:`stop`. This is the
+        supported way to reach scanner-level controls from the high-level
+        manager — for example pinning a scanning mode via
+        ``manager.scanner.async_set_scanning_mode(...)`` or reading
+        ``manager.scanner.configured_mode``. Returns ``None`` before the
+        first connect or after a disconnect.
+        """
+        return self._scanner
 
     async def _on_disconnect(self, expected_disconnect: bool) -> None:
         """Handle the disconnection of the API client."""
@@ -56,6 +74,7 @@ class APIConnectionManager:
         if self._unregister_scanner is not None:
             self._unregister_scanner()
             self._unregister_scanner = None
+        self._scanner = None
 
     async def _on_connect(self) -> None:
         """Handle the connection of the API client."""
@@ -66,6 +85,7 @@ class APIConnectionManager:
         client_data = bleak_esphome.connect_scanner(self._cli, device_info, True)
         scanner = client_data.scanner
         assert scanner is not None  # noqa: S101
+        self._scanner = scanner
         scanner.async_setup()
         self._unregister_scanner = habluetooth.get_manager().async_register_scanner(
             scanner
@@ -138,3 +158,4 @@ class APIConnectionManager:
         if self._unregister_scanner is not None:
             self._unregister_scanner()
             self._unregister_scanner = None
+        self._scanner = None
