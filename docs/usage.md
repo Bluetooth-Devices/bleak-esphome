@@ -108,7 +108,7 @@ A few proxy-specific things worth knowing:
   done with so their slots return to the pool.
 - **Pairing requires the `PAIRING` flag.** `BleakClient.pair()` / `unpair()`
   raise `NotImplementedError` against older firmware that does not advertise
-  the flag. See the *Feature Flag Reference* section below.
+  the flag. See the _Feature Flag Reference_ section below.
 
 ## Handling start cancellation
 
