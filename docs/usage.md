@@ -67,6 +67,49 @@ logging.basicConfig(level=logging.DEBUG)
 asyncio.run(run())
 ```
 
+## Connecting to a device
+
+Scanning is only half the story — the point of an active Bluetooth proxy is
+to **connect** to a device and perform GATT operations (read, write, notify)
+over the ESP32. Once a scanner is registered (the example above does this via
+`APIConnectionManager`), you drive connections through `bleak` exactly as you
+would with a local adapter. `bleak_esphome` never appears in this code: the
+`habluetooth` manager transparently routes `bleak`'s `BleakClient` to the
+proxy that can reach the target device.
+
+```python
+import bleak
+
+# Battery Service / Battery Level characteristic.
+BATTERY_LEVEL_UUID = "00002a19-0000-1000-8000-00805f9b34fb"
+
+
+async def read_battery_level(address: str) -> int:
+    """Connect to a device through the proxy and read its battery level."""
+    device = await bleak.BleakScanner.find_device_by_address(address)
+    if device is None:
+        raise RuntimeError(f"{address} not found — is it advertising in range?")
+
+    async with bleak.BleakClient(device) as client:
+        payload = await client.read_gatt_char(BATTERY_LEVEL_UUID)
+        return payload[0]
+```
+
+A few proxy-specific things worth knowing:
+
+- **Connectable proxies only.** A device is reachable for connections only if
+  a proxy advertising the `ACTIVE_CONNECTIONS` feature flag has heard its
+  advertisements. Scan-only proxies can surface the advertisement but not
+  open a GATT link.
+- **Connection slots are finite.** Each proxy exposes a fixed number of
+  simultaneous active connections. When every slot is in use, a new
+  `BleakClient.connect()` waits for one to free up and raises a
+  `TimeoutError` if none does within the timeout. Disconnect clients you are
+  done with so their slots return to the pool.
+- **Pairing requires the `PAIRING` flag.** `BleakClient.pair()` / `unpair()`
+  raise `NotImplementedError` against older firmware that does not advertise
+  the flag. See the *Feature Flag Reference* section below.
+
 ## Handling start cancellation
 
 `APIConnectionManager.start()` blocks until the first successful connection
