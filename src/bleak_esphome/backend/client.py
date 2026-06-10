@@ -730,22 +730,22 @@ class ESPHomeClient(BaseBleakClient):
         """
         Activate notifications/indications on a characteristic.
 
-        Callbacks must accept two inputs. The first will be a integer handle of the
-        characteristic generating the data and the second will be a ``bytearray``
-        containing the data sent from the connected server.
-
-        .. code-block:: python
-            def callback(sender: int, data: bytearray):
-                print(f"{sender}: {data}")
-            client.start_notify(char_uuid, callback)
+        This is a backend method invoked by ``BleakClient.start_notify``;
+        it receives bleak's already-wrapped ``NotifyCallback``
+        (``Callable[[bytearray], None]``), which takes a single argument:
+        the ``bytearray`` of notification data. Bleak binds the originating
+        characteristic before the callback reaches this layer, so unlike the
+        public two-argument ``(sender, data)`` callback there is no handle
+        argument here.
 
         Args:
         ----
             characteristic (BleakGATTCharacteristic):
-                The characteristic to activate notifications/indications on a
-                characteristic, specified by either integer handle, UUID or
-                directly by the BleakGATTCharacteristic object representing it.
-            callback (function): The function to be called on notification.
+                The characteristic to activate notifications/indications on,
+                specified by either integer handle, UUID or directly by the
+                BleakGATTCharacteristic object representing it.
+            callback (NotifyCallback): Called with the notification
+                ``bytearray`` each time the server sends data.
             kwargs: Unused.
 
         """
