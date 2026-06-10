@@ -69,13 +69,10 @@ asyncio.run(run())
 
 ## Connecting to a device
 
-Scanning is only half the story — the point of an active Bluetooth proxy is
-to **connect** to a device and perform GATT operations (read, write, notify)
-over the ESP32. Once a scanner is registered (the example above does this via
-`APIConnectionManager`), you drive connections through `bleak` exactly as you
-would with a local adapter. `bleak_esphome` never appears in this code: the
-`habluetooth` manager transparently routes `bleak`'s `BleakClient` to the
-proxy that can reach the target device.
+Once a scanner is registered (the example above does this via
+`APIConnectionManager`), drive connections through `bleak` directly.
+`bleak_esphome` never appears in caller code: `habluetooth` routes the
+`BleakClient` to the proxy that can reach the target device.
 
 ```python
 import bleak
@@ -95,20 +92,16 @@ async def read_battery_level(address: str) -> int:
         return payload[0]
 ```
 
-A few proxy-specific things worth knowing:
+Proxy-specific caveats:
 
-- **Connectable proxies only.** A device is reachable for connections only if
-  a proxy advertising the `ACTIVE_CONNECTIONS` feature flag has heard its
-  advertisements. Scan-only proxies can surface the advertisement but not
-  open a GATT link.
-- **Connection slots are finite.** Each proxy exposes a fixed number of
-  simultaneous active connections. When every slot is in use, a new
-  `BleakClient.connect()` waits for one to free up and raises a
-  `TimeoutError` if none does within the timeout. Disconnect clients you are
-  done with so their slots return to the pool.
-- **Pairing requires the `PAIRING` flag.** `BleakClient.pair()` / `unpair()`
-  raise `NotImplementedError` against older firmware that does not advertise
-  the flag. See the _Feature Flag Reference_ section below.
+- **Connectable proxies only.** A device is connectable only if a proxy
+  advertising `ACTIVE_CONNECTIONS` heard it. Scan-only proxies surface
+  advertisements but cannot open a GATT link.
+- **Finite connection slots.** `connect()` waits for a free slot and raises
+  `TimeoutError` if none frees within the timeout. Disconnect when done.
+- **Pairing needs the `PAIRING` flag.** `pair()` / `unpair()` raise
+  `NotImplementedError` otherwise. See the _Feature Flag Reference_ section
+  below.
 
 ## Handling start cancellation
 
