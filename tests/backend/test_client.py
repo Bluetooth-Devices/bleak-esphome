@@ -608,6 +608,47 @@ async def test_bleak_client_connect_outer_cancel_without_subscription(
 
 
 @pytest.mark.asyncio
+async def test_bleak_client_connect_outer_base_exception_cleans_up(
+    bleak_pair: tuple[BleakClient, ESPHomeClient],
+) -> None:
+    """A BaseException from the connection future still cleans up."""
+
+    class ConnectBaseException(BaseException):
+        """Sentinel exception that bypasses ``except Exception``."""
+
+    bleak_client, client = bleak_pair
+    original_create_future = client._loop.create_future
+    captured: list[asyncio.Future[bool]] = []
+
+    def capturing_create_future() -> asyncio.Future[bool]:
+        fut = original_create_future()
+        captured.append(fut)
+        return fut
+
+    mock_cancel_connection_state = Mock()
+    with (
+        patch.object(
+            client._client,
+            "bluetooth_device_connect",
+            return_value=mock_cancel_connection_state,
+        ) as mock_connect,
+        patch.object(client._loop, "create_future", capturing_create_future),
+    ):
+        task = asyncio.create_task(bleak_client.connect(dangerous_use_bleak_cache=True))
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        mock_connect.assert_called_once()
+        assert len(captured) == 1
+        captured[0].set_exception(ConnectBaseException())
+        with pytest.raises(ConnectBaseException):
+            await task
+
+    assert not client.is_connected
+    mock_cancel_connection_state.assert_called_once_with()
+    assert client._cancel_connection_state is None
+
+
+@pytest.mark.asyncio
 async def test_bleak_client_connect_get_services_cleanup_shielded(
     bleak_pair: tuple[BleakClient, ESPHomeClient],
 ) -> None:
