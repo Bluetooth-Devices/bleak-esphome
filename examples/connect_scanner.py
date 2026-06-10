@@ -49,39 +49,49 @@ async def run() -> None:
         password=None,
         noise_psk=NOISE_PSK,
     )
-    await cli.connect(login=True)
-    device_info = await cli.device_info()
 
-    # connect_scanner subscribes to the proxy's advertisement, scanner-state,
-    # and connection-slot streams and hands back the wiring.
-    client_data = bleak_esphome.connect_scanner(cli, device_info, available=True)
-    scanner = client_data.scanner
-    if scanner is None:  # pragma: no cover - defensive; always set on success
-        raise RuntimeError("connect_scanner did not return a scanner")
-
-    # Responsibility 1: attach the scanner to the running loop.
-    scanner.async_setup()
-    # Responsibility 2: register the scanner with the host-side manager.
-    unregister_scanner = habluetooth.get_manager().async_register_scanner(scanner)
-
-    # Pin a scanning mode explicitly. AUTO maps to PASSIVE on the proxy and
-    # opens brief ACTIVE windows on demand. This is a no-op against the
-    # firmware if the proxy lacks FEATURE_STATE_AND_MODE; the intent is still
-    # recorded locally.
-    scanner.async_set_scanning_mode(BluetoothScanningMode.AUTO)
-
+    # Wrap the whole setup+scan sequence so teardown runs even if connect(),
+    # device_info(), connect_scanner(), or registration raises. Each cleanup
+    # step is guarded so only successfully initialized resources are released.
+    client_data = None
+    unregister_scanner = None
     try:
+        await cli.connect(login=True)
+        device_info = await cli.device_info()
+
+        # connect_scanner subscribes to the proxy's advertisement,
+        # scanner-state, and connection-slot streams and hands back the wiring.
+        client_data = bleak_esphome.connect_scanner(cli, device_info, available=True)
+        scanner = client_data.scanner
+        if scanner is None:  # pragma: no cover - defensive; always set on success
+            raise RuntimeError("connect_scanner did not return a scanner")
+
+        # Responsibility 1: attach the scanner to the running loop.
+        scanner.async_setup()
+        # Responsibility 2: register the scanner with the host-side manager.
+        unregister_scanner = habluetooth.get_manager().async_register_scanner(scanner)
+
+        # Pin a scanning mode explicitly. AUTO maps to PASSIVE on the proxy and
+        # opens brief ACTIVE windows on demand. This is a no-op against the
+        # firmware if the proxy lacks FEATURE_STATE_AND_MODE; the intent is
+        # still recorded locally.
+        scanner.async_set_scanning_mode(BluetoothScanningMode.AUTO)
+
         # Use bleak normally — discovery is fed by the proxy's advertisements.
-        await asyncio.sleep(SCAN_SECONDS)
-        devices = await bleak.BleakScanner.discover(return_adv=True)
+        # The discovery window is exactly SCAN_SECONDS.
+        devices = await bleak.BleakScanner.discover(
+            timeout=SCAN_SECONDS, return_adv=True
+        )
         for device, adv in devices.values():
             print(f"{device} (rssi={adv.rssi})")
     finally:
         # Responsibility 3: fire the disconnect callbacks (snapshot the set —
         # each callback removes itself), then un-register and disconnect.
-        for callback in list(client_data.disconnect_callbacks):
-            callback()
-        unregister_scanner()
+        if client_data is not None:
+            for callback in list(client_data.disconnect_callbacks):
+                callback()
+        if unregister_scanner is not None:
+            unregister_scanner()
         await cli.disconnect()
 
 
