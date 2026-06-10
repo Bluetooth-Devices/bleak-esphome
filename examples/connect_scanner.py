@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from typing import TYPE_CHECKING
 
 import bleak
 import habluetooth
@@ -32,6 +33,13 @@ from aioesphomeapi import APIClient
 from habluetooth import BluetoothScanningMode
 
 import bleak_esphome
+
+if TYPE_CHECKING:
+    from habluetooth.const import CALLBACK_TYPE
+
+    from bleak_esphome.backend.client import ESPHomeClientData
+
+_LOGGER = logging.getLogger(__name__)
 
 DEVICE_ADDRESS = "XXXX.local."
 NOISE_PSK: str | None = None
@@ -53,8 +61,8 @@ async def run() -> None:
     # Wrap the whole setup+scan sequence so teardown runs even if connect(),
     # device_info(), connect_scanner(), or registration raises. Each cleanup
     # step is guarded so only successfully initialized resources are released.
-    client_data = None
-    unregister_scanner = None
+    client_data: ESPHomeClientData | None = None
+    unregister_scanner: CALLBACK_TYPE | None = None
     try:
         await cli.connect(login=True)
         device_info = await cli.device_info()
@@ -86,12 +94,20 @@ async def run() -> None:
             print(f"{device} (rssi={adv.rssi})")
     finally:
         # Responsibility 3: fire the disconnect callbacks (snapshot the set —
-        # each callback removes itself), then un-register and disconnect.
+        # each callback removes itself). Guard each one so a single bad
+        # callback cannot abort the rest of teardown, and keep un-register and
+        # disconnect in their own guarded steps so they always run.
         if client_data is not None:
             for callback in list(client_data.disconnect_callbacks):
-                callback()
+                try:
+                    callback()
+                except Exception:
+                    _LOGGER.exception("disconnect callback failed")
         if unregister_scanner is not None:
-            unregister_scanner()
+            try:
+                unregister_scanner()
+            except Exception:
+                _LOGGER.exception("scanner un-registration failed")
         await cli.disconnect()
 
 
