@@ -1,5 +1,16 @@
 # Changelog
 
+## v3.9.3 (2026-06-10)
+
+### Bug fixes
+
+
+- Warn when scanner-mode control is unsupported ([`880980a`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/880980a9f93fe92cd05ed11f06f80b49a21fadcf))
+
+
+- Add context to ble connection-slot timeout ([`e3418ff`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/e3418ff2f9070174da95dfd7a0da2343c7c895a1))
+
+
 ## v3.9.2 (2026-06-10)
 
 ### Bug fixes
