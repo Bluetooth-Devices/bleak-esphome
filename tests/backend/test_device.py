@@ -47,7 +47,7 @@ async def test_wait_for_ble_connections_free_timeout(
     # The timeout must name the saturated proxy and its slot state so the
     # failure is actionable rather than an anonymous timeout.
     message = str(exc_info.value)
-    assert "proxy" in message
+    assert bluetooth_device.name in message
     assert "AA:BB:CC:DD:EE:FF" in message
     assert "limit=3" in message
     assert "in use=3" in message
