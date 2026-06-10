@@ -67,6 +67,42 @@ logging.basicConfig(level=logging.DEBUG)
 asyncio.run(run())
 ```
 
+## Connecting to a device
+
+Once a scanner is registered (the example above does this via
+`APIConnectionManager`), drive connections through `bleak` directly.
+`bleak_esphome` never appears in caller code: `habluetooth` routes the
+`BleakClient` to the proxy that can reach the target device.
+
+```python
+import bleak
+
+# Battery Service / Battery Level characteristic.
+BATTERY_LEVEL_UUID = "00002a19-0000-1000-8000-00805f9b34fb"
+
+
+async def read_battery_level(address: str) -> int:
+    """Connect to a device through the proxy and read its battery level."""
+    device = await bleak.BleakScanner.find_device_by_address(address)
+    if device is None:
+        raise RuntimeError(f"{address} not found — is it advertising in range?")
+
+    async with bleak.BleakClient(device) as client:
+        payload = await client.read_gatt_char(BATTERY_LEVEL_UUID)
+        return payload[0]
+```
+
+Proxy-specific caveats:
+
+- **Connectable proxies only.** A device is connectable only if a proxy
+  advertising `ACTIVE_CONNECTIONS` heard it. Scan-only proxies surface
+  advertisements but cannot open a GATT link.
+- **Finite connection slots.** `connect()` waits for a free slot and raises
+  `TimeoutError` if none frees within the timeout. Disconnect when done.
+- **Pairing needs the `PAIRING` flag.** `pair()` / `unpair()` raise
+  `NotImplementedError` otherwise. See the _Feature Flag Reference_ section
+  below.
+
 ## Handling start cancellation
 
 `APIConnectionManager.start()` blocks until the first successful connection
