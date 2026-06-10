@@ -1,5 +1,22 @@
 # Changelog
 
+## v3.9.2 (2026-06-10)
+
+### Bug fixes
+
+
+- Add disconnection handling ([`22c9314`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/22c931422779ccf2d90126c24babad624d4fe7ea))
+
+
+### Documentation
+
+
+- Correct connect() default timeout to 30.0s ([`a0fa1be`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/a0fa1be94d03427dfd7e638181346fc8d3dbcc1e))
+
+
+- Document scanning modes and async_set_scanning_mode ([`d49b37f`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/d49b37f38eb3fd5def9062e3bbcfe61af0e714b4))
+
+
 ## v3.9.1 (2026-05-23)
 
 ### Bug fixes
