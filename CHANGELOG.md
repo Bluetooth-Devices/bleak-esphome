@@ -1,5 +1,19 @@
 # Changelog
 
+## v3.9.4 (2026-06-10)
+
+### Bug fixes
+
+
+- Honor mid-window repin on active-window restore ([`1b0fef5`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/1b0fef5263d1b122a84d0e6bbd8799a335c5b0c9))
+
+
+### Documentation
+
+
+- Add a connecting to a device gatt example to usage ([`e2060d3`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/e2060d3a0df6ad7781527719d679354076887fc5))
+
+
 ## v3.9.3 (2026-06-10)
 
 ### Bug fixes
