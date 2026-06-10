@@ -480,10 +480,14 @@ def test_async_set_scanning_mode_sends_firmware_command(
 
 def test_async_set_scanning_mode_no_client_no_command(
     scanner: ESPHomeScanner,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Without a client the intent is stored but no firmware call is made."""
-    scanner.async_set_scanning_mode(BluetoothScanningMode.AUTO)
+    with caplog.at_level("WARNING"):
+        scanner.async_set_scanning_mode(BluetoothScanningMode.AUTO)
     assert scanner.requested_mode == BluetoothScanningMode.AUTO
+    assert "does not support runtime scanner-mode control" in caplog.text
+    assert "AUTO" in caplog.text
 
 
 def test_async_set_scanning_mode_swallows_api_error(
