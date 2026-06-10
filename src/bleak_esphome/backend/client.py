@@ -284,7 +284,9 @@ class ESPHomeClient(BaseBleakClient):
             **kwargs:
                 timeout (float): Timeout for the underlying
                     ``bluetooth_device_connect`` call. Defaults to the
-                    instance ``_timeout`` (10.0s by default).
+                    instance ``_timeout``, which is seeded from
+                    ``DEFAULT_TIMEOUT`` (30.0s) when no ``timeout`` is
+                    passed to the constructor.
 
         """
         await self._wait_for_free_connection_slot(CONNECT_FREE_SLOT_TIMEOUT)
