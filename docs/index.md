@@ -8,6 +8,7 @@ installation
 usage
 architecture
 api
+troubleshooting
 ```
 
 ```{toctree}
