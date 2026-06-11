@@ -400,13 +400,15 @@ async def test_bleak_client_connect_inner_cancelled_raises_bleak_error(
     cancelled, ``connect`` should raise a ``BleakError`` instead.
     """
     bleak_client, _client = bleak_pair
-    with patch.object(
-        _client._client,
-        "bluetooth_device_connect",
-        side_effect=asyncio.CancelledError(),
+    with (
+        patch.object(
+            _client._client,
+            "bluetooth_device_connect",
+            side_effect=asyncio.CancelledError(),
+        ),
+        pytest.raises(BleakError, match="cancelled"),
     ):
-        with pytest.raises(BleakError, match="cancelled"):
-            await bleak_client.connect(dangerous_use_bleak_cache=True)
+        await bleak_client.connect(dangerous_use_bleak_cache=True)
 
     assert not _client.is_connected
 
@@ -491,13 +493,15 @@ async def test_bleak_client_connect_raises_when_device_connect_raises(
     ``connected_future`` must be cancelled to avoid leaking it.
     """
     bleak_client, client = bleak_pair
-    with patch.object(
-        client._client,
-        "bluetooth_device_connect",
-        side_effect=APIConnectionError("boom"),
+    with (
+        patch.object(
+            client._client,
+            "bluetooth_device_connect",
+            side_effect=APIConnectionError("boom"),
+        ),
+        pytest.raises(BleakError, match="boom"),
     ):
-        with pytest.raises(BleakError, match="boom"):
-            await bleak_client.connect(dangerous_use_bleak_cache=True)
+        await bleak_client.connect(dangerous_use_bleak_cache=True)
 
     assert not client.is_connected
 
@@ -526,13 +530,15 @@ async def test_bleak_client_connect_raises_after_connected_future_resolved(
         on_bluetooth_connection_state(False, 0, 0)
         raise APIConnectionError("boom")
 
-    with patch.object(
-        client._client,
-        "bluetooth_device_connect",
-        side_effect=_fire_callback_then_raise,
+    with (
+        patch.object(
+            client._client,
+            "bluetooth_device_connect",
+            side_effect=_fire_callback_then_raise,
+        ),
+        pytest.raises(BleakError, match="boom"),
     ):
-        with pytest.raises(BleakError, match="boom"):
-            await bleak_client.connect(dangerous_use_bleak_cache=True)
+        await bleak_client.connect(dangerous_use_bleak_cache=True)
 
     assert not client.is_connected
 
@@ -562,13 +568,15 @@ async def test_bleak_client_connect_inner_cancelled_drains_resolved_future(
         on_bluetooth_connection_state(False, 0, 0)
         raise asyncio.CancelledError()
 
-    with patch.object(
-        client._client,
-        "bluetooth_device_connect",
-        side_effect=_fire_callback_then_cancel,
+    with (
+        patch.object(
+            client._client,
+            "bluetooth_device_connect",
+            side_effect=_fire_callback_then_cancel,
+        ),
+        pytest.raises(BleakError, match="cancelled"),
     ):
-        with pytest.raises(BleakError, match="cancelled"):
-            await bleak_client.connect(dangerous_use_bleak_cache=True)
+        await bleak_client.connect(dangerous_use_bleak_cache=True)
 
     assert not client.is_connected
 
