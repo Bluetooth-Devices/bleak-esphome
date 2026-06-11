@@ -141,8 +141,8 @@ If `APIConnectionManager.start()` is in flight when you call `stop()`,
 `start()` raises `ESPHomeStartAborted` rather than letting a bare
 `CancelledError` propagate. This preserves `TaskGroup` and
 `asyncio.timeout()` semantics — the typed exception means "we asked it to
-stop", not "the surrounding task was cancelled". See the *Handling start
-cancellation* section in {ref}`usage` for the catch pattern.
+stop", not "the surrounding task was cancelled". See the _Handling start
+cancellation_ section in {ref}`usage` for the catch pattern.
 
 If you _do_ see `CancelledError` from `start()`, your awaiting task was
 cancelled from somewhere else — `bleak-esphome` re-raises in that case so
