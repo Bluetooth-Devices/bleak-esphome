@@ -402,7 +402,15 @@ class ESPHomeClient(BaseBleakClient):
                         await disconnect_task
             raise
         except Exception:
-            await self._disconnect()
+            # Best-effort cleanup: release the BLE connection on the ESP
+            # side, but never let a disconnect failure mask the original
+            # connect error. The original exception is the actionable one
+            # for the caller and bleak_retry_connector's retry logic; a
+            # failing cleanup disconnect would otherwise replace it. This
+            # mirrors the CancelledError branch above, which also
+            # suppresses disconnect errors during cleanup.
+            with contextlib.suppress(Exception):
+                await self._disconnect()
             raise
 
     @api_error_as_bleak_error

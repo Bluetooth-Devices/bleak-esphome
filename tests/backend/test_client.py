@@ -728,7 +728,7 @@ async def test_bleak_client_connect_get_services_failure_preserves_error(
     cleanup branch. This asserts the surfaced ``BleakError`` carries the
     original failure, not the disconnect error.
     """
-    bleak_client, client = bleak_pair
+    _bleak_client, client = bleak_pair
 
     async def _boom_get_services(*args: Any, **kwargs: Any) -> Any:
         raise BleakError("original get_services failure")
