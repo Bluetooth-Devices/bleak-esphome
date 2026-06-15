@@ -41,7 +41,7 @@ lru-dict = ">=1.2.0"
 bleak-retry-connector = ">=4.6.1"
 
 [tool.poetry.group.dev.dependencies]
-pytest = ">=9.0.3,<10"
+pytest = ">=9.1.0,<10"
 pytest-cov = ">=3,<8"
 pytest-codspeed = "^5.0.3"
 zeroconf = ">=0.149.7,<0.150.0"
