@@ -714,6 +714,52 @@ async def test_bleak_client_connect_get_services_cleanup_shielded(
 
 
 @pytest.mark.asyncio
+async def test_bleak_client_connect_get_services_failure_preserves_error(
+    bleak_pair: tuple[BleakClient, ESPHomeClient],
+) -> None:
+    """
+    A cleanup-disconnect failure must not mask the original connect error.
+
+    When ``_get_services`` raises after the link is up, ``connect`` runs
+    ``await self._disconnect()`` to release the slot on the ESP side. If
+    that cleanup disconnect itself fails, the original ``_get_services``
+    error is the actionable one for the caller and retry logic — the
+    disconnect failure must be suppressed, mirroring the ``CancelledError``
+    cleanup branch. This asserts the surfaced ``BleakError`` carries the
+    original failure, not the disconnect error.
+    """
+    _bleak_client, client = bleak_pair
+
+    async def _boom_get_services(*args: Any, **kwargs: Any) -> Any:
+        raise BleakError("original get_services failure")
+
+    with (
+        patch.object(
+            client._client,
+            "bluetooth_device_connect",
+            return_value=Mock(),
+        ) as mock_connect,
+        patch.object(client, "_get_services", side_effect=_boom_get_services),
+        patch.object(
+            client._client,
+            "bluetooth_device_disconnect",
+            side_effect=APIConnectionError("cleanup disconnect failed"),
+        ),
+    ):
+        task = asyncio.create_task(
+            client.connect(pair=False, dangerous_use_bleak_cache=True)
+        )
+        await asyncio.sleep(0)
+        callback = mock_connect.call_args_list[0][0][1]
+        callback(True, 23, 0)
+        with pytest.raises(BleakError) as exc_info:
+            await task
+
+    assert "original get_services failure" in str(exc_info.value)
+    assert "cleanup disconnect failed" not in str(exc_info.value)
+
+
+@pytest.mark.asyncio
 async def test_bleak_client_connect_wait_for_connection_slot(
     client_data: ESPHomeClientData,
     esphome_bluetooth_gatt_services: ESPHomeBluetoothGATTServices,
