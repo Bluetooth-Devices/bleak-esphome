@@ -1,5 +1,19 @@
 # Changelog
 
+## v3.9.5 (2026-06-20)
+
+### Bug fixes
+
+
+- Don't let cleanup disconnect mask the connect error ([`35474b5`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/35474b5a53ef97b9b95913025d4f71a36862214d))
+
+
+### Documentation
+
+
+- Add low-level connect_scanner runnable example ([`f9c5c47`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/f9c5c4712e61896f8f1ad205c3ed31015114d1d8))
+
+
 ## v3.9.4 (2026-06-10)
 
 ### Bug fixes
