@@ -760,6 +760,102 @@ async def test_bleak_client_connect_get_services_failure_preserves_error(
 
 
 @pytest.mark.asyncio
+async def test_bleak_client_connect_pair_failure_releases_slot(
+    bleak_pair: tuple[BleakClient, ESPHomeClient],
+) -> None:
+    """
+    A pairing failure during ``connect(pair=True)`` must release the link.
+
+    The pairing step runs after the GATT link is established. If it fails,
+    ``connect`` must still disconnect on the ESP side so the connection slot
+    is not leaked, mirroring the ``_get_services`` cleanup path. This asserts
+    the pairing ``BleakError`` propagates and that a cleanup disconnect ran.
+    """
+    _bleak_client, client = bleak_pair
+
+    with (
+        patch.object(
+            client._client,
+            "bluetooth_device_connect",
+            return_value=Mock(),
+        ) as mock_connect,
+        patch.object(
+            client._client,
+            "bluetooth_device_pair",
+            return_value=BluetoothDevicePairing(
+                address=client._address_as_int,
+                paired=False,
+                error=1,
+            ),
+        ),
+        patch.object(
+            client._client,
+            "bluetooth_device_disconnect",
+        ) as mock_disconnect,
+    ):
+        task = asyncio.create_task(
+            client.connect(pair=True, dangerous_use_bleak_cache=True)
+        )
+        await asyncio.sleep(0)
+        callback = mock_connect.call_args_list[0][0][1]
+        callback(True, 23, 0)
+        with pytest.raises(BleakError, match="Pairing failed"):
+            await task
+
+    mock_disconnect.assert_called_once()
+    assert not client.is_connected
+
+
+@pytest.mark.asyncio
+async def test_bleak_client_connect_pair_failure_preserves_error(
+    bleak_pair: tuple[BleakClient, ESPHomeClient],
+) -> None:
+    """
+    A cleanup-disconnect failure must not mask the original pairing error.
+
+    When pairing fails after the link is up, ``connect`` runs
+    ``await self._disconnect()`` to release the slot. If that cleanup
+    disconnect itself fails, the original pairing error is the actionable
+    one for the caller — the disconnect failure must be suppressed, mirroring
+    the ``_get_services`` cleanup branch.
+    """
+    _bleak_client, client = bleak_pair
+
+    with (
+        patch.object(
+            client._client,
+            "bluetooth_device_connect",
+            return_value=Mock(),
+        ) as mock_connect,
+        patch.object(
+            client._client,
+            "bluetooth_device_pair",
+            return_value=BluetoothDevicePairing(
+                address=client._address_as_int,
+                paired=False,
+                error=1,
+            ),
+        ),
+        patch.object(
+            client._client,
+            "bluetooth_device_disconnect",
+            side_effect=APIConnectionError("cleanup disconnect failed"),
+        ),
+    ):
+        task = asyncio.create_task(
+            client.connect(pair=True, dangerous_use_bleak_cache=True)
+        )
+        await asyncio.sleep(0)
+        callback = mock_connect.call_args_list[0][0][1]
+        callback(True, 23, 0)
+        with pytest.raises(BleakError) as exc_info:
+            await task
+
+    assert "Pairing failed" in str(exc_info.value)
+    assert "cleanup disconnect failed" not in str(exc_info.value)
+
+
+@pytest.mark.asyncio
 async def test_bleak_client_connect_wait_for_connection_slot(
     client_data: ESPHomeClientData,
     esphome_bluetooth_gatt_services: ESPHomeBluetoothGATTServices,
