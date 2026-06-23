@@ -128,6 +128,7 @@ select = [
     "G",       # flake8-logging-format
     "RET",     # flake8-return
     "FURB",    # refurb: modernize stdlib usage
+    "SIM",     # flake8-simplify
 ]
 
 [tool.ruff.lint.per-file-ignores]
