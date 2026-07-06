@@ -148,13 +148,15 @@ class ESPHomeScanner(BaseHaRemoteScanner):
         """
         Bind the callable that re-sends the advertisement subscription.
 
-        Setting it arms the subscription watchdog started by
-        :meth:`async_setup`: if the proxy never reports scanner state, the
+        Must be called before :meth:`async_setup`; the watchdog is started
+        there, only if a callback is already bound, so binding one later
+        has no effect. If the proxy never reports scanner state, the
         subscription was silently rejected (the device's single subscriber
         slot was still held by a stale connection) and ``callback`` is
-        invoked to try again. Only meaningful for proxies that advertise
-        ``FEATURE_STATE_AND_MODE``; older firmware never reports scanner
-        state, so the watchdog would resubscribe forever.
+        invoked to try again; its return value (the unsubscribe callable
+        from aioesphomeapi) is ignored. Only meaningful for proxies that
+        advertise ``FEATURE_STATE_AND_MODE``; older firmware never reports
+        scanner state, so the watchdog would resubscribe forever.
         """
         self._resubscribe_advertisements = callback
 

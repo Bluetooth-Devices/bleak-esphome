@@ -400,7 +400,7 @@ async def test_start_twice_raises_runtime_error() -> None:
 
 
 @pytest.mark.asyncio
-async def test_on_disconnect_unsets_up_scanner_when_set_up(
+async def test_on_disconnect_runs_scanner_unsetup(
     conn_manager: APIConnectionManager,
 ) -> None:
     """``_on_disconnect`` calls the scanner unsetup callback and clears it."""
@@ -414,7 +414,7 @@ async def test_on_disconnect_unsets_up_scanner_when_set_up(
 
 
 @pytest.mark.asyncio
-async def test_stop_unsets_up_scanner_if_set_up(
+async def test_stop_runs_scanner_unsetup(
     conn_manager_with_mocked_reconnect: tuple[APIConnectionManager, Mock, AsyncMock],
 ) -> None:
     """``stop`` calls the scanner unsetup callback and clears it."""
