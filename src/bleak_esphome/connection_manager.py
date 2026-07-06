@@ -46,6 +46,15 @@ class APIConnectionManager:
         self._disconnect_callbacks: set[Callable[[], None]] | None = None
         self._start_future: asyncio.Future[None] | None = None
 
+    def _teardown_scanner(self) -> None:
+        """Unset up and unregister the scanner if wired."""
+        if self._unsetup_scanner is not None:
+            self._unsetup_scanner()
+            self._unsetup_scanner = None
+        if self._unregister_scanner is not None:
+            self._unregister_scanner()
+            self._unregister_scanner = None
+
     async def _on_disconnect(self, expected_disconnect: bool) -> None:
         """Handle the disconnection of the API client."""
         if self._disconnect_callbacks is not None:
@@ -54,12 +63,7 @@ class APIConnectionManager:
             for callback in list(self._disconnect_callbacks):
                 callback()
             self._disconnect_callbacks = None
-        if self._unsetup_scanner is not None:
-            self._unsetup_scanner()
-            self._unsetup_scanner = None
-        if self._unregister_scanner is not None:
-            self._unregister_scanner()
-            self._unregister_scanner = None
+        self._teardown_scanner()
 
     async def _on_connect(self) -> None:
         """Handle the connection of the API client."""
@@ -139,9 +143,4 @@ class APIConnectionManager:
             await self._cli.disconnect()
         if self._start_future is not None and not self._start_future.done():
             self._start_future.cancel()
-        if self._unsetup_scanner is not None:
-            self._unsetup_scanner()
-            self._unsetup_scanner = None
-        if self._unregister_scanner is not None:
-            self._unregister_scanner()
-            self._unregister_scanner = None
+        self._teardown_scanner()

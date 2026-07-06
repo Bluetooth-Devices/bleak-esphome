@@ -1,4 +1,5 @@
 import asyncio
+from collections.abc import Callable
 from unittest.mock import MagicMock
 
 import pytest
@@ -568,25 +569,36 @@ async def test_active_window_restore_uses_intent(
     assert calls == [(BluetoothScannerMode.ACTIVE,), (BluetoothScannerMode.PASSIVE,)]
 
 
+_RUNNING_PASSIVE_STATE = BluetoothScannerStateResponse(
+    state=BluetoothScannerState.RUNNING,
+    mode=BluetoothScannerMode.PASSIVE,
+)
+
+
+def _arm_watchdog(
+    scanner: ESPHomeScanner,
+    monkeypatch: pytest.MonkeyPatch,
+    resubscribe: MagicMock,
+) -> tuple[asyncio.Task[None], Callable[[], None]]:
+    """Arm the resubscribe watchdog with zero retry delay and set up."""
+    monkeypatch.setattr(scanner_module, "_SUBSCRIPTION_RETRY_DELAYS", (0.0,))
+    scanner.set_resubscribe_advertisements(resubscribe)
+    unsetup = scanner.async_setup()
+    task = scanner._subscription_watchdog_task
+    assert task is not None
+    return task, unsetup
+
+
 @pytest.mark.asyncio
 async def test_subscription_watchdog_resubscribes_until_state_seen(
     scanner: ESPHomeScanner, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The watchdog re-sends the subscribe until scanner state arrives."""
-    monkeypatch.setattr(scanner_module, "_SUBSCRIPTION_RETRY_DELAYS", (0.0,))
     resubscribe = MagicMock()
-    scanner.set_resubscribe_advertisements(resubscribe)
-    unsetup = scanner.async_setup()
-    task = scanner._subscription_watchdog_task
-    assert task is not None
+    task, unsetup = _arm_watchdog(scanner, monkeypatch, resubscribe)
     while resubscribe.call_count < 2:
         await asyncio.sleep(0)
-    scanner.async_update_scanner_state(
-        BluetoothScannerStateResponse(
-            state=BluetoothScannerState.RUNNING,
-            mode=BluetoothScannerMode.PASSIVE,
-        )
-    )
+    scanner.async_update_scanner_state(_RUNNING_PASSIVE_STATE)
     await asyncio.wait_for(task, timeout=1)
     unsetup()
 
@@ -596,19 +608,10 @@ async def test_subscription_watchdog_no_retry_when_state_seen(
     scanner: ESPHomeScanner, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """State arriving before the first delay means no resubscribe at all."""
-    monkeypatch.setattr(scanner_module, "_SUBSCRIPTION_RETRY_DELAYS", (0.0,))
     resubscribe = MagicMock()
-    scanner.set_resubscribe_advertisements(resubscribe)
-    unsetup = scanner.async_setup()
-    task = scanner._subscription_watchdog_task
-    assert task is not None
+    task, unsetup = _arm_watchdog(scanner, monkeypatch, resubscribe)
     # Delivered before the watchdog task gets its first slice of the loop.
-    scanner.async_update_scanner_state(
-        BluetoothScannerStateResponse(
-            state=BluetoothScannerState.RUNNING,
-            mode=BluetoothScannerMode.PASSIVE,
-        )
-    )
+    scanner.async_update_scanner_state(_RUNNING_PASSIVE_STATE)
     await asyncio.wait_for(task, timeout=1)
     resubscribe.assert_not_called()
     unsetup()
@@ -626,14 +629,11 @@ async def test_subscription_watchdog_not_started_without_callback(
 
 @pytest.mark.asyncio
 async def test_subscription_watchdog_cancelled_on_unsetup(
-    scanner: ESPHomeScanner,
+    scanner: ESPHomeScanner, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Unsetup cancels the watchdog while it is parked in its first delay."""
+    """Unsetup cancels the watchdog before it ever runs."""
     resubscribe = MagicMock()
-    scanner.set_resubscribe_advertisements(resubscribe)
-    unsetup = scanner.async_setup()
-    task = scanner._subscription_watchdog_task
-    assert task is not None
+    task, unsetup = _arm_watchdog(scanner, monkeypatch, resubscribe)
     unsetup()
     assert scanner._subscription_watchdog_task is None
     with pytest.raises(asyncio.CancelledError):
@@ -646,12 +646,8 @@ async def test_subscription_watchdog_stops_on_api_error(
     scanner: ESPHomeScanner, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A dead connection ends the watchdog; the reconnect flow takes over."""
-    monkeypatch.setattr(scanner_module, "_SUBSCRIPTION_RETRY_DELAYS", (0.0,))
     resubscribe = MagicMock(side_effect=APIConnectionError("connection lost"))
-    scanner.set_resubscribe_advertisements(resubscribe)
-    unsetup = scanner.async_setup()
-    task = scanner._subscription_watchdog_task
-    assert task is not None
+    task, unsetup = _arm_watchdog(scanner, monkeypatch, resubscribe)
     await asyncio.wait_for(task, timeout=1)
     resubscribe.assert_called_once()
     unsetup()
