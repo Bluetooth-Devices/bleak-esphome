@@ -12,6 +12,7 @@ guard clauses.
 from __future__ import annotations
 
 import asyncio
+import gc
 from collections.abc import Iterator
 from typing import Any
 from unittest.mock import AsyncMock, Mock, patch
@@ -485,6 +486,13 @@ async def test_connect_get_services_failure_disconnects(
 @pytest.fixture
 def mock_logger_warning() -> Iterator[Mock]:
     """Patch ``_LOGGER.warning`` and yield the mock."""
+    # Flush pending finalizers before patching so a leaked ``ESPHomeClient``
+    # from an earlier test (one whose ``__del__`` logs the "not properly
+    # disconnected" warning) is collected against the real logger rather than
+    # this mock. CPython's cyclic collector can defer such finalizers into an
+    # unrelated test; on Python 3.14 that lands here and fails the
+    # ``assert_not_called`` destructor assertions.
+    gc.collect()
     with patch("bleak_esphome.backend.client._LOGGER.warning") as mock:
         yield mock
 
