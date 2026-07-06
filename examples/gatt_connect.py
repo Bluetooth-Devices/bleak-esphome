@@ -73,9 +73,7 @@ async def run() -> None:
     try:
         # Bounded wait: an offline proxy times out instead of hanging forever.
         start_tasks = [asyncio.create_task(conn.start()) for conn in connections]
-        done, pending = await asyncio.wait(
-            start_tasks, timeout=CONNECTION_TIMEOUT
-        )
+        done, pending = await asyncio.wait(start_tasks, timeout=CONNECTION_TIMEOUT)
         # A proxy still pending on timeout is unreachable — cancel it so its
         # coroutine can't outlive teardown or leak a late "never retrieved"
         # exception warning.
