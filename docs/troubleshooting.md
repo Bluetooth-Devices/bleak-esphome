@@ -19,6 +19,7 @@ client's `api_version` and read the value:
 ```python
 from aioesphomeapi import BluetoothProxyFeature
 
+# device_info: the DeviceInfo you fetched; cli: the connected APIClient
 flags = device_info.bluetooth_proxy_feature_flags_compat(cli.api_version)
 for flag in BluetoothProxyFeature:
     print(f"{flag.name}: {bool(flags & flag.value)}")
