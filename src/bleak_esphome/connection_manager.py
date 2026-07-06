@@ -48,12 +48,18 @@ class APIConnectionManager:
 
     def _teardown_scanner(self) -> None:
         """Unset up and unregister the scanner if wired."""
-        if self._unsetup_scanner is not None:
-            self._unsetup_scanner()
-            self._unsetup_scanner = None
-        if self._unregister_scanner is not None:
-            self._unregister_scanner()
-            self._unregister_scanner = None
+        unsetup = self._unsetup_scanner
+        unregister = self._unregister_scanner
+        self._unsetup_scanner = None
+        self._unregister_scanner = None
+        try:
+            if unsetup is not None:
+                unsetup()
+        finally:
+            # The unregister must run even if unsetup raises; skipping it
+            # would leak the scanner registration in habluetooth's manager.
+            if unregister is not None:
+                unregister()
 
     async def _on_disconnect(self, expected_disconnect: bool) -> None:
         """Handle the disconnection of the API client."""

@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from collections.abc import Callable
 from unittest.mock import MagicMock
 
@@ -651,3 +652,42 @@ async def test_subscription_watchdog_stops_on_api_error(
     await asyncio.wait_for(task, timeout=1)
     resubscribe.assert_called_once()
     unsetup()
+
+
+@pytest.mark.asyncio
+async def test_subscription_watchdog_swallows_unexpected_error(
+    scanner: ESPHomeScanner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unexpected resubscribe error ends the watchdog without an orphan."""
+    resubscribe = MagicMock(side_effect=ValueError("boom"))
+    task, unsetup = _arm_watchdog(scanner, monkeypatch, resubscribe)
+    await asyncio.wait_for(task, timeout=1)
+    assert task.exception() is None
+    resubscribe.assert_called_once()
+    unsetup()
+
+
+@pytest.mark.asyncio
+async def test_subscription_watchdog_deescalates_to_debug(
+    scanner: ESPHomeScanner,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Retries past the escalation phase log at debug, not warning."""
+    resubscribe = MagicMock()
+    with caplog.at_level(logging.DEBUG, logger="bleak_esphome.backend.scanner"):
+        task, unsetup = _arm_watchdog(scanner, monkeypatch, resubscribe)
+        while resubscribe.call_count < 4:
+            await asyncio.sleep(0)
+        scanner.async_update_scanner_state(_RUNNING_PASSIVE_STATE)
+        await asyncio.wait_for(task, timeout=1)
+    unsetup()
+    records = [
+        record
+        for record in caplog.records
+        if "No scanner state received" in record.message
+    ]
+    assert len(records) >= 4
+    # One retry delay is patched in, so only the first attempt warns.
+    assert [r for r in records if r.levelno == logging.WARNING] == records[:1]
+    assert all(r.levelno == logging.DEBUG for r in records[1:])

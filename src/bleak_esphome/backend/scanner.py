@@ -186,7 +186,16 @@ class ESPHomeScanner(BaseHaRemoteScanner):
             await asyncio.sleep(delay)
             if self._scanner_state_seen:
                 return
-            _LOGGER.warning(
+            # Warn while a stale subscriber is expected to still hold the slot
+            # (the device reaps it within ~150s); past that the fault is
+            # persistent and repeating the warning every retry forever would
+            # just be log spam, so de-escalate to debug.
+            log = (
+                _LOGGER.warning
+                if attempt < len(_SUBSCRIPTION_RETRY_DELAYS)
+                else _LOGGER.debug
+            )
+            log(
                 "%s: No scanner state received %ss after subscribing; the device "
                 "likely still has a stale advertisement subscriber from a "
                 "previous connection; resubscribing",
@@ -199,6 +208,14 @@ class ESPHomeScanner(BaseHaRemoteScanner):
                 # The connection is gone; the reconnect flow builds a new
                 # scanner with its own watchdog.
                 _LOGGER.debug("%s: failed to resubscribe: %s", self.name, ex)
+                return
+            except Exception:
+                # The task is fire-and-forget, so without this an unexpected
+                # error would only surface as "Task exception was never
+                # retrieved" at GC time.
+                _LOGGER.exception(
+                    "%s: unexpected error resubscribing advertisements", self.name
+                )
                 return
             attempt += 1
 

@@ -426,3 +426,22 @@ async def test_stop_unsets_up_scanner_if_set_up(
 
     unsetup.assert_called_once_with()
     assert cast(Callable[[], None] | None, manager._unsetup_scanner) is None
+
+
+@pytest.mark.asyncio
+async def test_teardown_scanner_unregisters_even_if_unsetup_raises(
+    conn_manager: APIConnectionManager,
+) -> None:
+    """A raising unsetup must not skip the unregister or leave stale refs."""
+    unsetup = Mock(side_effect=RuntimeError("boom"))
+    unregister = Mock()
+    conn_manager._unsetup_scanner = unsetup
+    conn_manager._unregister_scanner = unregister
+
+    with pytest.raises(RuntimeError, match="boom"):
+        conn_manager._teardown_scanner()
+
+    unsetup.assert_called_once_with()
+    unregister.assert_called_once_with()
+    assert cast(Callable[[], None] | None, conn_manager._unsetup_scanner) is None
+    assert cast(Callable[[], None] | None, conn_manager._unregister_scanner) is None
