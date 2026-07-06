@@ -42,6 +42,7 @@ class APIConnectionManager:
         self._cli: APIClient | None = None
         self._reconnect_logic: ReconnectLogic | None = None
         self._unregister_scanner: Callable[[], None] | None = None
+        self._unsetup_scanner: Callable[[], None] | None = None
         self._disconnect_callbacks: set[Callable[[], None]] | None = None
         self._start_future: asyncio.Future[None] | None = None
 
@@ -53,6 +54,9 @@ class APIConnectionManager:
             for callback in list(self._disconnect_callbacks):
                 callback()
             self._disconnect_callbacks = None
+        if self._unsetup_scanner is not None:
+            self._unsetup_scanner()
+            self._unsetup_scanner = None
         if self._unregister_scanner is not None:
             self._unregister_scanner()
             self._unregister_scanner = None
@@ -66,7 +70,7 @@ class APIConnectionManager:
         client_data = bleak_esphome.connect_scanner(self._cli, device_info, True)
         scanner = client_data.scanner
         assert scanner is not None  # noqa: S101
-        scanner.async_setup()
+        self._unsetup_scanner = scanner.async_setup()
         self._unregister_scanner = habluetooth.get_manager().async_register_scanner(
             scanner
         )
@@ -135,6 +139,9 @@ class APIConnectionManager:
             await self._cli.disconnect()
         if self._start_future is not None and not self._start_future.done():
             self._start_future.cancel()
+        if self._unsetup_scanner is not None:
+            self._unsetup_scanner()
+            self._unsetup_scanner = None
         if self._unregister_scanner is not None:
             self._unregister_scanner()
             self._unregister_scanner = None

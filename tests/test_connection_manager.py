@@ -397,3 +397,32 @@ async def test_start_twice_raises_runtime_error() -> None:
         await manager.stop()
         with pytest.raises(ESPHomeStartAborted):
             await start_task
+
+
+@pytest.mark.asyncio
+async def test_on_disconnect_unsets_up_scanner_when_set_up(
+    conn_manager: APIConnectionManager,
+) -> None:
+    """``_on_disconnect`` calls the scanner unsetup callback and clears it."""
+    unsetup = Mock()
+    conn_manager._unsetup_scanner = unsetup
+
+    await conn_manager._on_disconnect(expected_disconnect=True)
+
+    unsetup.assert_called_once_with()
+    assert cast(Callable[[], None] | None, conn_manager._unsetup_scanner) is None
+
+
+@pytest.mark.asyncio
+async def test_stop_unsets_up_scanner_if_set_up(
+    conn_manager_with_mocked_reconnect: tuple[APIConnectionManager, Mock, AsyncMock],
+) -> None:
+    """``stop`` calls the scanner unsetup callback and clears it."""
+    manager, _, _ = conn_manager_with_mocked_reconnect
+    unsetup = Mock()
+    manager._unsetup_scanner = unsetup
+
+    await manager.stop()
+
+    unsetup.assert_called_once_with()
+    assert cast(Callable[[], None] | None, manager._unsetup_scanner) is None

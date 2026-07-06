@@ -77,3 +77,38 @@ async def test_can_connect_unavailable() -> None:
     device = ESPHomeBluetoothDevice("proxy", "AA:BB:CC:DD:EE:FF", available=False)
     device.ble_connections_free = 2
     assert _can_connect(device, "AA:BB:CC:DD:EE:FF") is False
+
+
+@pytest.mark.asyncio
+async def test_connect_arms_subscription_watchdog(
+    mock_client: APIClient, mock_device_info: DeviceInfo
+) -> None:
+    """RAW_ADVERTISEMENTS with FEATURE_STATE_AND_MODE arms the resubscribe."""
+    client_data = connect_scanner(mock_client, mock_device_info, available=True)
+    scanner = client_data.scanner
+    assert scanner is not None
+    assert scanner._resubscribe_advertisements is not None
+    mock_client.subscribe_bluetooth_le_raw_advertisements.assert_called_once()
+    # The armed callback re-issues the exact same subscribe call.
+    scanner._resubscribe_advertisements()
+    assert mock_client.subscribe_bluetooth_le_raw_advertisements.call_count == 2
+    first, second = mock_client.subscribe_bluetooth_le_raw_advertisements.call_args_list
+    assert first == second
+
+
+@pytest.mark.asyncio
+async def test_connect_no_watchdog_without_state_and_mode(
+    mock_client: APIClient, mock_device_info: DeviceInfo
+) -> None:
+    """Without FEATURE_STATE_AND_MODE there is no signal, so no watchdog."""
+    info = dataclasses.replace(
+        mock_device_info,
+        bluetooth_proxy_feature_flags=(
+            BluetoothProxyFeature.PASSIVE_SCAN
+            | BluetoothProxyFeature.RAW_ADVERTISEMENTS
+        ),
+    )
+    client_data = connect_scanner(mock_client, info, available=True)
+    scanner = client_data.scanner
+    assert scanner is not None
+    assert scanner._resubscribe_advertisements is None

@@ -21,6 +21,7 @@ from habluetooth import (
     get_manager,
 )
 
+from bleak_esphome.backend import scanner as scanner_module
 from bleak_esphome.backend.client import ESPHomeClientData
 from bleak_esphome.backend.device import ESPHomeBluetoothDevice
 from bleak_esphome.backend.scanner import ESPHomeScanner
@@ -565,3 +566,92 @@ async def test_active_window_restore_uses_intent(
     assert await scanner.async_request_active_window(0.0) is True
     calls = [c.args for c in mock_client.bluetooth_scanner_set_mode.call_args_list]
     assert calls == [(BluetoothScannerMode.ACTIVE,), (BluetoothScannerMode.PASSIVE,)]
+
+
+@pytest.mark.asyncio
+async def test_subscription_watchdog_resubscribes_until_state_seen(
+    scanner: ESPHomeScanner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The watchdog re-sends the subscribe until scanner state arrives."""
+    monkeypatch.setattr(scanner_module, "_SUBSCRIPTION_RETRY_DELAYS", (0.0,))
+    resubscribe = MagicMock()
+    scanner.set_resubscribe_advertisements(resubscribe)
+    unsetup = scanner.async_setup()
+    task = scanner._subscription_watchdog_task
+    assert task is not None
+    while resubscribe.call_count < 2:
+        await asyncio.sleep(0)
+    scanner.async_update_scanner_state(
+        BluetoothScannerStateResponse(
+            state=BluetoothScannerState.RUNNING,
+            mode=BluetoothScannerMode.PASSIVE,
+        )
+    )
+    await asyncio.wait_for(task, timeout=1)
+    unsetup()
+
+
+@pytest.mark.asyncio
+async def test_subscription_watchdog_no_retry_when_state_seen(
+    scanner: ESPHomeScanner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """State arriving before the first delay means no resubscribe at all."""
+    monkeypatch.setattr(scanner_module, "_SUBSCRIPTION_RETRY_DELAYS", (0.0,))
+    resubscribe = MagicMock()
+    scanner.set_resubscribe_advertisements(resubscribe)
+    unsetup = scanner.async_setup()
+    task = scanner._subscription_watchdog_task
+    assert task is not None
+    # Delivered before the watchdog task gets its first slice of the loop.
+    scanner.async_update_scanner_state(
+        BluetoothScannerStateResponse(
+            state=BluetoothScannerState.RUNNING,
+            mode=BluetoothScannerMode.PASSIVE,
+        )
+    )
+    await asyncio.wait_for(task, timeout=1)
+    resubscribe.assert_not_called()
+    unsetup()
+
+
+@pytest.mark.asyncio
+async def test_subscription_watchdog_not_started_without_callback(
+    scanner: ESPHomeScanner,
+) -> None:
+    """No resubscribe callback (older firmware) means no watchdog task."""
+    unsetup = scanner.async_setup()
+    assert scanner._subscription_watchdog_task is None
+    unsetup()
+
+
+@pytest.mark.asyncio
+async def test_subscription_watchdog_cancelled_on_unsetup(
+    scanner: ESPHomeScanner,
+) -> None:
+    """Unsetup cancels the watchdog while it is parked in its first delay."""
+    resubscribe = MagicMock()
+    scanner.set_resubscribe_advertisements(resubscribe)
+    unsetup = scanner.async_setup()
+    task = scanner._subscription_watchdog_task
+    assert task is not None
+    unsetup()
+    assert scanner._subscription_watchdog_task is None
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    resubscribe.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_subscription_watchdog_stops_on_api_error(
+    scanner: ESPHomeScanner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A dead connection ends the watchdog; the reconnect flow takes over."""
+    monkeypatch.setattr(scanner_module, "_SUBSCRIPTION_RETRY_DELAYS", (0.0,))
+    resubscribe = MagicMock(side_effect=APIConnectionError("connection lost"))
+    scanner.set_resubscribe_advertisements(resubscribe)
+    unsetup = scanner.async_setup()
+    task = scanner._subscription_watchdog_task
+    assert task is not None
+    await asyncio.wait_for(task, timeout=1)
+    resubscribe.assert_called_once()
+    unsetup()
