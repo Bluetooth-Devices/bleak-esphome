@@ -72,10 +72,21 @@ async def run() -> None:
     await habluetooth.BluetoothManager().async_setup()
     try:
         # Bounded wait: an offline proxy times out instead of hanging forever.
-        await asyncio.wait(
-            [asyncio.create_task(conn.start()) for conn in connections],
-            timeout=CONNECTION_TIMEOUT,
+        start_tasks = [asyncio.create_task(conn.start()) for conn in connections]
+        done, pending = await asyncio.wait(
+            start_tasks, timeout=CONNECTION_TIMEOUT
         )
+        # A proxy still pending on timeout is unreachable — cancel it so its
+        # coroutine can't outlive teardown or leak a late "never retrieved"
+        # exception warning.
+        for task in pending:
+            task.cancel()
+        await asyncio.gather(*pending, return_exceptions=True)
+        # asyncio.wait swallows task exceptions; re-raise so a failed start()
+        # (e.g. a misconfigured proxy) surfaces instead of a misleading later
+        # "device not found".
+        for task in done:
+            task.result()
         # Let the proxies hear advertisements before we look up the device.
         await asyncio.sleep(SCAN_SECONDS)
 
