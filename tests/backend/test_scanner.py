@@ -658,12 +658,15 @@ async def test_subscription_watchdog_stops_on_api_error(
 async def test_subscription_watchdog_swallows_unexpected_error(
     scanner: ESPHomeScanner, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """An unexpected resubscribe error ends the watchdog without an orphan."""
+    """Unexpected resubscribe errors are logged and retried, not fatal."""
     resubscribe = MagicMock(side_effect=ValueError("boom"))
     task, unsetup = _arm_watchdog(scanner, monkeypatch, resubscribe)
+    while resubscribe.call_count < 3:
+        await asyncio.sleep(0)
+    # Still retrying despite every attempt raising; state ends it cleanly.
+    scanner.async_update_scanner_state(_RUNNING_PASSIVE_STATE)
     await asyncio.wait_for(task, timeout=1)
     assert task.exception() is None
-    resubscribe.assert_called_once()
     unsetup()
 
 
@@ -691,3 +694,30 @@ async def test_subscription_watchdog_deescalates_to_debug(
     # One retry delay is patched in, so only the first attempt warns.
     assert [r for r in records if r.levelno == logging.WARNING] == records[:1]
     assert all(r.levelno == logging.DEBUG for r in records[1:])
+
+
+@pytest.mark.asyncio
+async def test_subscription_watchdog_rewarns_periodically(
+    scanner: ESPHomeScanner,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A persistent fault re-warns every Nth retry instead of going silent."""
+    resubscribe = MagicMock()
+    interval = scanner_module._PERSISTENT_WARN_INTERVAL
+    with caplog.at_level(logging.DEBUG, logger="bleak_esphome.backend.scanner"):
+        task, unsetup = _arm_watchdog(scanner, monkeypatch, resubscribe)
+        while resubscribe.call_count < interval + 1:
+            await asyncio.sleep(0)
+        scanner.async_update_scanner_state(_RUNNING_PASSIVE_STATE)
+        await asyncio.wait_for(task, timeout=1)
+    unsetup()
+    warnings = [
+        record
+        for record in caplog.records
+        if "No scanner state received" in record.message
+        and record.levelno == logging.WARNING
+    ]
+    # One retry delay is patched in, so attempt 0 warns (escalation phase)
+    # and attempt `interval` warns again (periodic re-warn).
+    assert len(warnings) == 2

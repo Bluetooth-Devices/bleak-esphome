@@ -41,6 +41,11 @@ _LOGGER = logging.getLogger(__name__)
 # The last delay repeats.
 _SUBSCRIPTION_RETRY_DELAYS = (10.0, 30.0, 60.0)
 
+# Once past the expected reap window the fault is persistent; re-warn only
+# every Nth retry (~10 minutes at the steady 60s cadence) so it stays
+# visible at the default log level without flooding the log.
+_PERSISTENT_WARN_INTERVAL = 10
+
 # Firmware (BluetoothScannerMode) -> habluetooth (BluetoothScanningMode).
 _FIRMWARE_TO_HA_MODE: dict[BluetoothScannerMode, BluetoothScanningMode] = {
     BluetoothScannerMode.ACTIVE: BluetoothScanningMode.ACTIVE,
@@ -189,12 +194,13 @@ class ESPHomeScanner(BaseHaRemoteScanner):
             if self._scanner_state_seen:
                 return
             # Warn while a stale subscriber is expected to still hold the slot
-            # (the device reaps it within ~150s); past that the fault is
-            # persistent and repeating the warning every retry forever would
-            # just be log spam, so de-escalate to debug.
+            # (the device reaps it within ~150s), then periodically so a
+            # persistent fault stays visible at the default log level without
+            # warning on every retry.
             log = (
                 _LOGGER.warning
                 if attempt < len(_SUBSCRIPTION_RETRY_DELAYS)
+                or attempt % _PERSISTENT_WARN_INTERVAL == 0
                 else _LOGGER.debug
             )
             log(
@@ -212,13 +218,17 @@ class ESPHomeScanner(BaseHaRemoteScanner):
                 _LOGGER.debug("%s: failed to resubscribe: %s", self.name, ex)
                 return
             except Exception:
-                # The task is fire-and-forget, so without this an unexpected
-                # error would only surface as "Task exception was never
-                # retrieved" at GC time.
-                _LOGGER.exception(
-                    "%s: unexpected error resubscribing advertisements", self.name
+                # Keep retrying: the connection is still alive and nothing
+                # else re-arms the watchdog, so giving up here would leave
+                # the subscription silently unrecovered. Logging is throttled
+                # by the same warn/debug cadence as the retry message; the
+                # handler also keeps a fire-and-forget task's error from
+                # surfacing only as "Task exception was never retrieved".
+                log(
+                    "%s: unexpected error resubscribing advertisements",
+                    self.name,
+                    exc_info=True,
                 )
-                return
             attempt += 1
 
     def get_allocations(self) -> Allocations | None:
@@ -256,6 +266,13 @@ class ESPHomeScanner(BaseHaRemoteScanner):
         :meth:`async_set_scanning_mode` has been called, otherwise it
         falls back to ``state.mode``.
         """
+        # Load-bearing invariant for the subscription watchdog: the firmware
+        # sends BluetoothScannerStateResponse only to the connection that
+        # holds the advertisement subscriber slot (the immediate reply to a
+        # successful subscribe, then state-change pushes); the client's
+        # subscribe_bluetooth_scanner_state only registers a local handler
+        # and sends nothing. Reaching this line therefore proves the
+        # advertisement subscription landed.
         self._scanner_state_seen = True
         configured_pb = state.configured_mode
         self._configured_mode = (
