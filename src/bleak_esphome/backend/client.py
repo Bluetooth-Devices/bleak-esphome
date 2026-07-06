@@ -374,10 +374,9 @@ class ESPHomeClient(BaseBleakClient):
                 self._async_disconnected_cleanup()
                 raise
 
-        if pair:
-            await self._pair()
-
         try:
+            if pair:
+                await self._pair()
             await self._get_services(
                 dangerous_use_bleak_cache=dangerous_use_bleak_cache
             )
