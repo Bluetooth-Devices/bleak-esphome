@@ -1,5 +1,34 @@
 # Changelog
 
+## v3.9.6 (2026-07-06)
+
+### Documentation
+
+
+- Add runnable gatt connect-and-read example ([`d3d0964`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/d3d09647eae2d61fec2ab3708eaff9b521657a5b))
+
+
+- Fix start_notify callback signature in docstring ([`d6d9e01`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/d6d9e01de4f7f47898b599a4e86fcbaa022366d4))
+
+
+### Bug fixes
+
+
+- Release link when pairing fails during connect ([`9a39089`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/9a3908967cd1d9f6af23fdfe03ba402181a86249))
+
+
+### Testing
+
+
+- Cover feature-flag negotiation positive paths ([`abf7273`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/abf7273c80721bc9c83627b3865da2aff221a00f))
+
+
+### Code style
+
+
+- Enable ruff sim family and flatten nested with-statements ([`2af0189`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/2af01890dc4ea7d018a378b8d6a8f1d5ae03e124))
+
+
 ## v3.9.5 (2026-06-20)
 
 ### Bug fixes
