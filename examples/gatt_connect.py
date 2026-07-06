@@ -32,6 +32,8 @@ from bleak_esphome import APIConnectionManager, ESPHomeDeviceConfig
 
 # Give the proxy time to hear the target device advertise before connecting.
 SCAN_SECONDS = 10
+# Bound proxy startup so an unreachable proxy fails fast instead of hanging.
+CONNECTION_TIMEOUT = 5
 # Address (or UUID on macOS) of the BLE device you want to talk to.
 TARGET_ADDRESS = "AA:BB:CC:DD:EE:FF"
 # Battery Service / Battery Level characteristic — swap for your own UUID.
@@ -69,14 +71,26 @@ async def run() -> None:
     # The host-side manager must exist before any scanner is registered.
     await habluetooth.BluetoothManager().async_setup()
     try:
-        await asyncio.gather(*(conn.start() for conn in connections))
+        # Bounded wait: an offline proxy times out instead of hanging forever.
+        await asyncio.wait(
+            [asyncio.create_task(conn.start()) for conn in connections],
+            timeout=CONNECTION_TIMEOUT,
+        )
         # Let the proxies hear advertisements before we look up the device.
         await asyncio.sleep(SCAN_SECONDS)
 
         level = await read_battery_level(TARGET_ADDRESS)
         print(f"{TARGET_ADDRESS} battery level: {level}%")
     finally:
-        await asyncio.gather(*(conn.stop() for conn in connections))
+        # return_exceptions keeps a stop() failure from masking the real error.
+        results = await asyncio.gather(
+            *(conn.stop() for conn in connections), return_exceptions=True
+        )
+        for result in results:
+            if isinstance(result, Exception):
+                logging.getLogger(__name__).warning(
+                    "Error stopping proxy connection: %s", result
+                )
 
 
 logging.basicConfig(level=logging.DEBUG)
