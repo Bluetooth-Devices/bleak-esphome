@@ -26,9 +26,25 @@ from habluetooth import Allocations, BluetoothScanningMode
 from habluetooth.base_scanner import BaseHaRemoteScanner
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from .device import ESPHomeBluetoothDevice
 
 _LOGGER = logging.getLogger(__name__)
+
+# The firmware answers a successful advertisement subscription with an
+# immediate BluetoothScannerStateResponse (both shipped in esphome 2025.5
+# with FEATURE_STATE_AND_MODE). If none arrives, the subscription was
+# silently rejected because a stale connection from a previous session
+# still holds the device's single subscriber slot; the device reaps such
+# connections via its keepalive after ~150s, so retry until one lands.
+# The last delay repeats.
+_SUBSCRIPTION_RETRY_DELAYS = (10.0, 30.0, 60.0)
+
+# Once past the expected reap window the fault is persistent; re-warn only
+# every Nth retry (~10 minutes at the steady 60s cadence) so it stays
+# visible at the default log level without flooding the log.
+_PERSISTENT_WARN_INTERVAL = 10
 
 # Firmware (BluetoothScannerMode) -> habluetooth (BluetoothScanningMode).
 _FIRMWARE_TO_HA_MODE: dict[BluetoothScannerMode, BluetoothScanningMode] = {
@@ -55,6 +71,9 @@ class ESPHomeScanner(BaseHaRemoteScanner):
         "_client",
         "_configured_mode",
         "_intent",
+        "_resubscribe_advertisements",
+        "_scanner_state_seen",
+        "_subscription_watchdog_task",
     )
 
     def __init__(self, *args: Any, **kwargs: Any):
@@ -65,6 +84,9 @@ class ESPHomeScanner(BaseHaRemoteScanner):
         self._active_window_lock = asyncio.Lock()
         self._configured_mode: BluetoothScanningMode | None = None
         self._intent: BluetoothScanningMode | None = None
+        self._resubscribe_advertisements: Callable[[], object] | None = None
+        self._scanner_state_seen = False
+        self._subscription_watchdog_task: asyncio.Task[None] | None = None
 
     @property
     def configured_mode(self) -> BluetoothScanningMode | None:
@@ -127,6 +149,88 @@ class ESPHomeScanner(BaseHaRemoteScanner):
         """
         self._client = client
 
+    def set_resubscribe_advertisements(self, callback: Callable[[], object]) -> None:
+        """
+        Bind the callable that re-sends the advertisement subscription.
+
+        Must be called before :meth:`async_setup`; the watchdog is started
+        there, only if a callback is already bound, so binding one later
+        has no effect. If the proxy never reports scanner state, the
+        subscription was silently rejected (the device's single subscriber
+        slot was still held by a stale connection) and ``callback`` is
+        invoked to try again; its return value (the unsubscribe callable
+        from aioesphomeapi) is ignored. Only meaningful for proxies that
+        advertise ``FEATURE_STATE_AND_MODE``; older firmware never reports
+        scanner state, so the watchdog would resubscribe forever.
+        """
+        self._resubscribe_advertisements = callback
+
+    def async_setup(self) -> Callable[[], None]:
+        """Set up the scanner and start the subscription watchdog if armed."""
+        unsetup = super().async_setup()
+        if self._resubscribe_advertisements is not None:
+            self._subscription_watchdog_task = asyncio.create_task(
+                self._subscription_watchdog()
+            )
+
+        def _unsetup() -> None:
+            if self._subscription_watchdog_task is not None:
+                self._subscription_watchdog_task.cancel()
+                self._subscription_watchdog_task = None
+            unsetup()
+
+        return _unsetup
+
+    async def _subscription_watchdog(self) -> None:
+        """Resubscribe advertisements until the proxy reports scanner state."""
+        if TYPE_CHECKING:
+            assert self._resubscribe_advertisements is not None
+        attempt = 0
+        while True:
+            delay = _SUBSCRIPTION_RETRY_DELAYS[
+                min(attempt, len(_SUBSCRIPTION_RETRY_DELAYS) - 1)
+            ]
+            await asyncio.sleep(delay)
+            if self._scanner_state_seen:
+                return
+            # Warn while a stale subscriber is expected to still hold the slot
+            # (the device reaps it within ~150s), then periodically so a
+            # persistent fault stays visible at the default log level without
+            # warning on every retry.
+            log = (
+                _LOGGER.warning
+                if attempt < len(_SUBSCRIPTION_RETRY_DELAYS)
+                or attempt % _PERSISTENT_WARN_INTERVAL == 0
+                else _LOGGER.debug
+            )
+            log(
+                "%s: No scanner state received %ss after subscribing; the device "
+                "likely still has a stale advertisement subscriber from a "
+                "previous connection; resubscribing",
+                self.name,
+                delay,
+            )
+            try:
+                self._resubscribe_advertisements()
+            except APIConnectionError as ex:
+                # The connection is gone; the reconnect flow builds a new
+                # scanner with its own watchdog.
+                _LOGGER.debug("%s: failed to resubscribe: %s", self.name, ex)
+                return
+            except Exception:
+                # Keep retrying: the connection is still alive and nothing
+                # else re-arms the watchdog, so giving up here would leave
+                # the subscription silently unrecovered. Logging is throttled
+                # by the same warn/debug cadence as the retry message; the
+                # handler also keeps a fire-and-forget task's error from
+                # surfacing only as "Task exception was never retrieved".
+                log(
+                    "%s: unexpected error resubscribing advertisements",
+                    self.name,
+                    exc_info=True,
+                )
+            attempt += 1
+
     def get_allocations(self) -> Allocations | None:
         """
         Get current connection slot allocations for this ESPHome device.
@@ -162,6 +266,14 @@ class ESPHomeScanner(BaseHaRemoteScanner):
         :meth:`async_set_scanning_mode` has been called, otherwise it
         falls back to ``state.mode``.
         """
+        # Load-bearing invariant for the subscription watchdog: the firmware
+        # sends BluetoothScannerStateResponse only to the connection that
+        # holds the advertisement subscriber slot (the immediate reply to a
+        # successful subscribe, then state-change pushes); the client's
+        # subscribe_bluetooth_scanner_state only registers a local handler
+        # and sends nothing. Reaching this line therefore proves the
+        # advertisement subscription landed.
+        self._scanner_state_seen = True
         configured_pb = state.configured_mode
         self._configured_mode = (
             _FIRMWARE_TO_HA_MODE.get(configured_pb)

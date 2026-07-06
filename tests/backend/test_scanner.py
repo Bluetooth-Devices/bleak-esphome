@@ -1,4 +1,6 @@
 import asyncio
+import logging
+from collections.abc import Callable
 from unittest.mock import MagicMock
 
 import pytest
@@ -21,6 +23,7 @@ from habluetooth import (
     get_manager,
 )
 
+from bleak_esphome.backend import scanner as scanner_module
 from bleak_esphome.backend.client import ESPHomeClientData
 from bleak_esphome.backend.device import ESPHomeBluetoothDevice
 from bleak_esphome.backend.scanner import ESPHomeScanner
@@ -565,3 +568,156 @@ async def test_active_window_restore_uses_intent(
     assert await scanner.async_request_active_window(0.0) is True
     calls = [c.args for c in mock_client.bluetooth_scanner_set_mode.call_args_list]
     assert calls == [(BluetoothScannerMode.ACTIVE,), (BluetoothScannerMode.PASSIVE,)]
+
+
+_RUNNING_PASSIVE_STATE = BluetoothScannerStateResponse(
+    state=BluetoothScannerState.RUNNING,
+    mode=BluetoothScannerMode.PASSIVE,
+)
+
+
+def _arm_watchdog(
+    scanner: ESPHomeScanner,
+    monkeypatch: pytest.MonkeyPatch,
+    resubscribe: MagicMock,
+) -> tuple[asyncio.Task[None], Callable[[], None]]:
+    """Arm the resubscribe watchdog with zero retry delay and set up."""
+    monkeypatch.setattr(scanner_module, "_SUBSCRIPTION_RETRY_DELAYS", (0.0,))
+    scanner.set_resubscribe_advertisements(resubscribe)
+    unsetup = scanner.async_setup()
+    task = scanner._subscription_watchdog_task
+    assert task is not None
+    return task, unsetup
+
+
+@pytest.mark.asyncio
+async def test_subscription_watchdog_resubscribes_until_state_seen(
+    scanner: ESPHomeScanner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The watchdog re-sends the subscribe until scanner state arrives."""
+    resubscribe = MagicMock()
+    task, unsetup = _arm_watchdog(scanner, monkeypatch, resubscribe)
+    while resubscribe.call_count < 2:
+        await asyncio.sleep(0)
+    scanner.async_update_scanner_state(_RUNNING_PASSIVE_STATE)
+    await asyncio.wait_for(task, timeout=1)
+    unsetup()
+
+
+@pytest.mark.asyncio
+async def test_subscription_watchdog_no_retry_when_state_seen(
+    scanner: ESPHomeScanner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """State arriving before the first delay means no resubscribe at all."""
+    resubscribe = MagicMock()
+    task, unsetup = _arm_watchdog(scanner, monkeypatch, resubscribe)
+    # Delivered before the watchdog task gets its first slice of the loop.
+    scanner.async_update_scanner_state(_RUNNING_PASSIVE_STATE)
+    await asyncio.wait_for(task, timeout=1)
+    resubscribe.assert_not_called()
+    unsetup()
+
+
+@pytest.mark.asyncio
+async def test_subscription_watchdog_not_started_without_callback(
+    scanner: ESPHomeScanner,
+) -> None:
+    """No resubscribe callback (older firmware) means no watchdog task."""
+    unsetup = scanner.async_setup()
+    assert scanner._subscription_watchdog_task is None
+    unsetup()
+
+
+@pytest.mark.asyncio
+async def test_subscription_watchdog_cancelled_on_unsetup(
+    scanner: ESPHomeScanner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Unsetup cancels the watchdog before it ever runs."""
+    resubscribe = MagicMock()
+    task, unsetup = _arm_watchdog(scanner, monkeypatch, resubscribe)
+    unsetup()
+    assert scanner._subscription_watchdog_task is None
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    resubscribe.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_subscription_watchdog_stops_on_api_error(
+    scanner: ESPHomeScanner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A dead connection ends the watchdog; the reconnect flow takes over."""
+    resubscribe = MagicMock(side_effect=APIConnectionError("connection lost"))
+    task, unsetup = _arm_watchdog(scanner, monkeypatch, resubscribe)
+    await asyncio.wait_for(task, timeout=1)
+    resubscribe.assert_called_once()
+    unsetup()
+
+
+@pytest.mark.asyncio
+async def test_subscription_watchdog_swallows_unexpected_error(
+    scanner: ESPHomeScanner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Unexpected resubscribe errors are logged and retried, not fatal."""
+    resubscribe = MagicMock(side_effect=ValueError("boom"))
+    task, unsetup = _arm_watchdog(scanner, monkeypatch, resubscribe)
+    while resubscribe.call_count < 3:
+        await asyncio.sleep(0)
+    # Still retrying despite every attempt raising; state ends it cleanly.
+    scanner.async_update_scanner_state(_RUNNING_PASSIVE_STATE)
+    await asyncio.wait_for(task, timeout=1)
+    assert task.exception() is None
+    unsetup()
+
+
+@pytest.mark.asyncio
+async def test_subscription_watchdog_deescalates_to_debug(
+    scanner: ESPHomeScanner,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Retries past the escalation phase log at debug, not warning."""
+    resubscribe = MagicMock()
+    with caplog.at_level(logging.DEBUG, logger="bleak_esphome.backend.scanner"):
+        task, unsetup = _arm_watchdog(scanner, monkeypatch, resubscribe)
+        while resubscribe.call_count < 4:
+            await asyncio.sleep(0)
+        scanner.async_update_scanner_state(_RUNNING_PASSIVE_STATE)
+        await asyncio.wait_for(task, timeout=1)
+    unsetup()
+    records = [
+        record
+        for record in caplog.records
+        if "No scanner state received" in record.message
+    ]
+    assert len(records) >= 4
+    # One retry delay is patched in, so only the first attempt warns.
+    assert [r for r in records if r.levelno == logging.WARNING] == records[:1]
+    assert all(r.levelno == logging.DEBUG for r in records[1:])
+
+
+@pytest.mark.asyncio
+async def test_subscription_watchdog_rewarns_periodically(
+    scanner: ESPHomeScanner,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A persistent fault re-warns every Nth retry instead of going silent."""
+    resubscribe = MagicMock()
+    interval = scanner_module._PERSISTENT_WARN_INTERVAL
+    with caplog.at_level(logging.DEBUG, logger="bleak_esphome.backend.scanner"):
+        task, unsetup = _arm_watchdog(scanner, monkeypatch, resubscribe)
+        while resubscribe.call_count < interval + 1:
+            await asyncio.sleep(0)
+        scanner.async_update_scanner_state(_RUNNING_PASSIVE_STATE)
+        await asyncio.wait_for(task, timeout=1)
+    unsetup()
+    warnings = [
+        record
+        for record in caplog.records
+        if "No scanner state received" in record.message
+        and record.levelno == logging.WARNING
+    ]
+    # One retry delay is patched in, so attempt 0 warns (escalation phase)
+    # and attempt `interval` warns again (periodic re-warn).
+    assert len(warnings) == 2

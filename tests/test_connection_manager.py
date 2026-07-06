@@ -397,3 +397,51 @@ async def test_start_twice_raises_runtime_error() -> None:
         await manager.stop()
         with pytest.raises(ESPHomeStartAborted):
             await start_task
+
+
+@pytest.mark.asyncio
+async def test_on_disconnect_runs_scanner_unsetup(
+    conn_manager: APIConnectionManager,
+) -> None:
+    """``_on_disconnect`` calls the scanner unsetup callback and clears it."""
+    unsetup = Mock()
+    conn_manager._unsetup_scanner = unsetup
+
+    await conn_manager._on_disconnect(expected_disconnect=True)
+
+    unsetup.assert_called_once_with()
+    assert cast(Callable[[], None] | None, conn_manager._unsetup_scanner) is None
+
+
+@pytest.mark.asyncio
+async def test_stop_runs_scanner_unsetup(
+    conn_manager_with_mocked_reconnect: tuple[APIConnectionManager, Mock, AsyncMock],
+) -> None:
+    """``stop`` calls the scanner unsetup callback and clears it."""
+    manager, _, _ = conn_manager_with_mocked_reconnect
+    unsetup = Mock()
+    manager._unsetup_scanner = unsetup
+
+    await manager.stop()
+
+    unsetup.assert_called_once_with()
+    assert cast(Callable[[], None] | None, manager._unsetup_scanner) is None
+
+
+@pytest.mark.asyncio
+async def test_teardown_scanner_unregisters_even_if_unsetup_raises(
+    conn_manager: APIConnectionManager,
+) -> None:
+    """A raising unsetup must not skip the unregister or leave stale refs."""
+    unsetup = Mock(side_effect=RuntimeError("boom"))
+    unregister = Mock()
+    conn_manager._unsetup_scanner = unsetup
+    conn_manager._unregister_scanner = unregister
+
+    with pytest.raises(RuntimeError, match="boom"):
+        conn_manager._teardown_scanner()
+
+    unsetup.assert_called_once_with()
+    unregister.assert_called_once_with()
+    assert cast(Callable[[], None] | None, conn_manager._unsetup_scanner) is None
+    assert cast(Callable[[], None] | None, conn_manager._unregister_scanner) is None

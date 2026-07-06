@@ -106,9 +106,20 @@ def connect_scanner(
         scanner.set_client(cli)
 
     if feature_flags & BluetoothProxyFeature.RAW_ADVERTISEMENTS:
-        cli.subscribe_bluetooth_le_raw_advertisements(
-            scanner.async_on_raw_advertisements
+        subscribe = partial(
+            cli.subscribe_bluetooth_le_raw_advertisements,
+            scanner.async_on_raw_advertisements,
         )
+        subscribe()
+        if feature_flags & BluetoothProxyFeature.FEATURE_STATE_AND_MODE:
+            # The device only allows one advertisement subscriber at a time
+            # and silently rejects the request when a stale connection from a
+            # previous session still holds the slot; arming the scanner's
+            # subscription watchdog retries until the device reaps the stale
+            # connection and the subscription lands. Repeating the subscribe
+            # is safe: the callback is a bound method, so the connection's
+            # handler set dedupes it and only the request is re-sent.
+            scanner.set_resubscribe_advertisements(subscribe)
     else:
         cli.subscribe_bluetooth_le_advertisements(scanner.async_on_advertisement)
 

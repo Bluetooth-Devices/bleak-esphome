@@ -42,8 +42,24 @@ class APIConnectionManager:
         self._cli: APIClient | None = None
         self._reconnect_logic: ReconnectLogic | None = None
         self._unregister_scanner: Callable[[], None] | None = None
+        self._unsetup_scanner: Callable[[], None] | None = None
         self._disconnect_callbacks: set[Callable[[], None]] | None = None
         self._start_future: asyncio.Future[None] | None = None
+
+    def _teardown_scanner(self) -> None:
+        """Unset up and unregister the scanner if wired."""
+        unsetup = self._unsetup_scanner
+        unregister = self._unregister_scanner
+        self._unsetup_scanner = None
+        self._unregister_scanner = None
+        try:
+            if unsetup is not None:
+                unsetup()
+        finally:
+            # The unregister must run even if unsetup raises; skipping it
+            # would leak the scanner registration in habluetooth's manager.
+            if unregister is not None:
+                unregister()
 
     async def _on_disconnect(self, expected_disconnect: bool) -> None:
         """Handle the disconnection of the API client."""
@@ -53,9 +69,7 @@ class APIConnectionManager:
             for callback in list(self._disconnect_callbacks):
                 callback()
             self._disconnect_callbacks = None
-        if self._unregister_scanner is not None:
-            self._unregister_scanner()
-            self._unregister_scanner = None
+        self._teardown_scanner()
 
     async def _on_connect(self) -> None:
         """Handle the connection of the API client."""
@@ -66,7 +80,7 @@ class APIConnectionManager:
         client_data = bleak_esphome.connect_scanner(self._cli, device_info, True)
         scanner = client_data.scanner
         assert scanner is not None  # noqa: S101
-        scanner.async_setup()
+        self._unsetup_scanner = scanner.async_setup()
         self._unregister_scanner = habluetooth.get_manager().async_register_scanner(
             scanner
         )
@@ -135,6 +149,4 @@ class APIConnectionManager:
             await self._cli.disconnect()
         if self._start_future is not None and not self._start_future.done():
             self._start_future.cancel()
-        if self._unregister_scanner is not None:
-            self._unregister_scanner()
-            self._unregister_scanner = None
+        self._teardown_scanner()
