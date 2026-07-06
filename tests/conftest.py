@@ -9,7 +9,7 @@ from aioesphomeapi import (
     ReconnectLogic,
 )
 from bleak_retry_connector import BleakSlotManager
-from bluetooth_adapters import BluetoothAdapters
+from bluetooth_adapters import AdapterDetails, BluetoothAdapters
 from habluetooth import (
     BluetoothManager,
     set_manager,
@@ -17,10 +17,22 @@ from habluetooth import (
 from zeroconf import Zeroconf
 
 
+class FakeBluetoothAdapters(BluetoothAdapters):
+    """Concrete stand-in; BluetoothAdapters is an ABC as of 2.1.0."""
+
+    @property
+    def adapters(self) -> dict[str, AdapterDetails]:
+        return {}
+
+    @property
+    def default_adapter(self) -> str:
+        return "hci0"
+
+
 @pytest.fixture(scope="session", autouse=True)
 def manager():
     slot_manager = BleakSlotManager()
-    bluetooth_adapters = BluetoothAdapters()
+    bluetooth_adapters = FakeBluetoothAdapters()
     set_manager(BluetoothManager(bluetooth_adapters, slot_manager))
 
 

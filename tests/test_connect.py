@@ -2,6 +2,7 @@ import dataclasses
 
 import pytest
 from aioesphomeapi import APIClient, BluetoothProxyFeature, DeviceInfo
+from habluetooth import BluetoothScanningMode
 
 from bleak_esphome.backend.device import ESPHomeBluetoothDevice
 from bleak_esphome.connect import _can_connect, connect_scanner
@@ -37,6 +38,50 @@ async def test_connect_passive_only(
     mock_client.subscribe_bluetooth_scanner_state.assert_not_called()
     mock_client.subscribe_bluetooth_le_raw_advertisements.assert_called_once()
     mock_client.subscribe_bluetooth_le_advertisements.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_connect_full_feature_subscribes_all(mock_client: APIClient) -> None:
+    """A full-feature proxy subscribes to slots, scanner state, and raw adv."""
+    device_info = await mock_client.device_info()
+    client_data = connect_scanner(mock_client, device_info, available=True)
+    assert client_data is not None
+    mock_client.subscribe_bluetooth_connections_free.assert_called_once()
+    mock_client.subscribe_bluetooth_scanner_state.assert_called_once()
+    mock_client.subscribe_bluetooth_le_raw_advertisements.assert_called_once()
+    mock_client.subscribe_bluetooth_le_advertisements.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_connect_state_and_mode_binds_client(mock_client: APIClient) -> None:
+    """FEATURE_STATE_AND_MODE wires the scanner so mode control reaches the proxy."""
+    device_info = await mock_client.device_info()
+    client_data = connect_scanner(mock_client, device_info, available=True)
+    assert client_data.scanner is not None
+    # The client is bound only via the FEATURE_STATE_AND_MODE branch; without
+    # it async_set_scanning_mode would no-op. A firmware command proves wiring.
+    client_data.scanner.async_set_scanning_mode(BluetoothScanningMode.ACTIVE)
+    mock_client.bluetooth_scanner_set_mode.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_connect_no_state_and_mode_leaves_client_unbound(
+    mock_client: APIClient, mock_device_info: DeviceInfo
+) -> None:
+    """Without FEATURE_STATE_AND_MODE, mode control cannot reach the proxy."""
+    info = dataclasses.replace(
+        mock_device_info,
+        bluetooth_proxy_feature_flags=(
+            BluetoothProxyFeature.PASSIVE_SCAN
+            | BluetoothProxyFeature.ACTIVE_CONNECTIONS
+            | BluetoothProxyFeature.RAW_ADVERTISEMENTS
+        ),
+    )
+    client_data = connect_scanner(mock_client, info, available=True)
+    assert client_data.scanner is not None
+    # Local intent still pins, but the unbound client gets no firmware command.
+    client_data.scanner.async_set_scanning_mode(BluetoothScanningMode.ACTIVE)
+    mock_client.bluetooth_scanner_set_mode.assert_not_called()
 
 
 @pytest.mark.asyncio
