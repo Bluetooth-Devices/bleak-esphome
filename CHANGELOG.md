@@ -1,5 +1,25 @@
 # Changelog
 
+## v3.9.7 (2026-07-06)
+
+### Bug fixes
+
+
+- Recover advertisement subscriptions rejected by a stale proxy connection ([`58eff57`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/58eff57c4c4b03d99aed2f6a320cae44db8e6f46))
+
+
+### Documentation
+
+
+- Add troubleshooting page for feature-flag fallbacks ([`5e84829`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/5e8482971b566178b2af98d3da5f215467f88292))
+
+
+### Testing
+
+
+- Flush pending finalizers before mocking logger warning ([`3fc7496`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/3fc7496fed3ea47850ca36c0ab56035d70c434e9))
+
+
 ## v3.9.6 (2026-07-06)
 
 ### Documentation
