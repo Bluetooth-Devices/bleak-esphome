@@ -100,6 +100,54 @@ peripheral, the bug is on the peripheral or the proxy — not in
 `REMOTE_CACHING` (or `dangerous_use_bleak_cache`) is set _and_ a cached
 collection exists, so clearing it does not help here.
 
+## Connections drop repeatedly with `reason 0x100` or `0x3e`
+
+Symptoms: a device connects, then the proxy log shows a repeating
+connect/disconnect cycle, often with two numeric reasons:
+
+```
+[ESP_GATTC_DISCONNECT_EVT, reason 0x100]
+[Connecting v3 without cache]
+[hcif disc complete: rsn 0x3e]   (repeats several times)
+```
+
+These numbers are **ESP-IDF GATT connection-reason codes**
+(`esp_gatt_conn_reason_t`), reported by the proxy firmware and forwarded
+through `aioesphomeapi`. They are _not_ Bluetooth HCI error codes, and
+`bleak-esphome` neither generates nor interprets them — it only surfaces the
+disconnect. The two most common:
+
+- `0x100` — `ESP_GATT_CONN_CONN_CANCEL`: the connection was cancelled
+  **locally**, not terminated by the remote device. In a multi-proxy setup
+  this typically means the connection was withdrawn or reassigned to another
+  proxy (see the next section), _not_ that the peripheral hung up.
+- `0x3e` — `ESP_GATT_CONN_FAIL_ESTABLISH`: the link-layer connection could
+  not be established inside the supervision window — usually 2.4 GHz RF
+  contention, or the peripheral not emitting a connectable advertisement in
+  time.
+
+Because both originate in the proxy/peripheral radio link, they are addressed
+at that layer rather than in this library: reduce Wi-Fi/BLE contention on the
+proxy's channel, improve RF line-of-sight to the peripheral, or reduce how
+many devices a single proxy is asked to hold at once.
+
+## Can I pin a BLE device to a specific proxy?
+
+No. `bleak-esphome` does not decide which proxy connects to which device. It
+reports each proxy's connection-slot allocations upward (via
+`ESPHomeBluetoothDevice.async_subscribe_connection_slots`) and provides the
+scanner/client backend; the choice of _which_ proxy services a given device
+is made by `habluetooth`'s connection manager from the observed RSSI and the
+free slots on each proxy. When two proxies both hear the same devices,
+habluetooth may move a device between them — which surfaces as the `0x100`
+local-cancel disconnect above.
+
+There is no device→proxy affinity API in this library. To bias placement,
+influence the inputs habluetooth uses rather than looking for a knob here:
+give each proxy a clearly stronger signal for its intended device (position
+and antenna orientation), and avoid having two proxies with near-identical
+RSSI competing for the same peripheral.
+
 ## Connect attempts are rejected by `bleak` before the proxy is ever called
 
 The scanner is registered as non-connectable. This happens when the
