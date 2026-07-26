@@ -745,7 +745,9 @@ class ESPHomeClient(BaseBleakClient):
                 BleakGATTCharacteristic object representing it.
             callback (NotifyCallback): Called with the notification
                 ``bytearray`` each time the server sends data.
-            kwargs: Unused.
+            **kwargs:
+                timeout (float): Seconds to wait for the proxy to confirm
+                    the subscription. Defaults to 30.0.
 
         """
         self._raise_if_not_connected()
@@ -771,6 +773,7 @@ class ESPHomeClient(BaseBleakClient):
                 self._address_as_int,
                 ble_handle,
                 lambda handle, data: callback(data),
+                kwargs.get("timeout", DEFAULT_TIMEOUT),
             )
         )
 
