@@ -100,6 +100,46 @@ peripheral, the bug is on the peripheral or the proxy — not in
 `REMOTE_CACHING` (or `dangerous_use_bleak_cache`) is set _and_ a cached
 collection exists, so clearing it does not help here.
 
+## `BleakError("Peripheral … changed connection status while waiting for …")`
+
+Symptoms: the connection is established, then a GATT call fails part-way
+through with a message naming the request that was in flight:
+
+```
+BluetoothConnectionDroppedError: Peripheral FA:CD:C7:… changed connection
+status while waiting for BluetoothGATTNotifyResponse
+```
+
+which reaches your code as `BleakError` with the same text.
+
+"Changed connection status" is `aioesphomeapi`'s wording for **the link
+dropped**, not for a benign state transition. The trailing response type names
+the request that was outstanding when the drop was noticed
+(`BluetoothGATTNotifyResponse` for `start_notify`,
+`BluetoothGATTReadResponse` for a read, and so on), so it tells you _where_ in
+the sequence the peripheral went away — not what caused it.
+
+`bleak-esphome` handles this in `api_error_as_bleak_error`: it marks the
+device disconnected before re-raising, so retry layers such as
+`bleak-retry-connector` see a clean state rather than a client that still
+believes it is connected. Nothing is retried inside this library.
+
+Distinguish the two failure shapes before chasing a fix:
+
+- **Always the same step** (for example, every attempt dies on the first
+  `start_notify` while service discovery succeeds) — the peripheral most
+  likely requires bonding before it will accept that operation. A caller that
+  reacts by retrying with pairing enabled will then hit
+  `NotImplementedError` if the proxy lacks the `PAIRING` flag — see the
+  `BleakClient.pair()` / `unpair()` section above.
+- **Intermittent, at varying steps** — the radio link is failing rather than
+  the GATT interaction. This is the same layer as the `0x100` / `0x3e`
+  disconnect reasons described below.
+
+A related but distinct case is `TimeoutError` (translated from
+`TimeoutAPIError`): there the proxy never answered at all, whereas a dropped
+connection means the proxy answered by reporting that the peripheral is gone.
+
 ## Connections drop repeatedly with `reason 0x100` or `0x3e`
 
 Symptoms: a device connects, then the proxy log shows a repeating
