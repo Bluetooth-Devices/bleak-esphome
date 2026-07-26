@@ -35,7 +35,11 @@ from bleak.backends.characteristic import BleakGATTCharacteristic
 from bleak.exc import BleakError
 from pytest_asyncio import fixture as aio_fixture
 
-from bleak_esphome.backend.client import ESPHomeClient, ESPHomeClientData
+from bleak_esphome.backend.client import (
+    CCCD_UUID,
+    ESPHomeClient,
+    ESPHomeClientData,
+)
 
 from ._helpers import ESP_MAC_ADDRESS, _make_client
 
@@ -432,10 +436,100 @@ async def test_stop_notify_calls_stop_callback(
     abort = Mock()
     char = Mock()
     char.handle = 99
+    char.get_descriptor.return_value = None
     client._notify_cancels[99] = (stop, abort)
     await client.stop_notify(char)
     stop.assert_awaited_once()
     assert 99 not in client._notify_cancels
+
+
+@pytest.mark.asyncio
+async def test_stop_notify_disables_cccd(
+    client_data: ESPHomeClientData,
+    esphome_bluetooth_gatt_services: ESPHomeBluetoothGATTServices,
+) -> None:
+    """With REMOTE_CACHING the host clears the CCCD it wrote on start."""
+    client = _make_client(client_data)
+    client._is_connected = True
+    with patch.object(
+        client._client,
+        "bluetooth_gatt_get_services",
+        return_value=esphome_bluetooth_gatt_services,
+    ):
+        services = await client._get_services()
+    char = services.get_characteristic("00002a05-0000-1000-8000-00805f9b34fb")
+    assert char is not None
+    cccd = char.get_descriptor(CCCD_UUID)
+    assert cccd is not None
+    stop = AsyncMock()
+    client._notify_cancels[char.handle] = (stop, Mock())
+    with patch.object(
+        client._client, "bluetooth_gatt_write_descriptor"
+    ) as mock_write_desc:
+        await client.stop_notify(char)
+    mock_write_desc.assert_awaited_once_with(
+        client._address_as_int, cccd.handle, b"\x00\x00"
+    )
+    stop.assert_awaited_once()
+    assert char.handle not in client._notify_cancels
+
+
+@pytest.mark.asyncio
+async def test_stop_notify_skips_cccd_without_remote_caching(
+    client_data: ESPHomeClientData,
+    esphome_bluetooth_gatt_services: ESPHomeBluetoothGATTServices,
+) -> None:
+    """Without REMOTE_CACHING the esp32 owns the CCCD, so the host leaves it."""
+    client = _make_client(client_data)
+    client._is_connected = True
+    with patch.object(
+        client._client,
+        "bluetooth_gatt_get_services",
+        return_value=esphome_bluetooth_gatt_services,
+    ):
+        services = await client._get_services()
+    char = services.get_characteristic("00002a05-0000-1000-8000-00805f9b34fb")
+    assert char is not None
+    client._feature_flags &= ~BluetoothProxyFeature.REMOTE_CACHING.value
+    stop = AsyncMock()
+    client._notify_cancels[char.handle] = (stop, Mock())
+    with patch.object(
+        client._client, "bluetooth_gatt_write_descriptor"
+    ) as mock_write_desc:
+        await client.stop_notify(char)
+    mock_write_desc.assert_not_called()
+    stop.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_stop_notify_releases_proxy_when_cccd_write_fails(
+    client_data: ESPHomeClientData,
+    esphome_bluetooth_gatt_services: ESPHomeBluetoothGATTServices,
+) -> None:
+    """A failing CCCD write still releases the proxy-side subscription."""
+    client = _make_client(client_data)
+    client._is_connected = True
+    with patch.object(
+        client._client,
+        "bluetooth_gatt_get_services",
+        return_value=esphome_bluetooth_gatt_services,
+    ):
+        services = await client._get_services()
+    char = services.get_characteristic("00002a05-0000-1000-8000-00805f9b34fb")
+    assert char is not None
+    stop = AsyncMock()
+    client._notify_cancels[char.handle] = (stop, Mock())
+    with (
+        patch.object(
+            client._client,
+            "bluetooth_gatt_write_descriptor",
+            side_effect=BluetoothGATTAPIError(BluetoothGATTError(address=1, handle=2)),
+        ),
+        pytest.raises(BleakError),
+    ):
+        await client.stop_notify(char)
+    stop.assert_awaited_once()
+    assert char.handle not in client._notify_cancels
 
 
 @pytest.mark.asyncio
