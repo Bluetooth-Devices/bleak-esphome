@@ -60,6 +60,7 @@ DEFAULT_TIMEOUT = 30.0
 CCCD_UUID = "00002902-0000-1000-8000-00805f9b34fb"
 CCCD_NOTIFY_BYTES = b"\x01\x00"
 CCCD_INDICATE_BYTES = b"\x02\x00"
+CCCD_DISABLE_BYTES = b"\x00\x00"
 
 DEFAULT_MAX_WRITE_WITHOUT_RESPONSE = DEFAULT_MTU - GATT_HEADER_SIZE
 
@@ -961,8 +962,33 @@ class ESPHomeClient(BaseBleakClient):
         self._raise_if_not_connected()
         # Do not raise KeyError if notifications are not enabled on this characteristic
         # to be consistent with the behavior of the BlueZ backend
-        if notify_cancel := self._notify_cancels.pop(characteristic.handle, None):
-            notify_stop, _ = notify_cancel
+        if not (notify_cancel := self._notify_cancels.pop(characteristic.handle, None)):
+            return
+        notify_stop, _ = notify_cancel
+        try:
+            # Mirror of the connection v3 branch in start_notify: the esp32
+            # never resolved the descriptors, so it cannot undo the CCCD
+            # write either. Without this the proxy stops forwarding the
+            # notifications but the peripheral keeps sending them for the
+            # life of the connection. Write the CCCD first so the peripheral
+            # is quiet before the proxy-side subscription goes away.
+            if self._feature_flags & BluetoothProxyFeature.REMOTE_CACHING.value and (
+                cccd_descriptor := characteristic.get_descriptor(CCCD_UUID)
+            ):
+                _LOGGER.debug(
+                    "%s: Writing to CCD descriptor %s to stop notifications",
+                    self._description,
+                    cccd_descriptor.handle,
+                )
+                await self._client.bluetooth_gatt_write_descriptor(
+                    self._address_as_int,
+                    cccd_descriptor.handle,
+                    CCCD_DISABLE_BYTES,
+                )
+        finally:
+            # Always release the proxy-side subscription, even when the CCCD
+            # write fails, so the local bookkeeping cannot drift from the
+            # already-popped handle.
             await notify_stop()
 
     def _raise_if_not_connected(self) -> None:
