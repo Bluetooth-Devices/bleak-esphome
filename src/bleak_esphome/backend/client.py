@@ -218,6 +218,7 @@ class ESPHomeClient(BaseBleakClient):
     def _on_bluetooth_connection_state(
         self,
         connected_future: asyncio.Future[bool],
+        has_cache: bool,
         connected: bool,
         mtu: int,
         error: int,
@@ -232,7 +233,16 @@ class ESPHomeClient(BaseBleakClient):
         )
         if connected:
             self._is_connected = True
-            if not self._mtu:
+            # The MTU is negotiated per link, but the cache is keyed by the
+            # peripheral address alone and shared across every proxy, so a
+            # value learned through one proxy must not be carried over to
+            # another. Always adopt the MTU reported for the current link.
+            #
+            # The one exception is a cached connect: the proxy reports it at
+            # ESP_GATTC_OPEN_EVT, before MTU exchange completes, so the value
+            # is the firmware's placeholder rather than a negotiated one.
+            # ``has_cache`` already requires a cached MTU, so keep that.
+            if not has_cache:
                 self._mtu = mtu
                 self._cache.set_gatt_mtu_cache(self._address_as_int, mtu)
         else:
@@ -307,7 +317,11 @@ class ESPHomeClient(BaseBleakClient):
                 self._cancel_connection_state = (
                     await self._client.bluetooth_device_connect(
                         self._address_as_int,
-                        partial(self._on_bluetooth_connection_state, connected_future),
+                        partial(
+                            self._on_bluetooth_connection_state,
+                            connected_future,
+                            has_cache,
+                        ),
                         timeout=timeout,
                         has_cache=has_cache,
                         feature_flags=self._feature_flags,
