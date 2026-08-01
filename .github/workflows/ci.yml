@@ -19,7 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: 3.x
       - uses: pre-commit/action@v3.0.1
@@ -54,14 +54,14 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Set up uv
-        uses: astral-sh/setup-uv@v8.2.0
+        uses: astral-sh/setup-uv@v9.0.0
         with:
           enable-cache: true
       - name: Install poetry
         run: uv tool install poetry
       - name: Set up Python
         id: setup-python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
           cache: "poetry"
@@ -96,14 +96,14 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Set up uv
-        uses: astral-sh/setup-uv@v8.2.0
+        uses: astral-sh/setup-uv@v9.0.0
         with:
           enable-cache: true
       - name: Install poetry
         run: uv tool install poetry
       - name: Setup Python 3.14
         id: setup-python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: "3.14"
           cache: "poetry"
@@ -122,7 +122,7 @@ jobs:
           REQUIRE_CYTHON=1 poetry install --only=main,dev
         shell: bash
       - name: Run benchmarks
-        uses: CodSpeedHQ/action@v4
+        uses: CodSpeedHQ/action@v5
         with:
           token: ${{ secrets.CODSPEED_TOKEN }}
           run: poetry run pytest --no-cov -vvvvv --codspeed
@@ -149,7 +149,7 @@ jobs:
           BRANCH: ${{ github.head_ref || github.ref_name }}
         run: git switch -C "$BRANCH"
       - name: Test release
-        uses: python-semantic-release/python-semantic-release@v10.5.3
+        uses: python-semantic-release/python-semantic-release@v10.6.1
         with:
           no_operation_mode: true
 
@@ -186,7 +186,7 @@ jobs:
 
       # On main branch: actual PSR + upload to PyPI & GitHub
       - name: Release
-        uses: python-semantic-release/python-semantic-release@v10.5.3
+        uses: python-semantic-release/python-semantic-release@v10.6.1
         id: release
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
@@ -231,7 +231,7 @@ jobs:
 
       # Used to host cibuildwheel
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: "3.11"
 
@@ -270,5 +270,5 @@ jobs:
           merge-multiple: true
 
       - uses:
-          pypa/gh-action-pypi-publish@v1.14.0
+          pypa/gh-action-pypi-publish@v1.14.2
           # To test: repository_url: https://test.pypi.org/legacy/
