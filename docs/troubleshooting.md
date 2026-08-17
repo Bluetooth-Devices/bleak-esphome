@@ -171,7 +171,7 @@ completes can never produce a cache, and every later attempt takes the same
 uncached path. Restarting the proxy is a workaround; the fix is on the proxy.
 
 Upgrade the proxy firmware. One known instance is an ESPHome bug on the
-uncached connect path, where the connected reply was only sent once *both* the
+uncached connect path, where the connected reply was only sent once _both_ the
 MTU and service-discovery events had arrived — so a peripheral that never
 completes the MTU exchange left the reply unsent. It affects ESPHome through
 2026.7.x and is fixed in 2026.8.0 (esphome/esphome#18198).
