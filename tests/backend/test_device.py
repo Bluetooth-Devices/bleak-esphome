@@ -11,7 +11,7 @@ from bleak_retry_connector import Allocations
 
 from bleak_esphome.backend.device import ESPHomeBluetoothDevice
 
-from ._helpers import ESP_MAC_ADDRESS
+from ._helpers import BLE_ADDRESS, ESP_MAC_ADDRESS
 
 
 @pytest.mark.asyncio
@@ -513,3 +513,47 @@ async def test_subscribe_connection_slots_fires_on_change(
     assert third.free == 2
     assert third.slots == 2
     assert third.allocated == []
+
+
+@pytest.mark.asyncio
+async def test_note_connect_timeout_counts_consecutive_attempts(
+    bluetooth_device: ESPHomeBluetoothDevice,
+) -> None:
+    """Each unanswered connect request advances that address's streak."""
+    assert bluetooth_device.async_note_connect_timeout(BLE_ADDRESS) == 1
+    assert bluetooth_device.async_note_connect_timeout(BLE_ADDRESS) == 2
+    assert bluetooth_device.async_note_connect_timeout(BLE_ADDRESS) == 3
+
+
+@pytest.mark.asyncio
+async def test_note_connect_response_clears_streak(
+    bluetooth_device: ESPHomeBluetoothDevice,
+) -> None:
+    """A reported connection state resets the streak for that address."""
+    bluetooth_device.async_note_connect_timeout(BLE_ADDRESS)
+    bluetooth_device.async_note_connect_timeout(BLE_ADDRESS)
+    bluetooth_device.async_note_connect_response(BLE_ADDRESS)
+    assert bluetooth_device.async_note_connect_timeout(BLE_ADDRESS) == 1
+
+
+@pytest.mark.asyncio
+async def test_note_connect_response_without_streak_is_a_noop(
+    bluetooth_device: ESPHomeBluetoothDevice,
+) -> None:
+    """Clearing an address that never timed out must not raise."""
+    bluetooth_device.async_note_connect_response(BLE_ADDRESS)
+    assert bluetooth_device.async_note_connect_timeout(BLE_ADDRESS) == 1
+
+
+@pytest.mark.asyncio
+async def test_connect_streaks_are_tracked_per_address(
+    bluetooth_device: ESPHomeBluetoothDevice,
+) -> None:
+    """One unreachable device must not mask another on the same proxy."""
+    other = "11:22:33:44:55:66"
+    assert bluetooth_device.async_note_connect_timeout(BLE_ADDRESS) == 1
+    assert bluetooth_device.async_note_connect_timeout(other) == 1
+    assert bluetooth_device.async_note_connect_timeout(BLE_ADDRESS) == 2
+    bluetooth_device.async_note_connect_response(BLE_ADDRESS)
+    assert bluetooth_device.async_note_connect_timeout(other) == 2
+    assert bluetooth_device.async_note_connect_timeout(BLE_ADDRESS) == 1

@@ -56,6 +56,14 @@ GATT_READ_TIMEOUT = 30.0
 GATT_NOTIFY_TIMEOUT = 30.0
 DEFAULT_TIMEOUT = 30.0
 
+# A proxy that accepts a connect request but never reports the resulting
+# connection state leaves the device unreachable through it until the proxy
+# is restarted, and nothing else in this library reports that. Warn once the
+# streak is long enough to rule out ordinary retries, then repeat sparingly
+# so a condition that never self-heals stays visible without spamming.
+CONNECT_TIMEOUT_WARN_THRESHOLD = 5
+CONNECT_TIMEOUT_WARN_INTERVAL = 60
+
 # CCCD (Characteristic Client Config Descriptor)
 CCCD_UUID = "00002902-0000-1000-8000-00805f9b34fb"
 CCCD_NOTIFY_BYTES = b"\x01\x00"
@@ -355,6 +363,10 @@ class ESPHomeClient(BaseBleakClient):
             mtu,
             error,
         )
+        # Reaching here means the proxy answered. aioesphomeapi unsubscribes
+        # this callback before it sends the disconnect that follows a connect
+        # timeout, so a timed-out attempt can never clear its own streak.
+        self._bluetooth_device.async_note_connect_response(self._ble_device.address)
         if not connected:
             self._async_ble_device_disconnected()
 
@@ -419,6 +431,26 @@ class ESPHomeClient(BaseBleakClient):
         )
         connected_future.set_result(connected)
 
+    def _async_note_connect_timeout(self) -> None:
+        """Warn when the proxy keeps ignoring connect requests for a device."""
+        count = self._bluetooth_device.async_note_connect_timeout(
+            self._ble_device.address
+        )
+        if (
+            count != CONNECT_TIMEOUT_WARN_THRESHOLD
+            and count % CONNECT_TIMEOUT_WARN_INTERVAL
+        ):
+            return
+        _LOGGER.warning(
+            "%s: The proxy has not answered the last %s connect requests; "
+            "it accepted each one but never reported the connection state, "
+            "so this device cannot be reached through this proxy. Upgrade the "
+            "ESPHome version on device %s and check its logs",
+            self._description,
+            count,
+            self._device_info.name,
+        )
+
     @api_error_as_bleak_error
     async def connect(
         self, pair: bool, dangerous_use_bleak_cache: bool = False, **kwargs: Any
@@ -476,6 +508,11 @@ class ESPHomeClient(BaseBleakClient):
                     self._raise_if_spurious_cancellation()
                     raise
                 except Exception as ex:
+                    if isinstance(ex, TimeoutAPIError):
+                        # The only timeout raised from here is the one for a
+                        # connect response that never arrived; the free-slot
+                        # wait has already completed above.
+                        self._async_note_connect_timeout()
                     # The connect call's error is preferred over a stored
                     # future error as it is more descriptive.
                     self._normalize_connect_future(

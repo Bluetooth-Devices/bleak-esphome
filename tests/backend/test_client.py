@@ -14,6 +14,7 @@ from aioesphomeapi import (
     BluetoothProxyFeature,
     ESPHomeBluetoothGATTServices,
 )
+from aioesphomeapi.core import TimeoutAPIError
 from bleak import BleakClient
 from bleak.backends.characteristic import BleakGATTCharacteristic
 from bleak.exc import BleakError
@@ -21,6 +22,7 @@ from habluetooth import BaseHaRemoteScanner, HaBluetoothConnector
 
 from bleak_esphome.backend.client import (
     CONNECT_FREE_SLOT_TIMEOUT,
+    CONNECT_TIMEOUT_WARN_THRESHOLD,
     GATT_HEADER_SIZE,
     ESPHomeClient,
     ESPHomeClientData,
@@ -2117,3 +2119,103 @@ async def test_set_connection_params_not_connected(
     with pytest.raises(BleakError) as exc_info:
         await esphome_client.set_connection_params(800, 800, 0, 300)
     assert "is not connected" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_connect_timeout_warns_once_streak_is_long_enough(
+    bleak_pair: tuple[BleakClient, ESPHomeClient],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """
+    A proxy that never answers a connect request is reported.
+
+    The proxy accepts the request and then reports nothing, so the only
+    symptom is a repeating timeout. Nothing else in this library surfaces
+    that, which leaves the device silently unreachable.
+    """
+    bleak_client, client = bleak_pair
+    caplog.set_level(logging.WARNING)
+    with patch.object(
+        client._client,
+        "bluetooth_device_connect",
+        side_effect=TimeoutAPIError("Timeout waiting for connect response"),
+    ):
+        for _ in range(CONNECT_TIMEOUT_WARN_THRESHOLD - 1):
+            with pytest.raises(TimeoutError):
+                await bleak_client.connect(dangerous_use_bleak_cache=True)
+        assert "never reported the connection state" not in caplog.text
+
+        with pytest.raises(TimeoutError):
+            await bleak_client.connect(dangerous_use_bleak_cache=True)
+
+    assert (
+        f"has not answered the last {CONNECT_TIMEOUT_WARN_THRESHOLD} connect requests"
+        in caplog.text
+    )
+
+
+@pytest.mark.asyncio
+async def test_connect_timeout_warns_only_on_the_leading_edge(
+    bleak_pair: tuple[BleakClient, ESPHomeClient],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Crossing the threshold warns once, not on every later attempt."""
+    bleak_client, client = bleak_pair
+    caplog.set_level(logging.WARNING)
+    with patch.object(
+        client._client,
+        "bluetooth_device_connect",
+        side_effect=TimeoutAPIError("Timeout waiting for connect response"),
+    ):
+        for _ in range(CONNECT_TIMEOUT_WARN_THRESHOLD + 3):
+            with pytest.raises(TimeoutError):
+                await bleak_client.connect(dangerous_use_bleak_cache=True)
+
+    assert caplog.text.count("never reported the connection state") == 1
+
+
+@pytest.mark.asyncio
+async def test_connect_response_clears_the_timeout_streak(
+    bleak_pair: tuple[BleakClient, ESPHomeClient],
+    esphome_bluetooth_gatt_services: ESPHomeBluetoothGATTServices,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A proxy that answers again starts the streak over, so no warning."""
+    bleak_client, client = bleak_pair
+    caplog.set_level(logging.WARNING)
+    with patch.object(
+        client._client,
+        "bluetooth_device_connect",
+        side_effect=TimeoutAPIError("Timeout waiting for connect response"),
+    ):
+        for _ in range(CONNECT_TIMEOUT_WARN_THRESHOLD - 1):
+            with pytest.raises(TimeoutError):
+                await bleak_client.connect(dangerous_use_bleak_cache=True)
+
+    with (
+        patch.object(
+            client._client,
+            "bluetooth_device_connect",
+            return_value=Mock(),
+        ) as mock_connect,
+        patch.object(
+            client._client,
+            "bluetooth_gatt_get_services",
+            return_value=esphome_bluetooth_gatt_services,
+        ),
+    ):
+        task = asyncio.create_task(bleak_client.connect(dangerous_use_bleak_cache=True))
+        await asyncio.sleep(0)
+        mock_connect.call_args_list[0][0][1](True, 23, 0)
+        await task
+
+    with patch.object(
+        client._client,
+        "bluetooth_device_connect",
+        side_effect=TimeoutAPIError("Timeout waiting for connect response"),
+    ):
+        for _ in range(CONNECT_TIMEOUT_WARN_THRESHOLD - 1):
+            with pytest.raises(TimeoutError):
+                await bleak_client.connect(dangerous_use_bleak_cache=True)
+
+    assert "never reported the connection state" not in caplog.text

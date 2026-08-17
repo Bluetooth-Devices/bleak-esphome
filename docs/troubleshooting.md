@@ -140,6 +140,45 @@ the retry logic can move to another proxy. The fail fast disarms as soon
 as the proxy reports slot state again, or when a caller reusing the
 device marks it available on reconnect.
 
+## `The proxy has not answered the last N connect requests`
+
+Symptoms: every connect attempt to one device fails after the full connect
+timeout, and this library logs
+
+```
+The proxy has not answered the last 5 connect requests; it accepted each one
+but never reported the connection state, so this device cannot be reached
+through this proxy.
+```
+
+Meanwhile the proxy's own log shows the link being established normally:
+
+```
+[bluetooth_proxy] [0] [AA:BB:CC:DD:EE:FF] Connecting v3 without cache
+[esp32_ble_client] [0] [AA:BB:CC:DD:EE:FF] Connection open
+[esp32_ble_client] [0] [AA:BB:CC:DD:EE:FF] Service discovery complete
+```
+
+The GATT connection succeeded; what never arrives is the
+`BluetoothDeviceConnectionResponse` that tells the host about it. Because the
+host is still waiting, it tears the connection down when the timeout expires,
+and the cycle repeats.
+
+This does not recover on its own. The uncached connect
+(`CONNECT_V3_WITHOUT_CACHE`) is the only way to populate the service cache —
+the proxy discards its service list after sending it — so a connect that never
+completes can never produce a cache, and every later attempt takes the same
+uncached path. Restarting the proxy is a workaround; the fix is on the proxy.
+
+Upgrade the proxy firmware. One known instance is an ESPHome bug on the
+uncached connect path, where the connected reply was only sent once *both* the
+MTU and service-discovery events had arrived — so a peripheral that never
+completes the MTU exchange left the reply unsent. It affects ESPHome through
+2026.7.x and is fixed in 2026.8.0 (esphome/esphome#18198).
+
+If the warning persists on current firmware, capture the proxy log for one
+attempt and open an issue with both sides of the exchange.
+
 ## Can I pin a BLE device to a specific proxy?
 
 No. `bleak-esphome` does not decide which proxy connects to which device. It

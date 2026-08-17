@@ -37,6 +37,28 @@ class ESPHomeBluetoothDevice:
     _tracked_clients: dict[int, Callable[[], None]] = field(default_factory=dict)
     _seen_allocated: bool = False
     _warned_untrusted: bool = False
+    _unanswered_connects: dict[str, int] = field(default_factory=dict)
+
+    def async_note_connect_response(self, address: str) -> None:
+        """
+        Record that the proxy reported a connection state for ``address``.
+
+        Any response clears the streak, including a failure or a disconnect:
+        the proxy answering at all is what distinguishes a device that cannot
+        be reached from a proxy that has stopped replying.
+        """
+        self._unanswered_connects.pop(address, None)
+
+    def async_note_connect_timeout(self, address: str) -> int:
+        """
+        Record a connect request the proxy never answered for ``address``.
+
+        Returns the number of consecutive unanswered requests, so the caller
+        can decide when the streak is long enough to be worth reporting.
+        """
+        count = self._unanswered_connects.get(address, 0) + 1
+        self._unanswered_connects[address] = count
+        return count
 
     def async_subscribe_connection_slots(
         self, callback: Callable[[Allocations], None]
