@@ -155,7 +155,8 @@ A connected client can be torn down by allocation reconciliation, without a
 from the proxy carries the authoritative list of allocated (connected)
 addresses; if a client this library believes is connected is missing from
 that list, the proxy no longer holds the connection — its `connected=false`
-notification was lost (congested link, or the proxy rebooted) — and the
+notification was lost (a congested link, or an ESP-side link loss that
+never produced one) — and the
 client is disconnected locally so the consumer can reconnect instead of
 holding a phantom connection forever. Because it means the proxy and the
 host were out of sync, this path logs a WARNING:

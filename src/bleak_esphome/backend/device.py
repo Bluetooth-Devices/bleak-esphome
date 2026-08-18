@@ -94,6 +94,10 @@ class ESPHomeBluetoothDevice:
                 if not fut.done():
                     fut.set_result(free)
             self._ble_connection_free_futures.clear()
+        # Heal local client state before notifying subscribers so the
+        # published allocation snapshot and the clients' connected state
+        # are always consistent with each other.
+        self._async_reconcile_connections()
         if (changed or not self._called_callback) and (
             connection_slots_callback := self._connection_slots_callback
         ):
@@ -106,7 +110,6 @@ class ESPHomeBluetoothDevice:
                     [int_to_bluetooth_address(address) for address in allocated],
                 )
             )
-        self._async_reconcile_connections()
 
     def _async_reconcile_connections(self) -> None:
         """
@@ -115,7 +118,8 @@ class ESPHomeBluetoothDevice:
         The allocated list is authoritative for which addresses hold a
         connection on the proxy, so a tracked client missing from it lost
         its connection and the ``connected=false`` notification was lost
-        (congested link or proxy reboot). Firing its disconnect handler
+        (congested link, or an ESP-side link loss that never produced a
+        notification). Firing its disconnect handler
         tears down the client state and lets the consumer reconnect
         instead of holding a phantom connection forever.
 
@@ -145,8 +149,9 @@ class ESPHomeBluetoothDevice:
             if address in allocated:
                 continue
             # Warning: this means the proxy's connected=false notification
-            # was lost (congested link or proxy reboot); the state was out
-            # of sync until this self heal.
+            # was lost (congested link, or an ESP-side link loss that
+            # never produced one); the state was out of sync until this
+            # self heal.
             _LOGGER.warning(
                 "%s [%s]: Reconciling stale connection to %s: "
                 "not in allocated list %s",
