@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import TYPE_CHECKING, TypedDict
 
 import habluetooth
@@ -14,6 +15,8 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from .backend.device import ESPHomeBluetoothDevice
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class ESPHomeStartAborted(Exception):
@@ -64,21 +67,38 @@ class APIConnectionManager:
             if unregister is not None:
                 unregister()
 
-    def _teardown_session(self) -> None:
-        """Tear down the per-session client state and the scanner."""
+    def _mark_unavailable(self) -> None:
+        """Close the connector's can_connect gate for this session's proxy."""
         if self._bluetooth_device is not None:
-            # Mark the proxy unusable for the connector's can_connect gate.
             self._bluetooth_device.available = False
             self._bluetooth_device = None
-        if (disconnect_callbacks := self._disconnect_callbacks) is not None:
-            self._disconnect_callbacks = None
-            # Each callback discards itself from the set, so iterate a
-            # snapshot to avoid "set changed size during iteration".
-            for callback in list(disconnect_callbacks):
-                callback()
-            # Clear in place: clients hold a reference to this set object.
-            disconnect_callbacks.clear()
-        self._teardown_scanner()
+
+    def _teardown_session(self) -> None:
+        """Tear down the per-session client state and the scanner."""
+        self._mark_unavailable()
+        try:
+            if (disconnect_callbacks := self._disconnect_callbacks) is not None:
+                self._disconnect_callbacks = None
+                try:
+                    # Each callback discards itself from the set, so iterate
+                    # a snapshot to avoid "set changed size during
+                    # iteration". A callback ends in consumer supplied code;
+                    # one raising must not skip the other clients.
+                    for callback in list(disconnect_callbacks):
+                        try:
+                            callback()
+                        except Exception:  # pylint: disable=broad-except
+                            _LOGGER.exception(
+                                "%s: Error in disconnect callback", self._address
+                            )
+                finally:
+                    # Clear in place: clients hold a reference to this set
+                    # object.
+                    disconnect_callbacks.clear()
+        finally:
+            # The scanner unregister must run regardless; skipping it would
+            # leak the registration in habluetooth's manager.
+            self._teardown_scanner()
 
     async def _on_disconnect(self, expected_disconnect: bool) -> None:
         """Handle the disconnection of the API client."""
@@ -157,12 +177,18 @@ class APIConnectionManager:
 
     async def stop(self) -> None:
         """Stop the API connection."""
-        if self._reconnect_logic is not None:
-            await self._reconnect_logic.stop()
-        if self._cli is not None:
-            await self._cli.disconnect()
-        if self._start_future is not None and not self._start_future.done():
-            self._start_future.cancel()
-        # Same teardown as _on_disconnect so a stop() that never saw a
-        # disconnect callback still clears the session state.
-        self._teardown_session()
+        # Close the connect gate first so no new connection attempts are
+        # offered this proxy while its API connection is being torn down.
+        self._mark_unavailable()
+        try:
+            if self._reconnect_logic is not None:
+                await self._reconnect_logic.stop()
+            if self._cli is not None:
+                await self._cli.disconnect()
+            if self._start_future is not None and not self._start_future.done():
+                self._start_future.cancel()
+        finally:
+            # Same teardown as _on_disconnect so a stop() that never saw a
+            # disconnect callback, or whose shutdown awaits raised, still
+            # clears the session state.
+            self._teardown_session()

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import AsyncIterator, Callable, Iterator
 from typing import cast
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
@@ -382,11 +383,72 @@ async def test_stop_tears_down_session_state(
 
     callback.assert_called_once_with()
     assert not callbacks
-    # ``cast`` re-widens attribute types mypy narrowed after the direct
-    # assignments above so the asserts are not flagged unreachable.
+    # ``cast`` re-widens the attribute type mypy narrowed after the direct
+    # assignment above so the assert is not flagged unreachable.
     assert cast("set[Callable[[], None]] | None", manager._disconnect_callbacks) is None
     assert bluetooth_device.available is False
-    assert cast("Mock | None", manager._bluetooth_device) is None
+    assert manager._bluetooth_device is None
+
+
+@pytest.mark.asyncio
+async def test_on_disconnect_isolates_raising_callback(
+    conn_manager: APIConnectionManager,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """
+    A raising disconnect callback must not skip the rest of the teardown.
+
+    Callbacks end in consumer supplied code; if one raises it is logged,
+    the other callbacks still fire, the shared set is still cleared, and
+    the scanner is still unregistered so nothing leaks in habluetooth.
+    """
+    boom = Mock(side_effect=RuntimeError("boom"))
+    ok = Mock()
+    callbacks: set[Callable[[], None]] = {boom, ok}
+    conn_manager._disconnect_callbacks = callbacks
+    unregister = Mock()
+    conn_manager._unregister_scanner = unregister
+
+    with caplog.at_level(logging.ERROR):
+        await conn_manager._on_disconnect(expected_disconnect=False)
+
+    boom.assert_called_once_with()
+    ok.assert_called_once_with()
+    assert not callbacks
+    unregister.assert_called_once_with()
+    assert "Error in disconnect callback" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_stop_marks_unavailable_first_and_tears_down_on_error(
+    conn_manager_with_mocked_reconnect: tuple[APIConnectionManager, Mock, AsyncMock],
+) -> None:
+    """
+    ``stop()`` closes the connect gate up front and tears down on error.
+
+    The proxy must not be offered for new connections while its API
+    connection is being torn down, and the session teardown must run
+    even if a shutdown await raises.
+    """
+    manager, mock_reconnect_logic, _ = conn_manager_with_mocked_reconnect
+    bluetooth_device = Mock(available=True)
+    manager._bluetooth_device = bluetooth_device
+    unregister = Mock()
+    manager._unregister_scanner = unregister
+    seen_available: list[bool] = []
+
+    async def _stop_and_raise() -> None:
+        seen_available.append(bluetooth_device.available)
+        raise RuntimeError("stop boom")
+
+    mock_reconnect_logic.stop = AsyncMock(side_effect=_stop_and_raise)
+    with pytest.raises(RuntimeError, match="stop boom"):
+        await manager.stop()
+
+    # The gate was already closed when the first shutdown await ran.
+    assert seen_available == [False]
+    unregister.assert_called_once_with()
+    assert manager._bluetooth_device is None
 
 
 @pytest.mark.asyncio
