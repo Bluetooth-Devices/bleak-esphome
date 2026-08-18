@@ -165,10 +165,11 @@ host were out of sync, this path logs a WARNING:
 ```
 
 The list is only trusted when its length matches the used slot count
-(`limit - free`). Firmware that predates the allocated list reports used
-slots with an empty list, and an in-flight connect consumes a slot before
-its address appears; both produce a mismatch and skip reconciliation, so
-neither can tear down a healthy client.
+(`limit - free`). Firmware maintains the two as one fact, an address enters
+the list when its slot is reserved, before the link is even attempted, so
+they always match when the list is reported at all. Firmware that predates
+the allocated list reports used slots with an empty list; that mismatch
+skips reconciliation, so it cannot tear down a healthy client.
 
 ## Connect attempts are rejected by `bleak` before the proxy is ever called
 

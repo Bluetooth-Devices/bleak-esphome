@@ -106,6 +106,29 @@ async def test_reconcile_only_disconnects_missing_addresses(
 
 
 @pytest.mark.asyncio
+async def test_reconcile_isolates_raising_handler(
+    bluetooth_device: ESPHomeBluetoothDevice,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """
+    A raising disconnect handler must not strand the other stale clients.
+
+    The handler ends in consumer supplied code; if one raises, the loop
+    logs it and still reconciles the remaining stale clients rather than
+    leaving them phantom until the next slot change.
+    """
+    boom = Mock(side_effect=RuntimeError("boom"))
+    ok = Mock()
+    bluetooth_device.async_track_client(42, boom)
+    bluetooth_device.async_track_client(43, ok)
+    with caplog.at_level(logging.WARNING):
+        bluetooth_device.async_update_ble_connection_limits(3, 3, [])
+    boom.assert_called_once_with()
+    ok.assert_called_once_with()
+    assert "Error reconciling stale connection" in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_untrack_client_only_removes_matching_handler(
     bluetooth_device: ESPHomeBluetoothDevice,
 ) -> None:

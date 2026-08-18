@@ -119,11 +119,13 @@ class ESPHomeBluetoothDevice:
         tears down the client state and lets the consumer reconnect
         instead of holding a phantom connection forever.
 
-        Only trusted when the list length matches the used slot count:
-        older firmware reports ``free``/``limit`` without ``allocated``
-        (indistinguishable from an empty list), and an in-flight connect
-        consumes a slot before its address appears in the list; both
-        yield a mismatch and are skipped.
+        Only trusted when the list length matches the used slot count.
+        Firmware maintains ``free`` and ``allocated`` as one fact (an
+        address enters the list at slot reservation, before the link is
+        even attempted), so the lengths always match on firmware that
+        reports the list; older firmware reports ``free``/``limit`` with
+        no ``allocated`` at all, which looks like an empty list, and the
+        mismatch skips reconciliation so nothing is torn down on it.
         """
         allocated = self.ble_allocations
         used = self.ble_connections_limit - self.ble_connections_free
@@ -153,7 +155,18 @@ class ESPHomeBluetoothDevice:
                 int_to_bluetooth_address(address),
                 allocated,
             )
-            on_ble_disconnected()
+            try:
+                on_ble_disconnected()
+            except Exception:  # pylint: disable=broad-except
+                # The handler ends in consumer supplied code; one raising
+                # must not strand the remaining stale clients until the
+                # next slot change.
+                _LOGGER.exception(
+                    "%s [%s]: Error reconciling stale connection to %s",
+                    self.name,
+                    self.mac_address,
+                    int_to_bluetooth_address(address),
+                )
 
     def _wait_for_ble_connections_free_timeout(self, fut: asyncio.Future[int]) -> None:
         """Timeout the wait_for_ble_connections_free future."""
