@@ -344,6 +344,53 @@ async def test_bleak_client_connect(
 
 
 @pytest.mark.asyncio
+async def test_bleak_client_reconciled_when_missing_from_allocations(
+    bleak_pair: tuple[BleakClient, ESPHomeClient],
+    esphome_bluetooth_gatt_services: ESPHomeBluetoothGATTServices,
+) -> None:
+    """
+    Test a connected client is torn down when the proxy no longer lists it.
+
+    Covers the phantom-connection heal: the ``connected=false``
+    notification was lost, so only the allocated list reveals the loss.
+    """
+    bleak_client, client = bleak_pair
+    bluetooth_device = client._bluetooth_device
+    with (
+        patch.object(
+            client._client,
+            "bluetooth_device_connect",
+            return_value=Mock(),
+        ) as mock_connect,
+        patch.object(
+            client._client,
+            "bluetooth_gatt_get_services",
+            return_value=esphome_bluetooth_gatt_services,
+        ),
+    ):
+        task = asyncio.create_task(bleak_client.connect(dangerous_use_bleak_cache=True))
+        await asyncio.sleep(0)
+        callback = mock_connect.call_args_list[0][0][1]
+        callback(True, 23, 0)
+        await task
+
+    assert client._is_connected
+    disconnected_callback = Mock()
+    client._disconnected_callback = disconnected_callback
+
+    # A trusted update that still lists the client leaves it connected.
+    bluetooth_device.async_update_ble_connection_limits(1, 2, [BLE_ADDRESS_AS_INT])
+    assert client._is_connected
+    disconnected_callback.assert_not_called()
+
+    # The proxy reports the address gone: the client must be torn down.
+    bluetooth_device.async_update_ble_connection_limits(2, 2, [])
+    assert not client.is_connected
+    disconnected_callback.assert_called_once_with()
+    assert client._async_esp_disconnected not in client._disconnect_callbacks
+
+
+@pytest.mark.asyncio
 async def test_bleak_client_connect_connected_future_cancelled_raises_bleak_error(
     bleak_pair: tuple[BleakClient, ESPHomeClient],
 ) -> None:

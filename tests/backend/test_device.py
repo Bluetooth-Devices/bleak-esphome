@@ -69,6 +69,55 @@ async def test_wait_for_ble_connections_free_cancellation_cleans_up(
 
 
 @pytest.mark.asyncio
+async def test_reconcile_skips_untrusted_allocated_list(
+    bluetooth_device: ESPHomeBluetoothDevice,
+) -> None:
+    """
+    An allocated list shorter than the used slot count is not trusted.
+
+    Older firmware reports free/limit without the allocated list, and an
+    in-flight connect consumes a slot before its address appears; both
+    look like a length mismatch and must not disconnect tracked clients.
+    """
+    handler = Mock()
+    bluetooth_device.async_track_client(42, handler)
+    bluetooth_device.async_update_ble_connection_limits(1, 3, [])
+    handler.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_reconcile_only_disconnects_missing_addresses(
+    bluetooth_device: ESPHomeBluetoothDevice,
+) -> None:
+    """Only the clients missing from the allocated list are disconnected."""
+    stale = Mock()
+    live = Mock()
+    bluetooth_device.async_track_client(42, stale)
+    bluetooth_device.async_track_client(43, live)
+    bluetooth_device.async_update_ble_connection_limits(2, 3, [43])
+    stale.assert_called_once_with()
+    live.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_untrack_client_only_removes_matching_handler(
+    bluetooth_device: ESPHomeBluetoothDevice,
+) -> None:
+    """Untracking with a stale handler must not evict a newer client."""
+    old_handler = Mock()
+    new_handler = Mock()
+    bluetooth_device.async_track_client(42, new_handler)
+    bluetooth_device.async_untrack_client(42, old_handler)
+    bluetooth_device.async_update_ble_connection_limits(3, 3, [])
+    new_handler.assert_called_once_with()
+
+    bluetooth_device.async_untrack_client(42, new_handler)
+    new_handler.reset_mock()
+    bluetooth_device.async_update_ble_connection_limits(3, 3, [])
+    new_handler.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_wait_for_ble_connections_free_timer_after_result_does_not_raise(
     bluetooth_device: ESPHomeBluetoothDevice,
 ) -> None:

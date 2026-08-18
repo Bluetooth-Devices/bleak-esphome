@@ -33,6 +33,7 @@ class ESPHomeBluetoothDevice:
     cache: ESPHomeBluetoothCache = field(default_factory=ESPHomeBluetoothCache)
     _connection_slots_callback: Callable[[Allocations], None] | None = None
     _called_callback: bool = False
+    _tracked_clients: dict[int, Callable[[], None]] = field(default_factory=dict)
 
     def async_subscribe_connection_slots(
         self, callback: Callable[[Allocations], None]
@@ -40,6 +41,29 @@ class ESPHomeBluetoothDevice:
         """Subscribe to connection slot changes."""
         self._connection_slots_callback = callback
         self._called_callback = False
+
+    def async_track_client(
+        self, address: int, on_ble_disconnected: Callable[[], None]
+    ) -> None:
+        """
+        Track a connected client so it can be reconciled against allocations.
+
+        ``on_ble_disconnected`` is invoked when the proxy's authoritative
+        allocated list no longer contains ``address``.
+        """
+        self._tracked_clients[address] = on_ble_disconnected
+
+    def async_untrack_client(
+        self, address: int, on_ble_disconnected: Callable[[], None]
+    ) -> None:
+        """
+        Stop tracking a connected client.
+
+        Only removes the entry when it still belongs to the same client;
+        a newer client may already have replaced it for this address.
+        """
+        if self._tracked_clients.get(address) == on_ble_disconnected:
+            del self._tracked_clients[address]
 
     def async_update_ble_connection_limits(
         self, free: int, limit: int, allocated: list[int]
@@ -82,6 +106,51 @@ class ESPHomeBluetoothDevice:
                     [int_to_bluetooth_address(address) for address in allocated],
                 )
             )
+        self._async_reconcile_connections()
+
+    def _async_reconcile_connections(self) -> None:
+        """
+        Disconnect tracked clients absent from the proxy's allocated list.
+
+        The allocated list is authoritative for which addresses hold a
+        connection on the proxy, so a tracked client missing from it lost
+        its connection and the ``connected=false`` notification was lost
+        (congested link or proxy reboot). Firing its disconnect handler
+        tears down the client state and lets the consumer reconnect
+        instead of holding a phantom connection forever.
+
+        Only trusted when the list length matches the used slot count:
+        older firmware reports ``free``/``limit`` without ``allocated``
+        (indistinguishable from an empty list), and an in-flight connect
+        consumes a slot before its address appears in the list; both
+        yield a mismatch and are skipped.
+        """
+        allocated = self.ble_allocations
+        used = self.ble_connections_limit - self.ble_connections_free
+        if len(allocated) != used:
+            if self._tracked_clients:
+                _LOGGER.debug(
+                    "%s [%s]: Skipping connection reconcile, allocated list"
+                    " not trusted: used=%s allocated=%s",
+                    self.name,
+                    self.mac_address,
+                    used,
+                    allocated,
+                )
+            return
+        # Snapshot: handlers untrack themselves during the loop.
+        for address, on_ble_disconnected in list(self._tracked_clients.items()):
+            if address in allocated:
+                continue
+            _LOGGER.debug(
+                "%s [%s]: Reconciling stale connection to %s: "
+                "not in allocated list %s",
+                self.name,
+                self.mac_address,
+                int_to_bluetooth_address(address),
+                allocated,
+            )
+            on_ble_disconnected()
 
     def _wait_for_ble_connections_free_timeout(self, fut: asyncio.Future[int]) -> None:
         """Timeout the wait_for_ble_connections_free future."""
