@@ -47,6 +47,9 @@ def connect_scanner(
     2. Calling ESPHomeClientData.disconnect_callbacks when the ESP is disconnected.
     3. Registering the scanner with the HA Bluetooth manager and also
        un-registering it when the ESP is disconnected.
+    4. Setting ESPHomeClientData.bluetooth_device.available to False when the
+       ESP is disconnected, before firing the callbacks, so the connector's
+       can_connect gate stops offering the dead proxy.
 
     The caller may choose to override ESPHomeClientData.disconnect_callbacks
     with its own set. If it does so, it must do so before calling
