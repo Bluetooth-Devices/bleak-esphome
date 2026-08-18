@@ -78,6 +78,25 @@ class ESPHomeBluetoothDevice:
         """
         if self._tracked_clients.get(address) == on_ble_disconnected:
             del self._tracked_clients[address]
+    def async_set_unavailable(self) -> None:
+        """
+        Mark the proxy unavailable and fail pending slot waiters.
+
+        A caller parked in ``wait_for_ble_connections_free`` would
+        otherwise sit out its full timeout on a proxy already known to be
+        gone; failing fast lets it retry against another proxy.
+        """
+        self.available = False
+        message = (
+            f"{self.name} [{self.mac_address}]: Proxy disconnected "
+            "while waiting for a free BLE connection slot"
+        )
+        for fut in self._ble_connection_free_futures:
+            # Skip futures already done (a cancelled waiter leaves its
+            # future in the set until its finally runs).
+            if not fut.done():
+                fut.set_exception(TimeoutError(message))
+        self._ble_connection_free_futures.clear()
 
     def async_update_ble_connection_limits(
         self, free: int, limit: int, allocated: list[int]
@@ -235,7 +254,9 @@ class ESPHomeBluetoothDevice:
         report at least one free slot via ``async_update_ble_connection_limits``.
 
         Raises:
-            TimeoutError: if no slot becomes free within ``timeout`` seconds.
+            TimeoutError: if no slot becomes free within ``timeout``
+                seconds, or immediately if the proxy becomes unavailable
+                while waiting (see ``async_set_unavailable``).
 
         """
         if self.ble_connections_free > 0:
