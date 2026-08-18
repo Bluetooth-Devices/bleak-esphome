@@ -76,9 +76,9 @@ async def test_reconcile_skips_untrusted_allocated_list(
     """
     An allocated list shorter than the used slot count is not trusted.
 
-    Older firmware reports free/limit without the allocated list, and an
-    in-flight connect consumes a slot before its address appears; both
-    look like a length mismatch and must not disconnect tracked clients.
+    Older firmware reports free/limit without the allocated list at all,
+    which looks like a length mismatch and must not disconnect tracked
+    clients.
     """
     handler = Mock()
     bluetooth_device.async_track_client(42, handler)
@@ -126,6 +126,12 @@ async def test_reconcile_isolates_raising_handler(
     boom.assert_called_once_with()
     ok.assert_called_once_with()
     assert "Error reconciling stale connection" in caplog.text
+    # The raising client was untracked before invocation, so a later update
+    # does not retry it and re-fire the warning plus traceback.
+    caplog.clear()
+    bluetooth_device.async_update_ble_connection_limits(3, 3, [])
+    boom.assert_called_once_with()
+    assert "Reconciling stale connection" not in caplog.text
 
 
 @pytest.mark.asyncio

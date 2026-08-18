@@ -155,12 +155,16 @@ class ESPHomeBluetoothDevice:
                 int_to_bluetooth_address(address),
                 allocated,
             )
+            # Untrack before invoking so the teardown is attempted exactly
+            # once; if the handler raises partway (it ends in consumer
+            # supplied code) the entry must not linger and re-fire the
+            # warning plus traceback on every later slot update.
+            self.async_untrack_client(address, on_ble_disconnected)
             try:
                 on_ble_disconnected()
             except Exception:  # pylint: disable=broad-except
-                # The handler ends in consumer supplied code; one raising
-                # must not strand the remaining stale clients until the
-                # next slot change.
+                # One raising handler must not strand the remaining stale
+                # clients until the next slot change.
                 _LOGGER.exception(
                     "%s [%s]: Error reconciling stale connection to %s",
                     self.name,
