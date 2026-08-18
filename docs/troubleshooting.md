@@ -157,7 +157,8 @@ addresses; if a client this library believes is connected is missing from
 that list, the proxy no longer holds the connection — its `connected=false`
 notification was lost (congested link, or the proxy rebooted) — and the
 client is disconnected locally so the consumer can reconnect instead of
-holding a phantom connection forever. The DEBUG log line for this path is:
+holding a phantom connection forever. Because it means the proxy and the
+host were out of sync, this path logs a WARNING:
 
 ```
 <name> [<mac>]: Reconciling stale connection to <address>: not in allocated list [...]

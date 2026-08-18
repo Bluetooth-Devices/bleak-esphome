@@ -142,7 +142,10 @@ class ESPHomeBluetoothDevice:
         for address, on_ble_disconnected in list(self._tracked_clients.items()):
             if address in allocated:
                 continue
-            _LOGGER.debug(
+            # Warning: this means the proxy's connected=false notification
+            # was lost (congested link or proxy reboot); the state was out
+            # of sync until this self heal.
+            _LOGGER.warning(
                 "%s [%s]: Reconciling stale connection to %s: "
                 "not in allocated list %s",
                 self.name,

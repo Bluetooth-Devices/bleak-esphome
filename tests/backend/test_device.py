@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from unittest.mock import Mock
 
 import pytest
@@ -88,15 +89,20 @@ async def test_reconcile_skips_untrusted_allocated_list(
 @pytest.mark.asyncio
 async def test_reconcile_only_disconnects_missing_addresses(
     bluetooth_device: ESPHomeBluetoothDevice,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Only the clients missing from the allocated list are disconnected."""
     stale = Mock()
     live = Mock()
     bluetooth_device.async_track_client(42, stale)
     bluetooth_device.async_track_client(43, live)
-    bluetooth_device.async_update_ble_connection_limits(2, 3, [43])
+    with caplog.at_level(logging.WARNING):
+        bluetooth_device.async_update_ble_connection_limits(2, 3, [43])
     stale.assert_called_once_with()
     live.assert_not_called()
+    # Out of sync state is a failure somewhere; it must surface without
+    # debug logging enabled.
+    assert "Reconciling stale connection" in caplog.text
 
 
 @pytest.mark.asyncio
