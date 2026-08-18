@@ -606,7 +606,7 @@ async def test_stop_notify_cccd_failure_survives_failing_release(
     esphome_bluetooth_gatt_services: ESPHomeBluetoothGATTServices,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """A failing release does not mask the CCCD write error but is logged."""
+    """A failing release keeps the entry so the caller can retry it."""
     client = _make_client(client_data)
     client._is_connected = True
     with patch.object(
@@ -630,7 +630,7 @@ async def test_stop_notify_cccd_failure_survives_failing_release(
     ):
         await client.stop_notify(char)
     stop.assert_awaited_once()
-    assert char.handle not in client._notify_cancels
+    assert char.handle in client._notify_cancels
     assert "Failed to release the proxy notify subscription" in caplog.text
 
 
@@ -639,7 +639,7 @@ async def test_stop_notify_cccd_failure_survives_cancelled_release(
     client_data: ESPHomeClientData,
     esphome_bluetooth_gatt_services: ESPHomeBluetoothGATTServices,
 ) -> None:
-    """A cancelled release does not replace the CCCD write error."""
+    """A cancelled release propagates instead of being demoted to a log."""
     client = _make_client(client_data)
     client._is_connected = True
     with patch.object(
@@ -658,11 +658,30 @@ async def test_stop_notify_cccd_failure_survives_cancelled_release(
             "bluetooth_gatt_write_descriptor",
             side_effect=BluetoothGATTAPIError(BluetoothGATTError(address=1, handle=2)),
         ),
-        pytest.raises(BleakError),
+        pytest.raises(asyncio.CancelledError),
     ):
         await client.stop_notify(char)
     stop.assert_awaited_once()
-    assert char.handle not in client._notify_cancels
+    assert char.handle in client._notify_cancels
+
+
+@pytest.mark.asyncio
+async def test_stop_notify_keeps_entry_when_release_fails(
+    client_data: ESPHomeClientData,
+) -> None:
+    """A failing release on the success path stays retryable."""
+    client = _make_client(client_data)
+    client._is_connected = True
+    stop = AsyncMock(side_effect=RuntimeError("release failed"))
+    char = Mock()
+    char.handle = 99
+    char.uuid = "00002a05-0000-1000-8000-00805f9b34fb"
+    char.get_descriptor.return_value = None
+    client._notify_cancels[99] = (stop, Mock())
+    with pytest.raises(RuntimeError):
+        await client.stop_notify(char)
+    stop.assert_awaited_once()
+    assert 99 in client._notify_cancels
 
 
 @pytest.mark.asyncio

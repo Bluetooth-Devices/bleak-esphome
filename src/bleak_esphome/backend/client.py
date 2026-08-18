@@ -958,6 +958,13 @@ class ESPHomeClient(BaseBleakClient):
         return does not guarantee the peripheral stopped sending
         notifications.
 
+        The CCCD write is a round trip to the peripheral, so this method
+        can block for up to the proxy GATT timeout and can raise
+        ``BleakError`` where it previously always returned. When it raises,
+        the subscription entry is kept unless the proxy-side release
+        succeeded, so calling ``stop_notify`` again retries the part that
+        failed rather than silently returning.
+
         Args:
         ----
             characteristic (BleakGATTCharacteristic):
@@ -969,7 +976,7 @@ class ESPHomeClient(BaseBleakClient):
         self._raise_if_not_connected()
         # Do not raise KeyError if notifications are not enabled on this characteristic
         # to be consistent with the behavior of the BlueZ backend
-        if not (notify_cancel := self._notify_cancels.pop(characteristic.handle, None)):
+        if not (notify_cancel := self._notify_cancels.get(characteristic.handle)):
             return
         notify_stop, _ = notify_cancel
         try:
@@ -1008,17 +1015,17 @@ class ESPHomeClient(BaseBleakClient):
         except BaseException:
             # Use BaseException to handle CancelledError as well as Exception.
             # Always release the proxy-side subscription, even when the CCCD
-            # write fails, so the local bookkeeping cannot drift from the
-            # already-popped handle. The release is best-effort here because
-            # the CCCD failure is the actionable root cause and must not be
-            # replaced by a secondary error from the cleanup path -- including
-            # a CancelledError, which contextlib.suppress(Exception) would let
-            # escape. Log the failed release so the leaked subscription is not
-            # invisible: the handle is already popped, so nothing else will
-            # report it.
+            # write fails. The release is best-effort here because the CCCD
+            # failure is the actionable root cause and must not be replaced
+            # by a secondary error from the cleanup path -- except for a
+            # CancelledError, which is a request to stop and has to win over
+            # any error it interrupts, so it is deliberately not caught here.
             try:
                 await notify_stop()
-            except BaseException:
+            except Exception:
+                # Keep the entry so a later stop_notify retries the release
+                # instead of hitting the missing-handle no-op, and log it
+                # because the caller only sees the CCCD error.
                 _LOGGER.warning(
                     "%s: Failed to release the proxy notify subscription for "
                     "handle %s; the proxy may keep forwarding notifications",
@@ -1026,8 +1033,13 @@ class ESPHomeClient(BaseBleakClient):
                     characteristic.handle,
                     exc_info=True,
                 )
+            else:
+                del self._notify_cancels[characteristic.handle]
             raise
         await notify_stop()
+        # Popped only once the release succeeded: a failing release leaves the
+        # entry in place so the caller can retry it.
+        del self._notify_cancels[characteristic.handle]
 
     def _raise_if_not_connected(self) -> None:
         """Raise a BleakError if not connected."""
