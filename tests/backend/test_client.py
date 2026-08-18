@@ -739,6 +739,56 @@ async def test_bleak_client_connect_error_then_cancel_during_release(
 
 
 @pytest.mark.asyncio
+async def test_bleak_client_connect_services_failure_then_cancel_during_release(
+    bleak_pair: tuple[BleakClient, ESPHomeClient],
+) -> None:
+    """
+    Test a cancel absorbed during the services-failure release still wins.
+
+    When ``_get_services`` fails after the link came up and a cancellation
+    arrives while the shielded cleanup release is in flight, the release
+    runs to completion and the cancellation outranks the original error.
+    """
+    bleak_client, client = bleak_pair
+    in_disconnect = asyncio.Event()
+    release_disconnect = asyncio.Event()
+    disconnect_finished = asyncio.Event()
+
+    async def _slow_disconnect() -> None:
+        in_disconnect.set()
+        await release_disconnect.wait()
+        disconnect_finished.set()
+
+    async def _boom_get_services(*args: Any, **kwargs: Any) -> Any:
+        raise BleakError("services boom")
+
+    with (
+        patch.object(
+            client._client,
+            "bluetooth_device_connect",
+            return_value=Mock(),
+        ) as mock_connect,
+        patch.object(client, "_get_services", side_effect=_boom_get_services),
+        patch.object(client, "_disconnect_no_wait", side_effect=_slow_disconnect),
+    ):
+        task = asyncio.create_task(bleak_client.connect(dangerous_use_bleak_cache=True))
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        callback = mock_connect.call_args_list[0][0][1]
+        callback(True, 23, 0)
+        await in_disconnect.wait()
+        assert task.cancel() is True
+        await asyncio.sleep(0)
+        release_disconnect.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert task.cancelled()
+        # The release ran to completion; the patched _disconnect_no_wait
+        # stands in for the real one, which also clears the client state.
+        assert disconnect_finished.is_set()
+
+
+@pytest.mark.asyncio
 async def test_bleak_client_connect_cancel_after_link_up_disconnect_shielded(
     bleak_pair: tuple[BleakClient, ESPHomeClient],
 ) -> None:
