@@ -135,6 +135,52 @@ async def test_reconcile_isolates_raising_handler(
 
 
 @pytest.mark.asyncio
+async def test_track_client_logs_when_displacing_existing_entry(
+    bluetooth_device: ESPHomeBluetoothDevice,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Displacing a tracked client for the same address leaves a trace."""
+    old_handler = Mock()
+    new_handler = Mock()
+    bluetooth_device.async_track_client(42, old_handler)
+    with caplog.at_level(logging.DEBUG):
+        bluetooth_device.async_track_client(42, new_handler)
+    assert "Replacing tracked client" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_reconcile_warns_once_on_slot_accounting_anomaly(
+    bluetooth_device: ESPHomeBluetoothDevice,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """
+    A mismatch on list-reporting firmware warns once until it recovers.
+
+    Legacy firmware that never reports the list stays at debug; firmware
+    that has reported it and then mismatches has a genuine accounting
+    anomaly that disables the heal, which must be visible in production
+    logs, once per episode.
+    """
+    handler = Mock()
+    bluetooth_device.async_track_client(42, handler)
+    with caplog.at_level(logging.WARNING):
+        # Legacy-looking mismatch before any list was seen: no warning.
+        bluetooth_device.async_update_ble_connection_limits(1, 3, [])
+        assert "slot accounting is inconsistent" not in caplog.text
+        # The list is reported, then mismatches: warn once.
+        bluetooth_device.async_update_ble_connection_limits(1, 3, [42, 43])
+        bluetooth_device.async_update_ble_connection_limits(1, 3, [42])
+        assert caplog.text.count("slot accounting is inconsistent") == 1
+        bluetooth_device.async_update_ble_connection_limits(1, 3, [43])
+        assert caplog.text.count("slot accounting is inconsistent") == 1
+        # A matching update re-arms the warning for the next episode.
+        bluetooth_device.async_update_ble_connection_limits(1, 3, [42, 43])
+        bluetooth_device.async_update_ble_connection_limits(1, 3, [42])
+        assert caplog.text.count("slot accounting is inconsistent") == 2
+    handler.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_untrack_client_only_removes_matching_handler(
     bluetooth_device: ESPHomeBluetoothDevice,
 ) -> None:

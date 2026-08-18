@@ -34,6 +34,8 @@ class ESPHomeBluetoothDevice:
     _connection_slots_callback: Callable[[Allocations], None] | None = None
     _called_callback: bool = False
     _tracked_clients: dict[int, Callable[[], None]] = field(default_factory=dict)
+    _seen_allocated: bool = False
+    _warned_untrusted: bool = False
 
     def async_subscribe_connection_slots(
         self, callback: Callable[[Allocations], None]
@@ -51,6 +53,18 @@ class ESPHomeBluetoothDevice:
         ``on_ble_disconnected`` is invoked when the proxy's authoritative
         allocated list no longer contains ``address``.
         """
+        if (
+            existing := self._tracked_clients.get(address)
+        ) is not None and existing != on_ble_disconnected:
+            # The displaced client loses this reconciliation backstop; it
+            # still holds its own subscription and disconnect callback,
+            # but the overlap is worth a trace in a bug report.
+            _LOGGER.debug(
+                "%s [%s]: Replacing tracked client for %s",
+                self.name,
+                self.mac_address,
+                int_to_bluetooth_address(address),
+            )
         self._tracked_clients[address] = on_ble_disconnected
 
     def async_untrack_client(
@@ -133,8 +147,26 @@ class ESPHomeBluetoothDevice:
         """
         allocated = self.ble_allocations
         used = self.ble_connections_limit - self.ble_connections_free
+        if allocated:
+            self._seen_allocated = True
         if len(allocated) != used:
-            if self._tracked_clients:
+            if self._seen_allocated and not self._warned_untrusted:
+                # This firmware does report the list, so a mismatch is a
+                # genuine slot accounting anomaly on the proxy that
+                # disables the phantom connection heal; surface it once
+                # rather than hiding it at debug like the legacy
+                # firmware case below.
+                self._warned_untrusted = True
+                _LOGGER.warning(
+                    "%s [%s]: Proxy slot accounting is inconsistent"
+                    " (used=%s allocated=%s); connection reconciliation"
+                    " is disabled until it matches again",
+                    self.name,
+                    self.mac_address,
+                    used,
+                    allocated,
+                )
+            elif self._tracked_clients:
                 _LOGGER.debug(
                     "%s [%s]: Skipping connection reconcile, allocated list"
                     " not trusted: used=%s allocated=%s",
@@ -144,6 +176,9 @@ class ESPHomeBluetoothDevice:
                     allocated,
                 )
             return
+        # A matching update re-arms the anomaly warning so a recurring
+        # inconsistency is visible again after a recovery.
+        self._warned_untrusted = False
         # Snapshot: handlers untrack themselves during the loop.
         for address, on_ble_disconnected in list(self._tracked_clients.items()):
             if address in allocated:
