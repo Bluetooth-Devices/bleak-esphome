@@ -51,7 +51,6 @@ if TYPE_CHECKING:
 DEFAULT_MTU = 23
 GATT_HEADER_SIZE = 3
 DISCONNECT_TIMEOUT = 5.0
-SHIELDED_DISCONNECT_TIMEOUT = 5.0
 CONNECT_FREE_SLOT_TIMEOUT = 2.0
 GATT_READ_TIMEOUT = 30.0
 DEFAULT_TIMEOUT = 30.0
@@ -161,7 +160,6 @@ class ESPHomeClient(BaseBleakClient):
         self._is_connected = False
         self._mtu: int | None = None
         self._cancel_connection_state: Callable[[], None] | None = None
-        self._orphan_disconnect_tasks: set[asyncio.Task[bool]] = set()
         self._notify_cancels: dict[
             int, tuple[Callable[[], Coroutine[Any, Any, None]], Callable[[], None]]
         ] = {}
@@ -229,84 +227,27 @@ class ESPHomeClient(BaseBleakClient):
                 "%s: Discarding stored connect error: %s", self._description, exc
             )
 
-    def _on_orphan_release_done(self, task: asyncio.Task[bool]) -> None:
-        """Drop a finished orphan release and surface one that blew up."""
-        self._orphan_disconnect_tasks.discard(task)
-        # Nothing else observes this fire-and-forget task. A cancelled or
-        # failed release is reported by _shielded_disconnect itself; the
-        # wrapper can only end cancelled before its first step, or fail on
-        # something escaping that helper, and neither must go unretrieved.
-        if task.cancelled():
-            _LOGGER.warning(
-                "%s: Orphaned ESP-side connection release was cancelled "
-                "before it started, the proxy slot may stay allocated",
-                self._description,
-            )
-        elif exc := task.exception():
-            _LOGGER.warning(
-                "%s: Orphaned ESP-side connection release failed, the proxy "
-                "slot may stay allocated: %s",
-                self._description,
-                exc,
-            )
-
-    async def _release_orphaned_link(self) -> bool:
-        """Release an orphaned link unless a newer connect owns it now."""
-        if self._is_connected or self._cancel_connection_state is not None:
-            # A newer connect on this client instance established a live
-            # link for the same address, or has an attempt in flight
-            # (bleak_retry_connector retries on the same instance);
-            # releasing by address now would tear that attempt down.
-            return False
-        return await self._shielded_disconnect()
-
-    async def _shielded_disconnect(self) -> bool:
+    def _release_connection_no_wait(self) -> None:
         """
-        Release the ESP-side connection, surviving re-cancellation.
+        Release the ESP-side connection without waiting for a response.
 
-        The release is shielded so a cancellation arriving while it runs
-        cannot interrupt it half-way and leave the device connected on the
-        ESP side; when one does arrive the release is drained (still
-        shielded, so a further cancel cannot reach the RPC either) and
-        True is returned so the caller can honor the absorbed cancellation.
-        The free-slot wait is skipped so cleanup cannot stall a
-        cancellation behind a slow proxy. A release that fails or is
-        itself cancelled (loop teardown) is a leaked proxy slot, so it is
-        logged as a warning rather than swallowed silently.
+        Sends the disconnect synchronously so cleanup and cancellation
+        paths have nothing to await and no uncancellable window; the ESP
+        frees the slot when it processes the request and reports the
+        state change through the usual subscriptions. A failed send is a
+        leaked proxy slot, so it is logged as a warning rather than
+        swallowed silently. Local state is torn down either way.
         """
-        disconnect_task = asyncio.create_task(
-            self._disconnect_no_wait(SHIELDED_DISCONNECT_TIMEOUT)
-        )
-        absorbed = False
-        # Loop on the inner task's state, not on the awaits: once the
-        # inner task is done a shield returns it directly and awaiting a
-        # cancelled task raises without yielding, so a while True here
-        # would spin and starve the loop.
-        while not disconnect_task.done():
-            try:
-                await asyncio.shield(disconnect_task)
-            except asyncio.CancelledError:
-                # A cancel that reached the inner task itself is not a
-                # caller cancellation to honor; only count the ones the
-                # shield absorbed on our behalf.
-                absorbed = absorbed or not disconnect_task.cancelled()
-            except Exception:  # pylint: disable=broad-except
-                break
-        if disconnect_task.cancelled():
-            _LOGGER.warning(
-                "%s: ESP-side connection release was cancelled before it "
-                "completed, the proxy slot may stay allocated until the "
-                "proxy disconnects on its own",
-                self._description,
-            )
-        elif exc := disconnect_task.exception():
+        try:
+            self._client.bluetooth_device_disconnect_no_wait(self._address_as_int)
+        except Exception as exc:  # pylint: disable=broad-except
             _LOGGER.warning(
                 "%s: Failed to release ESP-side connection, the proxy slot "
                 "may stay allocated until it disconnects on its own: %s",
                 self._description,
                 exc,
             )
-        return absorbed
+        self._async_ble_device_disconnected()
 
     def _on_bluetooth_connection_state(
         self,
@@ -332,19 +273,20 @@ class ESPHomeClient(BaseBleakClient):
             # cleanup may already have run. A late ``connected=True`` must
             # not mark the client connected again: nobody owns it anymore
             # and the state would never be corrected.
-            if connected and not self._is_connected:
+            if (
+                connected
+                and not self._is_connected
+                and self._cancel_connection_state is None
+            ):
                 # The ESP did just establish the link though (this is not
-                # a duplicate callback on a live connection); release it
-                # so the abandoned attempt does not pin a proxy slot. The
-                # set anchors the task against garbage collection until
-                # it finishes.
+                # a duplicate callback on a live connection, and no newer
+                # attempt is in flight on this instance); release it so
+                # the abandoned attempt does not pin a proxy slot.
                 _LOGGER.debug(
                     "%s: Releasing orphaned ESP-side connection",
                     self._description,
                 )
-                orphan_task = self._loop.create_task(self._release_orphaned_link())
-                self._orphan_disconnect_tasks.add(orphan_task)
-                orphan_task.add_done_callback(self._on_orphan_release_done)
+                self._release_connection_no_wait()
             return
 
         if connected:
@@ -463,7 +405,7 @@ class ESPHomeClient(BaseBleakClient):
                 # release the ESP-side connection so the proxy's slot is
                 # not leaked on a connection no client owns.
                 if self._is_connected:
-                    await self._shielded_disconnect()
+                    self._release_connection_no_wait()
                 # Clean up local state and the connection-state
                 # subscription so it does not leak and trigger the
                 # ``not properly disconnected before destruction``
@@ -482,15 +424,12 @@ class ESPHomeClient(BaseBleakClient):
                 # The future can also fail after the link came up
                 # (``connected=True`` with an error code); release the
                 # ESP-side connection so the slot is not leaked.
-                absorbed_cancel = (
-                    self._is_connected and await self._shielded_disconnect()
-                )
+                # The release is synchronous, so no cancellation can
+                # land mid-release; one arriving during the settle below
+                # propagates naturally and outranks the original error.
+                if self._is_connected:
+                    self._release_connection_no_wait()
                 self._async_disconnected_cleanup()
-                if absorbed_cancel:
-                    # A cancellation was absorbed while releasing the
-                    # link; it outranks the original error for the
-                    # caller, which stays visible as the cause.
-                    raise asyncio.CancelledError from connect_error
                 if isinstance(connect_error, Exception):
                     # Same settle rationale as the setup-failure path:
                     # let the slot free up before the retry's short entry
@@ -515,27 +454,21 @@ class ESPHomeClient(BaseBleakClient):
         except asyncio.CancelledError:
             # On cancel we must still raise CancelledError to avoid
             # blocking the cancellation even if the disconnect call
-            # fails, so release the ESP-side connection best-effort
+            # fails, so release the ESP-side connection synchronously
             # before re-raising.
-            await self._shielded_disconnect()
+            self._release_connection_no_wait()
             raise
-        except Exception as setup_error:
+        except Exception:
             # Best-effort cleanup: release the BLE connection on the ESP
             # side, but never let a disconnect failure mask the original
-            # connect error. Shielded like the sibling cancel branches so
-            # a cancellation arriving mid-release cannot leave the device
-            # connected.
-            if await self._shielded_disconnect():
-                # A cancellation was absorbed during the release; it
-                # outranks the original error for the caller, which
-                # stays visible as the cause.
-                raise asyncio.CancelledError from setup_error
-            # Not a cancellation path, so let the slot settle before the
-            # retry connector tries again; the retry's entry gate only
-            # waits CONNECT_FREE_SLOT_TIMEOUT and would raise on a slow
-            # proxy otherwise. A settle failure must not mask the setup
-            # error, but it is the direct cause of that next gate failing,
-            # so it is logged rather than dropped.
+            # connect error. The release is synchronous, so a
+            # cancellation cannot interrupt it; one arriving during the
+            # settle below propagates naturally.
+            self._release_connection_no_wait()
+            # Let the slot settle before the retry connector tries
+            # again; the retry's entry gate only waits
+            # CONNECT_FREE_SLOT_TIMEOUT and would raise on a slow proxy
+            # otherwise. A settle failure must not mask the setup error.
             try:
                 await self._wait_for_free_connection_slot(DISCONNECT_TIMEOUT)
             except Exception as settle_error:  # pylint: disable=broad-except
@@ -555,23 +488,10 @@ class ESPHomeClient(BaseBleakClient):
         await self._disconnect_no_wait()
         await self._wait_for_free_connection_slot(DISCONNECT_TIMEOUT)
 
-    async def _disconnect_no_wait(self, timeout: float | None = None) -> None:
-        """
-        Release the ESP-side connection without the free-slot wait.
-
-        ``timeout`` bounds the disconnect RPC; the shielded cleanup paths
-        pass a short one because they absorb cancellation for the whole
-        RPC, while the public ``disconnect()`` path keeps aioesphomeapi's
-        default so a congested proxy is not turned into a spurious
-        ``TimeoutError``.
-        """
+    async def _disconnect_no_wait(self) -> None:
+        """Release the ESP-side connection without the free-slot wait."""
         try:
-            if timeout is None:
-                await self._client.bluetooth_device_disconnect(self._address_as_int)
-            else:
-                await self._client.bluetooth_device_disconnect(
-                    self._address_as_int, timeout=timeout
-                )
+            await self._client.bluetooth_device_disconnect(self._address_as_int)
         finally:
             self._async_ble_device_disconnected()
 

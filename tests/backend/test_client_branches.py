@@ -35,11 +35,7 @@ from bleak.backends.characteristic import BleakGATTCharacteristic
 from bleak.exc import BleakError
 from pytest_asyncio import fixture as aio_fixture
 
-from bleak_esphome.backend.client import (
-    SHIELDED_DISCONNECT_TIMEOUT,
-    ESPHomeClient,
-    ESPHomeClientData,
-)
+from bleak_esphome.backend.client import ESPHomeClient, ESPHomeClientData
 
 from ._helpers import ESP_MAC_ADDRESS, _make_client
 
@@ -208,21 +204,16 @@ async def test_on_bluetooth_connection_state_late_connect_does_not_resurrect(
     guards that the reported MTU is not cached for the abandoned attempt.
     """
     client = _make_client(client_data)
-    client._bluetooth_device.ble_connections_free = 1
     fut: asyncio.Future[bool] = client._loop.create_future()
     fut.cancel()
     with patch.object(
         client._client,
-        "bluetooth_device_disconnect",
+        "bluetooth_device_disconnect_no_wait",
     ) as mock_disconnect:
         client._on_bluetooth_connection_state(fut, True, 23, 0)
         assert not client.is_connected
         assert client._mtu is None
-        assert client._orphan_disconnect_tasks
-        await next(iter(client._orphan_disconnect_tasks))
-    mock_disconnect.assert_called_once_with(
-        client._address_as_int, timeout=SHIELDED_DISCONNECT_TIMEOUT
-    )
+    mock_disconnect.assert_called_once_with(client._address_as_int)
 
 
 @pytest.mark.asyncio
@@ -501,7 +492,7 @@ async def test_connect_get_services_failure_disconnects(
             return_value=Mock(),
         ) as mock_connect,
         patch.object(client, "_get_services", side_effect=_boom),
-        patch.object(client, "_disconnect_no_wait", new=AsyncMock()) as mock_disc,
+        patch.object(client, "_release_connection_no_wait", new=Mock()) as mock_disc,
     ):
         task = asyncio.create_task(bleak_client.connect(dangerous_use_bleak_cache=True))
         await asyncio.sleep(0)
@@ -511,7 +502,7 @@ async def test_connect_get_services_failure_disconnects(
         callback(True, 23, 0)
         with pytest.raises(RuntimeError, match="services boom"):
             await task
-    mock_disc.assert_awaited_once()
+    mock_disc.assert_called_once_with()
 
 
 @pytest.fixture

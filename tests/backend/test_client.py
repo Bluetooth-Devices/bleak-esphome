@@ -20,7 +20,6 @@ from habluetooth import BaseHaRemoteScanner, HaBluetoothConnector
 
 from bleak_esphome.backend.client import (
     GATT_HEADER_SIZE,
-    SHIELDED_DISCONNECT_TIMEOUT,
     ESPHomeClient,
     ESPHomeClientData,
 )
@@ -342,8 +341,8 @@ async def test_bleak_client_connect(
     ) as mock_disconnect:
         await client.disconnect()
 
-    # The public path keeps aioesphomeapi's default timeout; only the
-    # shielded cleanup paths pass an explicit short one.
+    # The public path awaits the confirmation with aioesphomeapi's
+    # default timeout; cleanup paths use the synchronous no-wait helper.
     mock_disconnect.assert_called_once_with(BLE_ADDRESS_AS_INT)
 
 
@@ -542,7 +541,7 @@ async def test_bleak_client_connect_cancel_after_link_up_disconnects_esp(
     reported ``connected=True`` (asyncio still delivers ``CancelledError``
     at the ``await`` even though the future holds a result), the ESP side
     holds a live connection that no client owns. ``connect()`` must release
-    it with ``bluetooth_device_disconnect`` so the proxy's slot is not
+    it with the synchronous no-wait disconnect so the proxy's slot is not
     leaked, clean up local state, and still propagate the cancellation.
     """
     bleak_client, client = bleak_pair
@@ -555,7 +554,7 @@ async def test_bleak_client_connect_cancel_after_link_up_disconnects_esp(
         ) as mock_connect,
         patch.object(
             client._client,
-            "bluetooth_device_disconnect",
+            "bluetooth_device_disconnect_no_wait",
         ) as mock_disconnect,
     ):
         task = asyncio.create_task(bleak_client.connect(dangerous_use_bleak_cache=True))
@@ -573,9 +572,7 @@ async def test_bleak_client_connect_cancel_after_link_up_disconnects_esp(
             await task
         assert task.cancelled()
 
-    mock_disconnect.assert_called_once_with(
-        BLE_ADDRESS_AS_INT, timeout=SHIELDED_DISCONNECT_TIMEOUT
-    )
+    mock_disconnect.assert_called_once_with(BLE_ADDRESS_AS_INT)
     assert not client.is_connected
     mock_cancel_connection_state.assert_called_once_with()
     assert client._cancel_connection_state is None
@@ -603,7 +600,7 @@ async def test_bleak_client_connect_error_after_link_up_disconnects_esp(
         ) as mock_connect,
         patch.object(
             client._client,
-            "bluetooth_device_disconnect",
+            "bluetooth_device_disconnect_no_wait",
         ) as mock_disconnect,
     ):
         task = asyncio.create_task(bleak_client.connect(dangerous_use_bleak_cache=True))
@@ -615,9 +612,7 @@ async def test_bleak_client_connect_error_after_link_up_disconnects_esp(
         with pytest.raises(BleakError, match="while connecting"):
             await task
 
-    mock_disconnect.assert_called_once_with(
-        BLE_ADDRESS_AS_INT, timeout=SHIELDED_DISCONNECT_TIMEOUT
-    )
+    mock_disconnect.assert_called_once_with(BLE_ADDRESS_AS_INT)
     assert not client.is_connected
     assert client._cancel_connection_state is None
 
@@ -684,7 +679,7 @@ async def test_bleak_client_connect_cancel_after_link_up_disconnect_failure_logg
         ) as mock_connect,
         patch.object(
             client._client,
-            "bluetooth_device_disconnect",
+            "bluetooth_device_disconnect_no_wait",
             side_effect=APIConnectionError("boom"),
         ) as mock_disconnect,
         caplog.at_level(logging.WARNING),
@@ -699,55 +694,10 @@ async def test_bleak_client_connect_cancel_after_link_up_disconnect_failure_logg
             await task
         assert task.cancelled()
 
-    mock_disconnect.assert_called_once_with(
-        BLE_ADDRESS_AS_INT, timeout=SHIELDED_DISCONNECT_TIMEOUT
-    )
+    mock_disconnect.assert_called_once_with(BLE_ADDRESS_AS_INT)
     assert not client.is_connected
     assert "Failed to release ESP-side connection" in caplog.text
     assert "boom" in caplog.text
-
-
-@pytest.mark.asyncio
-async def test_shielded_disconnect_returns_when_inner_task_is_cancelled(
-    bleak_pair: tuple[BleakClient, ESPHomeClient],
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """
-    Test the shielded release terminates when its inner task is cancelled.
-
-    Loop teardown cancels every pending task, including the inner
-    disconnect task. A shield on a done task returns it directly and
-    awaiting a cancelled task raises without yielding, so the drain must
-    exit on the inner task's state rather than loop on the awaits; it must
-    also not report an inner cancel as an absorbed caller cancellation,
-    and must warn that the slot may stay allocated.
-    """
-    _bleak_client, client = bleak_pair
-    in_disconnect = asyncio.Event()
-    inner_task: list[asyncio.Task[None]] = []
-
-    async def _hang_disconnect(*args: Any) -> None:
-        # Capture the inner disconnect task so the test can cancel it
-        # directly instead of scanning asyncio.all_tasks().
-        task = asyncio.current_task()
-        assert task is not None
-        inner_task.append(task)
-        in_disconnect.set()
-        await asyncio.Event().wait()
-
-    with (
-        patch.object(client, "_disconnect_no_wait", side_effect=_hang_disconnect),
-        caplog.at_level(logging.WARNING),
-    ):
-        release_task = asyncio.create_task(client._shielded_disconnect())
-        await in_disconnect.wait()
-        # Cancel the inner disconnect task, not the release wrapper.
-        inner_task[0].cancel()
-        # Bounded wait proves the drain does not spin forever.
-        absorbed = await asyncio.wait_for(release_task, timeout=2)
-
-    assert absorbed is False
-    assert "release was cancelled before it completed" in caplog.text
 
 
 @pytest.mark.asyncio
@@ -755,70 +705,26 @@ async def test_bleak_client_orphan_release_skipped_when_reconnected(
     bleak_pair: tuple[BleakClient, ESPHomeClient],
 ) -> None:
     """
-    Test a scheduled orphan release yields to a newer live link.
+    Test the orphan release yields to an attempt still in flight.
 
-    If a new connect on the same client instance establishes a link for
-    the address before the scheduled release runs, the release must not
-    tear that link down.
+    A late ``connected=True`` for an abandoned attempt must not release
+    the link while a newer attempt on the same client instance has a
+    connection-state subscription live; releasing by address would tear
+    that attempt down.
     """
     _bleak_client, client = bleak_pair
     with patch.object(
         client._client,
-        "bluetooth_device_disconnect",
+        "bluetooth_device_disconnect_no_wait",
     ) as mock_disconnect:
+        client._cancel_connection_state = Mock()
         fut: asyncio.Future[bool] = client._loop.create_future()
         fut.cancel()
         client._on_bluetooth_connection_state(fut, True, 23, 0)
-        orphan_task = next(iter(client._orphan_disconnect_tasks))
-        # A newer connect wins the race before the release task runs.
-        client._is_connected = True
-        assert await orphan_task is False
-
-        # The guard also yields to an attempt still in flight, marked by
-        # a live connection-state subscription.
-        client._is_connected = False
-        client._cancel_connection_state = Mock()
-        fut2: asyncio.Future[bool] = client._loop.create_future()
-        fut2.cancel()
-        client._on_bluetooth_connection_state(fut2, True, 23, 0)
-        orphan_task = next(iter(client._orphan_disconnect_tasks))
-        assert await orphan_task is False
         client._cancel_connection_state = None
 
     mock_disconnect.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_bleak_client_orphan_release_failure_is_warned(
-    bleak_pair: tuple[BleakClient, ESPHomeClient],
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """
-    Test an orphan release that raises surfaces as a warning.
-
-    Nothing else observes the fire-and-forget release; an exception that
-    escapes it must be retrieved and logged, not left for asyncio's
-    ``Task exception was never retrieved``.
-    """
-    _bleak_client, client = bleak_pair
-    with (
-        patch.object(
-            client,
-            "_shielded_disconnect",
-            side_effect=RuntimeError("release boom"),
-        ),
-        caplog.at_level(logging.WARNING),
-    ):
-        fut: asyncio.Future[bool] = client._loop.create_future()
-        fut.cancel()
-        client._on_bluetooth_connection_state(fut, True, 23, 0)
-        orphan_task = next(iter(client._orphan_disconnect_tasks))
-        with pytest.raises(RuntimeError, match="release boom"):
-            await orphan_task
-
-    assert not client._orphan_disconnect_tasks
-    assert "release failed" in caplog.text
-    assert "release boom" in caplog.text
+    assert not client.is_connected
 
 
 @pytest.mark.asyncio
@@ -863,41 +769,6 @@ async def test_bleak_client_connect_services_failure_logs_settle_timeout(
 
 
 @pytest.mark.asyncio
-async def test_bleak_client_orphan_release_cancelled_is_warned(
-    bleak_pair: tuple[BleakClient, ESPHomeClient],
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """
-    Test a cancelled orphan release surfaces as a warning.
-
-    The orphan release is fire-and-forget; nothing else observes it, so
-    if it never completes (loop teardown mid-flight) the ESP link may
-    still be up and that must be visible in the logs.
-    """
-    _bleak_client, client = bleak_pair
-    with (
-        patch.object(
-            client,
-            "_shielded_disconnect",
-            side_effect=asyncio.CancelledError,
-        ),
-        caplog.at_level(logging.WARNING),
-    ):
-        fut: asyncio.Future[bool] = client._loop.create_future()
-        fut.cancel()
-        # Late connected=True for an abandoned attempt spawns the orphan
-        # release, which here ends cancelled before it can complete.
-        client._on_bluetooth_connection_state(fut, True, 23, 0)
-        assert client._orphan_disconnect_tasks
-        orphan_task = next(iter(client._orphan_disconnect_tasks))
-        with pytest.raises(asyncio.CancelledError):
-            await orphan_task
-
-    assert not client._orphan_disconnect_tasks
-    assert "release was cancelled before it started" in caplog.text
-
-
-@pytest.mark.asyncio
 async def test_bleak_client_connect_cancel_after_error_retrieves_future(
     bleak_pair: tuple[BleakClient, ESPHomeClient],
 ) -> None:
@@ -918,7 +789,7 @@ async def test_bleak_client_connect_cancel_after_error_retrieves_future(
         ) as mock_connect,
         patch.object(
             client._client,
-            "bluetooth_device_disconnect",
+            "bluetooth_device_disconnect_no_wait",
         ) as mock_disconnect,
     ):
         task = asyncio.create_task(bleak_client.connect(dangerous_use_bleak_cache=True))
@@ -933,155 +804,7 @@ async def test_bleak_client_connect_cancel_after_error_retrieves_future(
             await task
         assert task.cancelled()
 
-    mock_disconnect.assert_called_once_with(
-        BLE_ADDRESS_AS_INT, timeout=SHIELDED_DISCONNECT_TIMEOUT
-    )
-    assert not client.is_connected
-
-
-@pytest.mark.asyncio
-async def test_bleak_client_connect_error_then_cancel_during_release(
-    bleak_pair: tuple[BleakClient, ESPHomeClient],
-) -> None:
-    """
-    Test a cancel absorbed during the error-path release still wins.
-
-    When the connect fails after the link came up and a cancellation
-    arrives while the shielded release is in flight, the release runs to
-    completion and the cancellation outranks the original error.
-    """
-    bleak_client, client = bleak_pair
-    in_disconnect = asyncio.Event()
-    release_disconnect = asyncio.Event()
-    disconnect_finished = asyncio.Event()
-
-    async def _slow_disconnect(*args: Any) -> None:
-        in_disconnect.set()
-        await release_disconnect.wait()
-        disconnect_finished.set()
-
-    with (
-        patch.object(
-            client._client,
-            "bluetooth_device_connect",
-            return_value=Mock(),
-        ) as mock_connect,
-        patch.object(client, "_disconnect_no_wait", side_effect=_slow_disconnect),
-    ):
-        task = asyncio.create_task(bleak_client.connect(dangerous_use_bleak_cache=True))
-        await asyncio.sleep(0)
-        await asyncio.sleep(0)
-        callback = mock_connect.call_args_list[0][0][1]
-        callback(True, 23, 1)
-        await in_disconnect.wait()
-        assert task.cancel() is True
-        await asyncio.sleep(0)
-        release_disconnect.set()
-        with pytest.raises(asyncio.CancelledError):
-            await task
-        assert task.cancelled()
-        assert disconnect_finished.is_set()
-
-    assert not client.is_connected
-
-
-@pytest.mark.asyncio
-async def test_bleak_client_connect_services_failure_then_cancel_during_release(
-    bleak_pair: tuple[BleakClient, ESPHomeClient],
-) -> None:
-    """
-    Test a cancel absorbed during the services-failure release still wins.
-
-    When ``_get_services`` fails after the link came up and a cancellation
-    arrives while the shielded cleanup release is in flight, the release
-    runs to completion and the cancellation outranks the original error.
-    """
-    bleak_client, client = bleak_pair
-    in_disconnect = asyncio.Event()
-    release_disconnect = asyncio.Event()
-    disconnect_finished = asyncio.Event()
-
-    async def _slow_disconnect(*args: Any) -> None:
-        in_disconnect.set()
-        await release_disconnect.wait()
-        disconnect_finished.set()
-
-    async def _boom_get_services(*args: Any, **kwargs: Any) -> Any:
-        raise BleakError("services boom")
-
-    with (
-        patch.object(
-            client._client,
-            "bluetooth_device_connect",
-            return_value=Mock(),
-        ) as mock_connect,
-        patch.object(client, "_get_services", side_effect=_boom_get_services),
-        patch.object(client, "_disconnect_no_wait", side_effect=_slow_disconnect),
-    ):
-        task = asyncio.create_task(bleak_client.connect(dangerous_use_bleak_cache=True))
-        await asyncio.sleep(0)
-        await asyncio.sleep(0)
-        callback = mock_connect.call_args_list[0][0][1]
-        callback(True, 23, 0)
-        await in_disconnect.wait()
-        assert task.cancel() is True
-        await asyncio.sleep(0)
-        release_disconnect.set()
-        with pytest.raises(asyncio.CancelledError):
-            await task
-        assert task.cancelled()
-        # The release ran to completion; the patched _disconnect_no_wait
-        # stands in for the real one, which also clears the client state.
-        assert disconnect_finished.is_set()
-
-
-@pytest.mark.asyncio
-async def test_bleak_client_connect_cancel_after_link_up_disconnect_shielded(
-    bleak_pair: tuple[BleakClient, ESPHomeClient],
-) -> None:
-    """
-    Test the cancel-after-link-up disconnect survives a re-cancellation.
-
-    The release of the ESP-side connection is shielded; a second
-    cancellation arriving while it is in flight must not interrupt it
-    half-way. The disconnect must run to completion and the original
-    cancellation must still propagate.
-    """
-    bleak_client, client = bleak_pair
-    in_disconnect = asyncio.Event()
-    release_disconnect = asyncio.Event()
-    disconnect_finished = asyncio.Event()
-
-    async def _slow_disconnect(*args: Any) -> None:
-        in_disconnect.set()
-        await release_disconnect.wait()
-        disconnect_finished.set()
-
-    with (
-        patch.object(
-            client._client,
-            "bluetooth_device_connect",
-            return_value=Mock(),
-        ) as mock_connect,
-        patch.object(client, "_disconnect_no_wait", side_effect=_slow_disconnect),
-    ):
-        task = asyncio.create_task(bleak_client.connect(dangerous_use_bleak_cache=True))
-        await asyncio.sleep(0)
-        await asyncio.sleep(0)
-        mock_connect.assert_called_once()
-        callback = mock_connect.call_args_list[0][0][1]
-        callback(True, 23, 0)
-        assert task.cancel() is True
-        await in_disconnect.wait()
-        task.cancel()
-        await asyncio.sleep(0)
-        await asyncio.sleep(0)
-        release_disconnect.set()
-        with pytest.raises(asyncio.CancelledError):
-            await task
-        assert task.cancelled()
-        assert disconnect_finished.is_set()
-
+    mock_disconnect.assert_called_once_with(BLE_ADDRESS_AS_INT)
     assert not client.is_connected
 
 
@@ -1108,7 +831,7 @@ async def test_bleak_client_late_connected_callback_does_not_resurrect(
         ) as mock_connect,
         patch.object(
             client._client,
-            "bluetooth_device_disconnect",
+            "bluetooth_device_disconnect_no_wait",
         ) as mock_disconnect,
     ):
         task = asyncio.create_task(bleak_client.connect(dangerous_use_bleak_cache=True))
@@ -1122,13 +845,8 @@ async def test_bleak_client_late_connected_callback_does_not_resurrect(
         callback(True, 23, 0)
         assert not client.is_connected
         assert client._async_esp_disconnected not in client._disconnect_callbacks
-        # Drain the orphan-release task spawned by the late callback.
-        assert client._orphan_disconnect_tasks
-        await next(iter(client._orphan_disconnect_tasks))
 
-    mock_disconnect.assert_called_once_with(
-        BLE_ADDRESS_AS_INT, timeout=SHIELDED_DISCONNECT_TIMEOUT
-    )
+    mock_disconnect.assert_called_once_with(BLE_ADDRESS_AS_INT)
 
 
 @pytest.mark.asyncio
@@ -1308,40 +1026,21 @@ async def test_bleak_client_connect_outer_base_exception_cleans_up(
 
 
 @pytest.mark.asyncio
-async def test_bleak_client_connect_get_services_cleanup_shielded(
+async def test_bleak_client_connect_get_services_cancel_releases_link(
     bleak_pair: tuple[BleakClient, ESPHomeClient],
 ) -> None:
     """
-    Test the disconnect cleanup is shielded against re-cancellation.
+    Test a cancel during service discovery releases the ESP-side link.
 
-    When ``_get_services`` raises ``CancelledError`` the connect path
-    runs ``await self._disconnect()`` to release the BLE connection on
-    the ESP side. ``_disconnect`` is itself a cancellation point, so a
-    parent-task cancellation arriving while it is running would
-    interrupt it half-way and leave the device connected on the ESP
-    side. The fix wraps the disconnect in ``asyncio.shield`` and, on
-    re-cancellation, finishes awaiting the disconnect before re-raising
-    so the cleanup completes and the original cancellation still
-    propagates to the caller.
-
-    This test asserts both that ``CancelledError`` propagates and that
-    the slow ``_disconnect`` ran to completion (its
-    ``disconnect_finished`` event is set).
+    The release is synchronous, so the cancellation is neither delayed
+    nor absorbed; it propagates immediately after the release is sent.
     """
     bleak_client, client = bleak_pair
-    in_disconnect = asyncio.Event()
-    release_disconnect = asyncio.Event()
-    disconnect_finished = asyncio.Event()
     in_get_services = asyncio.Event()
 
     async def _hang_get_services(*args: Any, **kwargs: Any) -> Any:
         in_get_services.set()
         await asyncio.Event().wait()
-
-    async def _slow_disconnect(*args: Any) -> None:
-        in_disconnect.set()
-        await release_disconnect.wait()
-        disconnect_finished.set()
 
     with (
         patch.object(
@@ -1350,25 +1049,24 @@ async def test_bleak_client_connect_get_services_cleanup_shielded(
             return_value=Mock(),
         ) as mock_connect,
         patch.object(client, "_get_services", side_effect=_hang_get_services),
-        patch.object(client, "_disconnect_no_wait", side_effect=_slow_disconnect),
+        patch.object(
+            client._client,
+            "bluetooth_device_disconnect_no_wait",
+        ) as mock_disconnect,
     ):
         task = asyncio.create_task(bleak_client.connect(dangerous_use_bleak_cache=True))
         await asyncio.sleep(0)
         await asyncio.sleep(0)
-        mock_connect.assert_called_once()
         callback = mock_connect.call_args_list[0][0][1]
         callback(True, 23, 0)
         await in_get_services.wait()
         assert task.cancel() is True
-        await in_disconnect.wait()
-        task.cancel()
-        await asyncio.sleep(0)
-        await asyncio.sleep(0)
-        release_disconnect.set()
         with pytest.raises(asyncio.CancelledError):
             await task
         assert task.cancelled()
-        assert disconnect_finished.is_set()
+
+    mock_disconnect.assert_called_once_with(BLE_ADDRESS_AS_INT)
+    assert not client.is_connected
 
 
 @pytest.mark.asyncio
@@ -1448,7 +1146,7 @@ async def test_bleak_client_connect_pair_failure_releases_slot(
         ),
         patch.object(
             client._client,
-            "bluetooth_device_disconnect",
+            "bluetooth_device_disconnect_no_wait",
         ) as mock_disconnect,
     ):
         task = asyncio.create_task(
