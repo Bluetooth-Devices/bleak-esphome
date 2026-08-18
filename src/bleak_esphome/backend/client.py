@@ -160,6 +160,7 @@ class ESPHomeClient(BaseBleakClient):
         self._is_connected = False
         self._mtu: int | None = None
         self._cancel_connection_state: Callable[[], None] | None = None
+        self._orphan_disconnect_task: asyncio.Task[None] | None = None
         self._notify_cancels: dict[
             int, tuple[Callable[[], Coroutine[Any, Any, None]], Callable[[], None]]
         ] = {}
@@ -261,6 +262,21 @@ class ESPHomeClient(BaseBleakClient):
             # cleanup may already have run. A late ``connected=True`` must
             # not mark the client connected again: nobody owns it anymore
             # and the state would never be corrected.
+            if connected and not self._is_connected:
+                # The ESP did just establish the link though; release it
+                # so the abandoned attempt does not pin a proxy slot. Not
+                # taken for a duplicate callback on a live connection,
+                # where ``_is_connected`` is still set.
+                _LOGGER.debug(
+                    "%s: Releasing orphaned ESP-side connection",
+                    self._description,
+                )
+                # Hold a reference so the task is not garbage collected
+                # before it runs; one connect attempt per client instance
+                # means at most one orphan release.
+                self._orphan_disconnect_task = self._loop.create_task(
+                    self._shielded_disconnect()
+                )
             return
 
         if connected:

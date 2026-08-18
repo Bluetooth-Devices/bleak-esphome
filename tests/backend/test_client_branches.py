@@ -202,14 +202,23 @@ async def test_on_bluetooth_connection_state_late_connect_does_not_resurrect(
     The future being done means the connect attempt already finished
     (failed, timed out, or was cancelled) and the owning ``connect()``
     has bailed; a late connected notification must not flip
-    ``_is_connected`` back on or cache the reported MTU.
+    ``_is_connected`` back on or cache the reported MTU. It must release
+    the just-established ESP-side link instead of leaving it orphaned.
     """
     client = _make_client(client_data)
+    client._bluetooth_device.ble_connections_free = 1
     fut: asyncio.Future[bool] = client._loop.create_future()
     fut.cancel()
-    client._on_bluetooth_connection_state(fut, True, 23, 0)
-    assert not client.is_connected
-    assert client._mtu is None
+    with patch.object(
+        client._client,
+        "bluetooth_device_disconnect",
+    ) as mock_disconnect:
+        client._on_bluetooth_connection_state(fut, True, 23, 0)
+        assert not client.is_connected
+        assert client._mtu is None
+        assert client._orphan_disconnect_task is not None
+        await client._orphan_disconnect_task
+    mock_disconnect.assert_called_once_with(client._address_as_int)
 
 
 @pytest.mark.asyncio

@@ -675,15 +675,22 @@ async def test_bleak_client_late_connected_callback_does_not_resurrect(
     Once the connect attempt has been abandoned (future done, cleanup ran),
     a late connection-state callback must not mark the client connected
     again; nobody owns the client anymore and the state would never be
-    corrected.
+    corrected. The ESP did just establish the link though, so the client
+    must release it rather than leave it pinning a proxy slot.
     """
     bleak_client, client = bleak_pair
     mock_cancel_connection_state = Mock()
-    with patch.object(
-        client._client,
-        "bluetooth_device_connect",
-        return_value=mock_cancel_connection_state,
-    ) as mock_connect:
+    with (
+        patch.object(
+            client._client,
+            "bluetooth_device_connect",
+            return_value=mock_cancel_connection_state,
+        ) as mock_connect,
+        patch.object(
+            client._client,
+            "bluetooth_device_disconnect",
+        ) as mock_disconnect,
+    ):
         task = asyncio.create_task(bleak_client.connect(dangerous_use_bleak_cache=True))
         await asyncio.sleep(0)
         await asyncio.sleep(0)
@@ -692,9 +699,15 @@ async def test_bleak_client_late_connected_callback_does_not_resurrect(
         with pytest.raises(asyncio.CancelledError):
             await task
 
-    callback(True, 23, 0)
+        callback(True, 23, 0)
+        assert not client.is_connected
+        assert client._async_esp_disconnected not in client._disconnect_callbacks
+        # Drain the orphan-release task spawned by the late callback.
+        assert client._orphan_disconnect_task is not None
+        await client._orphan_disconnect_task
+
+    mock_disconnect.assert_called_once_with(BLE_ADDRESS_AS_INT)
     assert not client.is_connected
-    assert client._async_esp_disconnected not in client._disconnect_callbacks
 
 
 @pytest.mark.asyncio
