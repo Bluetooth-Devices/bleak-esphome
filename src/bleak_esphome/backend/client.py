@@ -249,6 +249,26 @@ class ESPHomeClient(BaseBleakClient):
             )
         self._async_ble_device_disconnected()
 
+    async def _settle_slot_after_failure(self, context: str) -> None:
+        """
+        Wait for the freed slot to settle after a failed attempt.
+
+        The retry connector's entry gate only waits
+        ``CONNECT_FREE_SLOT_TIMEOUT`` and would raise on a slow proxy
+        otherwise. A settle failure must not mask the original error,
+        but it is the direct cause of that next gate failing, so it is
+        logged rather than dropped.
+        """
+        try:
+            await self._wait_for_free_connection_slot(DISCONNECT_TIMEOUT)
+        except Exception as settle_error:  # pylint: disable=broad-except
+            _LOGGER.debug(
+                "%s: Slot did not settle after %s: %s",
+                self._description,
+                context,
+                settle_error,
+            )
+
     def _on_bluetooth_connection_state(
         self,
         connected_future: asyncio.Future[bool],
@@ -372,11 +392,12 @@ class ESPHomeClient(BaseBleakClient):
                     )
                 )
             except asyncio.CancelledError:
-                if not connected_future.done():
+                if connected_future.done():
+                    self._retrieve_future_error(connected_future)
+                else:
                     # Make the abandoned attempt terminal so a late
                     # connection-state callback cannot resurrect state.
                     connected_future.cancel()
-                self._retrieve_future_error(connected_future)
                 self._async_disconnected_cleanup()
                 # If the current task is not actually being cancelled,
                 # the cancellation came from inside (e.g. the
@@ -389,10 +410,14 @@ class ESPHomeClient(BaseBleakClient):
                     ) from None
                 raise
             except Exception as ex:
-                # Prefer to raise the exception from the connect call as
-                # it will be more descriptive than a stored future error.
-                self._retrieve_future_error(connected_future)
-                connected_future.cancel(f"Unhandled exception in connect call: {ex}")
+                if connected_future.done():
+                    # Prefer to raise the exception from the connect call
+                    # as it is more descriptive than a stored future error.
+                    self._retrieve_future_error(connected_future)
+                else:
+                    connected_future.cancel(
+                        f"Unhandled exception in connect call: {ex}"
+                    )
                 self._async_disconnected_cleanup()
                 raise
             try:
@@ -403,14 +428,13 @@ class ESPHomeClient(BaseBleakClient):
                 # already came up (``connected_future`` can hold a result
                 # while the awaiting task was cancelled before resuming);
                 # release the ESP-side connection so the proxy's slot is
-                # not leaked on a connection no client owns.
+                # not leaked on a connection no client owns. The release
+                # tears down local state itself; otherwise clean up so
+                # the connection-state subscription does not leak.
                 if self._is_connected:
                     self._release_connection_no_wait()
-                # Clean up local state and the connection-state
-                # subscription so it does not leak and trigger the
-                # ``not properly disconnected before destruction``
-                # warning from ``__del__``.
-                self._async_disconnected_cleanup()
+                else:
+                    self._async_disconnected_cleanup()
                 # If the current task is not actually being cancelled,
                 # treat a cancellation of connected_future as a normal
                 # connection failure so bleak_retry_connector can retry
@@ -420,29 +444,26 @@ class ESPHomeClient(BaseBleakClient):
                         f"{self._description}: Connect attempt was cancelled"
                     ) from None
                 raise
-            except BaseException as connect_error:
+            except Exception:
                 # The future can also fail after the link came up
                 # (``connected=True`` with an error code); release the
-                # ESP-side connection so the slot is not leaked.
-                # The release is synchronous, so no cancellation can
-                # land mid-release; one arriving during the settle below
+                # ESP-side connection so the slot is not leaked, then
+                # let the slot settle before the retry connector tries
+                # again. A cancellation arriving during the settle
                 # propagates naturally and outranks the original error.
                 if self._is_connected:
                     self._release_connection_no_wait()
-                self._async_disconnected_cleanup()
-                if isinstance(connect_error, Exception):
-                    # Same settle rationale as the setup-failure path:
-                    # let the slot free up before the retry's short entry
-                    # gate. Skipped for BaseException so a real signal is
-                    # not stalled behind a slow proxy.
-                    try:
-                        await self._wait_for_free_connection_slot(DISCONNECT_TIMEOUT)
-                    except Exception as settle_error:  # pylint: disable=broad-except
-                        _LOGGER.debug(
-                            "%s: Slot did not settle after failed connect: %s",
-                            self._description,
-                            settle_error,
-                        )
+                else:
+                    self._async_disconnected_cleanup()
+                await self._settle_slot_after_failure("failed connect")
+                raise
+            except BaseException:
+                # A real signal must not be stalled behind a slow proxy,
+                # so no settle here.
+                if self._is_connected:
+                    self._release_connection_no_wait()
+                else:
+                    self._async_disconnected_cleanup()
                 raise
 
         try:
@@ -461,22 +482,9 @@ class ESPHomeClient(BaseBleakClient):
         except Exception:
             # Best-effort cleanup: release the BLE connection on the ESP
             # side, but never let a disconnect failure mask the original
-            # connect error. The release is synchronous, so a
-            # cancellation cannot interrupt it; one arriving during the
-            # settle below propagates naturally.
+            # connect error, then let the slot settle before the retry.
             self._release_connection_no_wait()
-            # Let the slot settle before the retry connector tries
-            # again; the retry's entry gate only waits
-            # CONNECT_FREE_SLOT_TIMEOUT and would raise on a slow proxy
-            # otherwise. A settle failure must not mask the setup error.
-            try:
-                await self._wait_for_free_connection_slot(DISCONNECT_TIMEOUT)
-            except Exception as settle_error:  # pylint: disable=broad-except
-                _LOGGER.debug(
-                    "%s: Slot did not settle after failed connect setup: %s",
-                    self._description,
-                    settle_error,
-                )
+            await self._settle_slot_after_failure("failed connect setup")
             raise
 
     @api_error_as_bleak_error
@@ -485,15 +493,11 @@ class ESPHomeClient(BaseBleakClient):
         await self._disconnect()
 
     async def _disconnect(self) -> None:
-        await self._disconnect_no_wait()
-        await self._wait_for_free_connection_slot(DISCONNECT_TIMEOUT)
-
-    async def _disconnect_no_wait(self) -> None:
-        """Release the ESP-side connection without the free-slot wait."""
         try:
             await self._client.bluetooth_device_disconnect(self._address_as_int)
         finally:
             self._async_ble_device_disconnected()
+        await self._wait_for_free_connection_slot(DISCONNECT_TIMEOUT)
 
     async def _wait_for_free_connection_slot(self, timeout: float) -> None:
         """Wait for a free connection slot."""

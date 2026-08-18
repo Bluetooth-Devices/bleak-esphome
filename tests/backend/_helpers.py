@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any
 from unittest.mock import patch
@@ -78,6 +79,25 @@ def make_bleak_client(
     backend: ESPHomeClient = bleak_client._backend
     backend._bluetooth_device.ble_connections_free = free_slots
     return bleak_client, backend
+
+
+async def start_connect(
+    bleak_client: BleakClient, mock_connect: Any
+) -> tuple[Any, Any]:
+    """
+    Start a ``connect()`` attempt and hand back its state callback.
+
+    Creates the connect task, settles the loop so the attempt is parked
+    on ``connected_future``, and extracts the connection-state callback
+    from the patched ``bluetooth_device_connect``. Centralizes the
+    positional callback extraction so a change to the RPC's signature is
+    a one-place fix.
+    """
+    task = asyncio.create_task(bleak_client.connect(dangerous_use_bleak_cache=True))
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    callback = mock_connect.call_args_list[0][0][1]
+    return task, callback
 
 
 @contextmanager

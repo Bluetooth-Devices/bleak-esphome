@@ -193,17 +193,25 @@ async def test_on_bluetooth_connection_state_idempotent_when_future_done(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("in_flight", [False, True])
 async def test_on_bluetooth_connection_state_late_connect_does_not_resurrect(
     client_data: ESPHomeClientData,
+    in_flight: bool,
 ) -> None:
     """
     A ``connected=True`` callback with a completed future is ignored.
 
-    Unit-level twin of the ``connect()``-path test in ``test_client.py``:
-    drives the callback directly with a cancelled future and additionally
-    guards that the reported MTU is not cached for the abandoned attempt.
+    The future being done means the connect attempt already finished
+    (failed, timed out, or was cancelled) and the owning ``connect()``
+    has bailed; a late connected notification must not flip
+    ``_is_connected`` back on or cache the reported MTU. The orphaned
+    link is released unless a newer attempt is in flight on this
+    instance (marked by a live connection-state subscription), in which
+    case releasing by address would tear that attempt down.
     """
     client = _make_client(client_data)
+    if in_flight:
+        client._cancel_connection_state = Mock()
     fut: asyncio.Future[bool] = client._loop.create_future()
     fut.cancel()
     with patch.object(
@@ -213,7 +221,10 @@ async def test_on_bluetooth_connection_state_late_connect_does_not_resurrect(
         client._on_bluetooth_connection_state(fut, True, 23, 0)
         assert not client.is_connected
         assert client._mtu is None
-    mock_disconnect.assert_called_once_with(client._address_as_int)
+    if in_flight:
+        mock_disconnect.assert_not_called()
+    else:
+        mock_disconnect.assert_called_once_with(client._address_as_int)
 
 
 @pytest.mark.asyncio
