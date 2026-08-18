@@ -183,12 +183,16 @@ class APIConnectionManager:
         try:
             if self._reconnect_logic is not None:
                 await self._reconnect_logic.stop()
-            if self._cli is not None:
-                await self._cli.disconnect()
-            if self._start_future is not None and not self._start_future.done():
-                self._start_future.cancel()
         finally:
-            # Same teardown as _on_disconnect so a stop() that never saw a
-            # disconnect callback, or whose shutdown awaits raised, still
-            # clears the session state.
-            self._teardown_session()
+            # Each shutdown step runs even if the previous one raised;
+            # otherwise a failing reconnect stop would leave the API
+            # client connected and a pending start() blocked forever.
+            try:
+                if self._cli is not None:
+                    await self._cli.disconnect()
+            finally:
+                if self._start_future is not None and not self._start_future.done():
+                    self._start_future.cancel()
+                # Same teardown as _on_disconnect so a stop() that never
+                # saw a disconnect callback still clears the session state.
+                self._teardown_session()

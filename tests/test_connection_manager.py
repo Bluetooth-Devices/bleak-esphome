@@ -430,7 +430,7 @@ async def test_stop_marks_unavailable_first_and_tears_down_on_error(
     connection is being torn down, and the session teardown must run
     even if a shutdown await raises.
     """
-    manager, mock_reconnect_logic, _ = conn_manager_with_mocked_reconnect
+    manager, mock_reconnect_logic, mock_disconnect = conn_manager_with_mocked_reconnect
     bluetooth_device = Mock(available=True)
     manager._bluetooth_device = bluetooth_device
     unregister = Mock()
@@ -448,7 +448,32 @@ async def test_stop_marks_unavailable_first_and_tears_down_on_error(
     # The gate was already closed when the first shutdown await ran.
     assert seen_available == [False]
     unregister.assert_called_once_with()
-    assert manager._bluetooth_device is None
+    # ``cast`` re-widens the attribute type mypy narrowed after the direct
+    # assignment above so the following statements are not unreachable.
+    assert cast("Mock | None", manager._bluetooth_device) is None
+    # The later shutdown steps still ran despite the earlier raise.
+    mock_disconnect.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+async def test_stop_cancels_pending_start_when_disconnect_raises(
+    config: ESPHomeDeviceConfig,
+) -> None:
+    """A raising client disconnect must not leave a pending start() blocked."""
+    manager = APIConnectionManager(config)
+    manager._cli = Mock()
+    manager._cli.disconnect = AsyncMock(side_effect=RuntimeError("disconnect boom"))
+    manager._reconnect_logic = Mock()
+    manager._reconnect_logic.stop = AsyncMock()
+    manager._start_future = asyncio.get_running_loop().create_future()
+    unregister = Mock()
+    manager._unregister_scanner = unregister
+
+    with pytest.raises(RuntimeError, match="disconnect boom"):
+        await manager.stop()
+
+    assert manager._start_future.cancelled()
+    unregister.assert_called_once_with()
 
 
 @pytest.mark.asyncio
