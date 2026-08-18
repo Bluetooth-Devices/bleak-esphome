@@ -249,6 +249,19 @@ class ESPHomeClient(BaseBleakClient):
             )
         self._async_ble_device_disconnected()
 
+    def _abandon_connect_attempt(self) -> None:
+        """
+        Tear down an abandoned connect attempt.
+
+        Releases the ESP-side link when it came up (the release tears
+        down local state itself); otherwise only the local cleanup runs
+        so the connection-state subscription does not leak.
+        """
+        if self._is_connected:
+            self._release_connection_no_wait()
+        else:
+            self._async_disconnected_cleanup()
+
     async def _settle_slot_after_failure(self, context: str) -> None:
         """
         Wait for the freed slot to settle after a failed attempt.
@@ -428,13 +441,8 @@ class ESPHomeClient(BaseBleakClient):
                 # already came up (``connected_future`` can hold a result
                 # while the awaiting task was cancelled before resuming);
                 # release the ESP-side connection so the proxy's slot is
-                # not leaked on a connection no client owns. The release
-                # tears down local state itself; otherwise clean up so
-                # the connection-state subscription does not leak.
-                if self._is_connected:
-                    self._release_connection_no_wait()
-                else:
-                    self._async_disconnected_cleanup()
+                # not leaked on a connection no client owns.
+                self._abandon_connect_attempt()
                 # If the current task is not actually being cancelled,
                 # treat a cancellation of connected_future as a normal
                 # connection failure so bleak_retry_connector can retry
@@ -451,19 +459,13 @@ class ESPHomeClient(BaseBleakClient):
                 # let the slot settle before the retry connector tries
                 # again. A cancellation arriving during the settle
                 # propagates naturally and outranks the original error.
-                if self._is_connected:
-                    self._release_connection_no_wait()
-                else:
-                    self._async_disconnected_cleanup()
+                self._abandon_connect_attempt()
                 await self._settle_slot_after_failure("failed connect")
                 raise
             except BaseException:
                 # A real signal must not be stalled behind a slow proxy,
                 # so no settle here.
-                if self._is_connected:
-                    self._release_connection_no_wait()
-                else:
-                    self._async_disconnected_cleanup()
+                self._abandon_connect_attempt()
                 raise
 
         try:
