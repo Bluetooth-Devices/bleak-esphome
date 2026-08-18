@@ -385,21 +385,15 @@ class ESPHomeClient(BaseBleakClient):
 
         if connected:
             self._is_connected = True
-            # The MTU is negotiated per link, but the cache is keyed by the
-            # peripheral address alone and shared across every proxy, so a
-            # value learned through one proxy must not be carried over to
-            # another. Always adopt the MTU reported for the current link.
+            # The MTU is negotiated per link, but the cache outlives the
+            # link it was learned on, so a later link may negotiate a
+            # lower value or fail the exchange entirely. Adopt what this
+            # link reports rather than what an earlier one negotiated.
             #
-            # The one exception is a cached connect: the proxy reports it at
-            # ESP_GATTC_OPEN_EVT, before MTU exchange completes, so the value
-            # is the firmware's placeholder rather than a negotiated one.
-            # ``has_cache`` already requires a cached MTU, so keep that.
-            #
-            # That leaves a residual gap: on the cached path the carried-over
-            # value is still the cross-proxy one, so a peripheral that
-            # negotiated a large MTU through one proxy keeps it when
-            # reconnected through another. Closing that needs a per-proxy
-            # cache key or an MTU report after the exchange completes.
+            # The one exception is a cached connect: the proxy reports at
+            # ESP_GATTC_OPEN_EVT, before the MTU exchange completes, so the
+            # value is the firmware's placeholder rather than a negotiated
+            # one. ``has_cache`` already requires a cached MTU, so keep that.
             if not has_cache:
                 self._mtu = mtu
                 self._cache.set_gatt_mtu_cache(self._address_as_int, mtu)

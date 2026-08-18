@@ -277,14 +277,13 @@ async def test_on_bluetooth_connection_state_adopts_current_link_mtu(
     """
     A non-cached connect adopts the MTU of the current link.
 
-    The cache is keyed by peripheral address and shared across proxies,
-    so a value seeded by ``connect()`` from an earlier link must give way
-    to the one the current proxy negotiated — otherwise
-    ``max_write_without_response`` is derived from an MTU this link
-    cannot carry.
+    The cache outlives the link it was learned on, so a later link that
+    negotiates a smaller MTU (or fails the exchange, leaving the firmware
+    placeholder) must win — otherwise ``max_write_without_response`` is
+    derived from an MTU this link cannot carry.
     """
     client = _make_client(client_data)
-    # Seeded by connect() from a link established through another proxy.
+    # Seeded by connect() from the cache, negotiated on an earlier link.
     client._mtu = 517
     reported_mtu = 23
     fut: asyncio.Future[bool] = client._loop.create_future()
