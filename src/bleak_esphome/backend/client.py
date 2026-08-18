@@ -395,6 +395,11 @@ class ESPHomeClient(BaseBleakClient):
             # value is the firmware's placeholder rather than a negotiated
             # one. ``has_cache`` already requires a cached MTU, so keep that.
             if not has_cache:
+                if self._mtu is not None and self._mtu != mtu:
+                    # A cached service collection closed over the old MTU
+                    # in ``get_max_write_without_response``; drop it so the
+                    # next ``_get_services()`` rebuilds against this link.
+                    self._cache.clear_gatt_services_cache(self._address_as_int)
                 self._mtu = mtu
                 self._cache.set_gatt_mtu_cache(self._address_as_int, mtu)
 
