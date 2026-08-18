@@ -972,24 +972,43 @@ class ESPHomeClient(BaseBleakClient):
             # notifications but the peripheral keeps sending them for the
             # life of the connection. Write the CCCD first so the peripheral
             # is quiet before the proxy-side subscription goes away.
-            if self._feature_flags & BluetoothProxyFeature.REMOTE_CACHING.value and (
-                cccd_descriptor := characteristic.get_descriptor(CCCD_UUID)
-            ):
-                _LOGGER.debug(
-                    "%s: Writing to CCD descriptor %s to stop notifications",
-                    self._description,
-                    cccd_descriptor.handle,
-                )
-                await self._client.bluetooth_gatt_write_descriptor(
-                    self._address_as_int,
-                    cccd_descriptor.handle,
-                    CCCD_DISABLE_BYTES,
-                )
-        finally:
+            if self._feature_flags & BluetoothProxyFeature.REMOTE_CACHING.value:
+                cccd_descriptor = characteristic.get_descriptor(CCCD_UUID)
+                if not cccd_descriptor:
+                    # start_notify raises when the descriptor is missing, so
+                    # reaching here means it disappeared after subscribing.
+                    # Log instead of raising: the proxy-side subscription
+                    # still has to be released, but staying silent would hide
+                    # a peripheral that keeps notifying forever.
+                    _LOGGER.warning(
+                        "%s: Characteristic %s does not have a characteristic "
+                        "client config descriptor; the peripheral may keep "
+                        "sending notifications",
+                        self._description,
+                        characteristic.uuid,
+                    )
+                else:
+                    _LOGGER.debug(
+                        "%s: Writing to CCD descriptor %s to stop notifications",
+                        self._description,
+                        cccd_descriptor.handle,
+                    )
+                    await self._client.bluetooth_gatt_write_descriptor(
+                        self._address_as_int,
+                        cccd_descriptor.handle,
+                        CCCD_DISABLE_BYTES,
+                    )
+        except BaseException:
+            # Use BaseException to handle CancelledError as well as Exception.
             # Always release the proxy-side subscription, even when the CCCD
             # write fails, so the local bookkeeping cannot drift from the
-            # already-popped handle.
-            await notify_stop()
+            # already-popped handle. The release is best-effort here because
+            # the CCCD failure is the actionable root cause and must not be
+            # replaced by a secondary error from the cleanup path.
+            with contextlib.suppress(Exception):
+                await notify_stop()
+            raise
+        await notify_stop()
 
     def _raise_if_not_connected(self) -> None:
         """Raise a BleakError if not connected."""
