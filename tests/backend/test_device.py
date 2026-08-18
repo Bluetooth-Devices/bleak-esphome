@@ -205,9 +205,20 @@ async def test_set_unavailable_fails_pending_slot_waiters(
     await asyncio.sleep(0)
     assert not task.done()
     bluetooth_device.async_set_unavailable()
-    with pytest.raises(TimeoutError, match="Proxy disconnected"):
+    with pytest.raises(TimeoutError, match="Proxy became unavailable"):
         await task
     assert bluetooth_device.available is False
+    assert bluetooth_device._ble_connection_free_futures == set()
+
+
+@pytest.mark.asyncio
+async def test_wait_after_unavailable_fails_fast(
+    bluetooth_device: ESPHomeBluetoothDevice,
+) -> None:
+    """A waiter entering after the proxy went away fails immediately."""
+    bluetooth_device.async_set_unavailable()
+    with pytest.raises(TimeoutError, match="Proxy became unavailable"):
+        await bluetooth_device.wait_for_ble_connections_free(60.0)
     assert bluetooth_device._ble_connection_free_futures == set()
 
 
@@ -223,7 +234,7 @@ async def test_set_unavailable_skips_done_futures(
     bluetooth_device._ble_connection_free_futures.update({done_fut, pending_fut})
     bluetooth_device.async_set_unavailable()
     assert done_fut.cancelled()
-    with pytest.raises(TimeoutError, match="Proxy disconnected"):
+    with pytest.raises(TimeoutError, match="Proxy became unavailable"):
         await pending_fut
     assert bluetooth_device._ble_connection_free_futures == set()
 

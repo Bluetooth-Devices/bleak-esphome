@@ -31,6 +31,7 @@ class ESPHomeBluetoothDevice:
     loop: asyncio.AbstractEventLoop = field(default_factory=asyncio.get_running_loop)
     available: bool = False
     cache: ESPHomeBluetoothCache = field(default_factory=ESPHomeBluetoothCache)
+    _unavailable: bool = False
     _connection_slots_callback: Callable[[Allocations], None] | None = None
     _called_callback: bool = False
     _tracked_clients: dict[int, Callable[[], None]] = field(default_factory=dict)
@@ -78,6 +79,14 @@ class ESPHomeBluetoothDevice:
         """
         if self._tracked_clients.get(address) == on_ble_disconnected:
             del self._tracked_clients[address]
+
+    def _unavailable_message(self) -> str:
+        """Return the failure text for a wait on an unavailable proxy."""
+        return (
+            f"{self.name} [{self.mac_address}]: Proxy became unavailable "
+            "while waiting for a free BLE connection slot"
+        )
+
     def async_set_unavailable(self) -> None:
         """
         Mark the proxy unavailable and fail pending slot waiters.
@@ -87,10 +96,11 @@ class ESPHomeBluetoothDevice:
         gone; failing fast lets it retry against another proxy.
         """
         self.available = False
-        message = (
-            f"{self.name} [{self.mac_address}]: Proxy disconnected "
-            "while waiting for a free BLE connection slot"
-        )
+        # Distinct from ``available``, which defaults to False before the
+        # first connect; only an explicit unavailability marks the proxy
+        # dead for the wait entry guard below.
+        self._unavailable = True
+        message = self._unavailable_message()
         for fut in self._ble_connection_free_futures:
             # Skip futures already done (a cancelled waiter leaves its
             # future in the set until its finally runs).
@@ -259,6 +269,11 @@ class ESPHomeBluetoothDevice:
                 while waiting (see ``async_set_unavailable``).
 
         """
+        if self._unavailable:
+            # Fail fast for waiters arriving after the proxy went away;
+            # they would otherwise park the full timeout on a proxy that
+            # is provably dead.
+            raise TimeoutError(self._unavailable_message())
         if self.ble_connections_free > 0:
             return self.ble_connections_free
         fut: asyncio.Future[int] = self.loop.create_future()

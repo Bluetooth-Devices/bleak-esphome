@@ -184,6 +184,12 @@ If you also want to override which `disconnect_callbacks` set is used —
 for example, to share one set across several scanners — reassign
 `client_data.disconnect_callbacks` **before** calling `async_setup()`.
 
+When the ESP disconnects, also call
+`client_data.bluetooth_device.async_set_unavailable()`. It closes the
+connector's `can_connect` gate and immediately fails any caller waiting
+for a free connection slot, so connect attempts stop parking their full
+timeout on a proxy that is already gone.
+
 ## Scanning Modes
 
 The proxy can scan in one of two firmware modes, and `habluetooth` adds a
