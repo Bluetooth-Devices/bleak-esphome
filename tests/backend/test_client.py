@@ -1,5 +1,6 @@
 import asyncio
 import inspect
+import logging
 from typing import Any
 from unittest.mock import AsyncMock, Mock, patch
 from uuid import UUID
@@ -617,13 +618,15 @@ async def test_bleak_client_connect_error_after_link_up_disconnects_esp(
 @pytest.mark.asyncio
 async def test_bleak_client_connect_cancel_after_link_up_disconnect_failure_logged(
     bleak_pair: tuple[BleakClient, ESPHomeClient],
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """
     Test a failing release does not mask the cancellation.
 
     If the ESP-side disconnect fails while cleaning up a cancelled
-    connect, the error is logged and swallowed; the cancellation still
-    propagates to the caller.
+    connect, the cancellation still propagates to the caller; the failure
+    is a leaked proxy slot, so it must surface as a warning rather than
+    be swallowed silently.
     """
     bleak_client, client = bleak_pair
     with (
@@ -637,6 +640,7 @@ async def test_bleak_client_connect_cancel_after_link_up_disconnect_failure_logg
             "bluetooth_device_disconnect",
             side_effect=APIConnectionError("boom"),
         ) as mock_disconnect,
+        caplog.at_level(logging.WARNING),
     ):
         task = asyncio.create_task(bleak_client.connect(dangerous_use_bleak_cache=True))
         await asyncio.sleep(0)
@@ -650,6 +654,43 @@ async def test_bleak_client_connect_cancel_after_link_up_disconnect_failure_logg
 
     mock_disconnect.assert_called_once_with(BLE_ADDRESS_AS_INT)
     assert not client.is_connected
+    assert "Failed to release ESP-side connection" in caplog.text
+    assert "boom" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_bleak_client_orphan_release_cancelled_is_warned(
+    bleak_pair: tuple[BleakClient, ESPHomeClient],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """
+    Test a cancelled orphan release surfaces as a warning.
+
+    The orphan release is fire-and-forget; nothing else observes it, so
+    if it never completes (loop teardown mid-flight) the ESP link may
+    still be up and that must be visible in the logs.
+    """
+    _bleak_client, client = bleak_pair
+    with (
+        patch.object(
+            client,
+            "_shielded_disconnect",
+            side_effect=asyncio.CancelledError,
+        ),
+        caplog.at_level(logging.WARNING),
+    ):
+        fut: asyncio.Future[bool] = client._loop.create_future()
+        fut.cancel()
+        # Late connected=True for an abandoned attempt spawns the orphan
+        # release, which here ends cancelled before it can complete.
+        client._on_bluetooth_connection_state(fut, True, 23, 0)
+        assert client._orphan_disconnect_tasks
+        orphan_task = next(iter(client._orphan_disconnect_tasks))
+        with pytest.raises(asyncio.CancelledError):
+            await orphan_task
+
+    assert not client._orphan_disconnect_tasks
+    assert "release was cancelled before it completed" in caplog.text
 
 
 @pytest.mark.asyncio

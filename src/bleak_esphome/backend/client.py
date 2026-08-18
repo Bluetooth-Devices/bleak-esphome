@@ -219,11 +219,27 @@ class ESPHomeClient(BaseBleakClient):
             self._disconnected_callback()
             self._disconnected_callback = None
 
-    @staticmethod
-    def _retrieve_future_error(fut: asyncio.Future[bool]) -> None:
+    def _retrieve_future_error(self, fut: asyncio.Future[bool]) -> None:
         """Mark a stored error retrieved so asyncio does not warn about it."""
-        if fut.done() and not fut.cancelled():
-            fut.exception()
+        if fut.done() and not fut.cancelled() and (exc := fut.exception()):
+            # The caller is raising a more actionable error in its place;
+            # keep the discarded cause recoverable from the logs.
+            _LOGGER.debug(
+                "%s: Discarding stored connect error: %s", self._description, exc
+            )
+
+    def _on_orphan_release_done(self, task: asyncio.Task[bool]) -> None:
+        """Drop a finished orphan release and surface one that never ran."""
+        self._orphan_disconnect_tasks.discard(task)
+        if task.cancelled():
+            # Nothing else observes this fire-and-forget task; a cancel
+            # here (loop teardown mid-flight) means the ESP link may
+            # still be up.
+            _LOGGER.warning(
+                "%s: Orphaned ESP-side connection release was cancelled "
+                "before it completed, the proxy slot may stay allocated",
+                self._description,
+            )
 
     async def _shielded_disconnect(self) -> bool:
         """
@@ -231,28 +247,30 @@ class ESPHomeClient(BaseBleakClient):
 
         The release is shielded so a cancellation arriving while it runs
         cannot interrupt it half-way and leave the device connected on the
-        ESP side; when one does arrive the release is drained first and
+        ESP side; when one does arrive the release is drained (still
+        shielded, so a further cancel cannot reach the RPC either) and
         True is returned so the caller can honor the absorbed cancellation.
         The free-slot wait is skipped so cleanup cannot stall a
-        cancellation behind a slow proxy; release errors are logged and
-        swallowed.
+        cancellation behind a slow proxy. A release that fails is a leaked
+        proxy slot, so it is logged as a warning rather than swallowed
+        silently.
         """
         disconnect_task = asyncio.create_task(self._disconnect_no_wait())
         absorbed = False
-        with contextlib.suppress(Exception):
+        while True:
             try:
                 await asyncio.shield(disconnect_task)
+                break
             except asyncio.CancelledError:
+                # Keep draining under the shield: each further cancel is
+                # absorbed the same way, so the RPC always completes.
                 absorbed = True
-                with contextlib.suppress(Exception):
-                    await disconnect_task
-        if (
-            disconnect_task.done()
-            and not disconnect_task.cancelled()
-            and (exc := disconnect_task.exception())
-        ):
-            _LOGGER.debug(
-                "%s: Ignoring error releasing ESP-side connection: %s",
+            except Exception:  # pylint: disable=broad-except
+                break
+        if not disconnect_task.cancelled() and (exc := disconnect_task.exception()):
+            _LOGGER.warning(
+                "%s: Failed to release ESP-side connection, the proxy slot "
+                "may stay allocated until it disconnects on its own: %s",
                 self._description,
                 exc,
             )
@@ -294,7 +312,7 @@ class ESPHomeClient(BaseBleakClient):
                 )
                 orphan_task = self._loop.create_task(self._shielded_disconnect())
                 self._orphan_disconnect_tasks.add(orphan_task)
-                orphan_task.add_done_callback(self._orphan_disconnect_tasks.discard)
+                orphan_task.add_done_callback(self._on_orphan_release_done)
             return
 
         if connected:
@@ -461,13 +479,18 @@ class ESPHomeClient(BaseBleakClient):
             # side, but never let a disconnect failure mask the original
             # connect error. Shielded like the sibling cancel branches so
             # a cancellation arriving mid-release cannot leave the device
-            # connected; ``connect()`` re-checks free slots at entry, so
-            # the slot wait is not needed here.
+            # connected.
             if await self._shielded_disconnect():
                 # A cancellation was absorbed during the release; it
                 # outranks the original error for the caller, which
                 # stays visible as the cause.
                 raise asyncio.CancelledError from setup_error
+            # Not a cancellation path, so let the slot settle before the
+            # retry connector tries again; the retry's entry gate only
+            # waits CONNECT_FREE_SLOT_TIMEOUT and would raise on a slow
+            # proxy otherwise. Errors here must not mask the setup error.
+            with contextlib.suppress(Exception):
+                await self._wait_for_free_connection_slot(DISCONNECT_TIMEOUT)
             raise
 
     @api_error_as_bleak_error
