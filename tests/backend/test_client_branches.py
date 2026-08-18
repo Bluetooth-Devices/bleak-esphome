@@ -36,7 +36,7 @@ from bleak.exc import BleakError
 from pytest_asyncio import fixture as aio_fixture
 
 from bleak_esphome.backend.client import (
-    DISCONNECT_TIMEOUT,
+    SHIELDED_DISCONNECT_TIMEOUT,
     ESPHomeClient,
     ESPHomeClientData,
 )
@@ -221,7 +221,7 @@ async def test_on_bluetooth_connection_state_late_connect_does_not_resurrect(
         assert client._orphan_disconnect_tasks
         await next(iter(client._orphan_disconnect_tasks))
     mock_disconnect.assert_called_once_with(
-        client._address_as_int, timeout=DISCONNECT_TIMEOUT
+        client._address_as_int, timeout=SHIELDED_DISCONNECT_TIMEOUT
     )
 
 

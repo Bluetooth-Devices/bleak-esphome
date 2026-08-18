@@ -19,8 +19,8 @@ from bleak.exc import BleakError
 from habluetooth import BaseHaRemoteScanner, HaBluetoothConnector
 
 from bleak_esphome.backend.client import (
-    DISCONNECT_TIMEOUT,
     GATT_HEADER_SIZE,
+    SHIELDED_DISCONNECT_TIMEOUT,
     ESPHomeClient,
     ESPHomeClientData,
 )
@@ -572,7 +572,7 @@ async def test_bleak_client_connect_cancel_after_link_up_disconnects_esp(
         assert task.cancelled()
 
     mock_disconnect.assert_called_once_with(
-        BLE_ADDRESS_AS_INT, timeout=DISCONNECT_TIMEOUT
+        BLE_ADDRESS_AS_INT, timeout=SHIELDED_DISCONNECT_TIMEOUT
     )
     assert not client.is_connected
     mock_cancel_connection_state.assert_called_once_with()
@@ -614,7 +614,7 @@ async def test_bleak_client_connect_error_after_link_up_disconnects_esp(
             await task
 
     mock_disconnect.assert_called_once_with(
-        BLE_ADDRESS_AS_INT, timeout=DISCONNECT_TIMEOUT
+        BLE_ADDRESS_AS_INT, timeout=SHIELDED_DISCONNECT_TIMEOUT
     )
     assert not client.is_connected
     assert client._cancel_connection_state is None
@@ -658,7 +658,7 @@ async def test_bleak_client_connect_cancel_after_link_up_disconnect_failure_logg
         assert task.cancelled()
 
     mock_disconnect.assert_called_once_with(
-        BLE_ADDRESS_AS_INT, timeout=DISCONNECT_TIMEOUT
+        BLE_ADDRESS_AS_INT, timeout=SHIELDED_DISCONNECT_TIMEOUT
     )
     assert not client.is_connected
     assert "Failed to release ESP-side connection" in caplog.text
@@ -682,8 +682,14 @@ async def test_shielded_disconnect_returns_when_inner_task_is_cancelled(
     """
     _bleak_client, client = bleak_pair
     in_disconnect = asyncio.Event()
+    inner_task: list[asyncio.Task[None]] = []
 
-    async def _hang_disconnect() -> None:
+    async def _hang_disconnect(*args: Any) -> None:
+        # Capture the inner disconnect task so the test can cancel it
+        # directly instead of scanning asyncio.all_tasks().
+        task = asyncio.current_task()
+        assert task is not None
+        inner_task.append(task)
         in_disconnect.set()
         await asyncio.Event().wait()
 
@@ -694,18 +700,40 @@ async def test_shielded_disconnect_returns_when_inner_task_is_cancelled(
         release_task = asyncio.create_task(client._shielded_disconnect())
         await in_disconnect.wait()
         # Cancel the inner disconnect task, not the release wrapper.
-        inner_tasks = [
-            t
-            for t in asyncio.all_tasks()
-            if t is not release_task and t is not asyncio.current_task()
-        ]
-        assert len(inner_tasks) == 1
-        inner_tasks[0].cancel()
+        inner_task[0].cancel()
         # Bounded wait proves the drain does not spin forever.
         absorbed = await asyncio.wait_for(release_task, timeout=2)
 
     assert absorbed is False
     assert "release was cancelled before it completed" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_bleak_client_orphan_release_skipped_when_reconnected(
+    bleak_pair: tuple[BleakClient, ESPHomeClient],
+) -> None:
+    """
+    Test a scheduled orphan release yields to a newer live link.
+
+    If a new connect on the same client instance establishes a link for
+    the address before the scheduled release runs, the release must not
+    tear that link down.
+    """
+    _bleak_client, client = bleak_pair
+    with patch.object(
+        client._client,
+        "bluetooth_device_disconnect",
+    ) as mock_disconnect:
+        fut: asyncio.Future[bool] = client._loop.create_future()
+        fut.cancel()
+        client._on_bluetooth_connection_state(fut, True, 23, 0)
+        orphan_task = next(iter(client._orphan_disconnect_tasks))
+        # A newer connect wins the race before the release task runs.
+        client._is_connected = True
+        assert await orphan_task is False
+
+    mock_disconnect.assert_not_called()
+    assert client.is_connected
 
 
 @pytest.mark.asyncio
@@ -854,7 +882,7 @@ async def test_bleak_client_connect_cancel_after_error_retrieves_future(
         assert task.cancelled()
 
     mock_disconnect.assert_called_once_with(
-        BLE_ADDRESS_AS_INT, timeout=DISCONNECT_TIMEOUT
+        BLE_ADDRESS_AS_INT, timeout=SHIELDED_DISCONNECT_TIMEOUT
     )
     assert not client.is_connected
 
@@ -875,7 +903,7 @@ async def test_bleak_client_connect_error_then_cancel_during_release(
     release_disconnect = asyncio.Event()
     disconnect_finished = asyncio.Event()
 
-    async def _slow_disconnect() -> None:
+    async def _slow_disconnect(*args: Any) -> None:
         in_disconnect.set()
         await release_disconnect.wait()
         disconnect_finished.set()
@@ -921,7 +949,7 @@ async def test_bleak_client_connect_services_failure_then_cancel_during_release(
     release_disconnect = asyncio.Event()
     disconnect_finished = asyncio.Event()
 
-    async def _slow_disconnect() -> None:
+    async def _slow_disconnect(*args: Any) -> None:
         in_disconnect.set()
         await release_disconnect.wait()
         disconnect_finished.set()
@@ -972,7 +1000,7 @@ async def test_bleak_client_connect_cancel_after_link_up_disconnect_shielded(
     release_disconnect = asyncio.Event()
     disconnect_finished = asyncio.Event()
 
-    async def _slow_disconnect() -> None:
+    async def _slow_disconnect(*args: Any) -> None:
         in_disconnect.set()
         await release_disconnect.wait()
         disconnect_finished.set()
@@ -1047,7 +1075,7 @@ async def test_bleak_client_late_connected_callback_does_not_resurrect(
         await next(iter(client._orphan_disconnect_tasks))
 
     mock_disconnect.assert_called_once_with(
-        BLE_ADDRESS_AS_INT, timeout=DISCONNECT_TIMEOUT
+        BLE_ADDRESS_AS_INT, timeout=SHIELDED_DISCONNECT_TIMEOUT
     )
 
 
@@ -1258,7 +1286,7 @@ async def test_bleak_client_connect_get_services_cleanup_shielded(
         in_get_services.set()
         await asyncio.Event().wait()
 
-    async def _slow_disconnect() -> None:
+    async def _slow_disconnect(*args: Any) -> None:
         in_disconnect.set()
         await release_disconnect.wait()
         disconnect_finished.set()

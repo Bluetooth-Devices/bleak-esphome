@@ -51,6 +51,7 @@ if TYPE_CHECKING:
 DEFAULT_MTU = 23
 GATT_HEADER_SIZE = 3
 DISCONNECT_TIMEOUT = 5.0
+SHIELDED_DISCONNECT_TIMEOUT = 5.0
 CONNECT_FREE_SLOT_TIMEOUT = 2.0
 GATT_READ_TIMEOUT = 30.0
 DEFAULT_TIMEOUT = 30.0
@@ -249,6 +250,15 @@ class ESPHomeClient(BaseBleakClient):
                 exc,
             )
 
+    async def _release_orphaned_link(self) -> bool:
+        """Release an orphaned link unless a newer connect owns it now."""
+        if self._is_connected:
+            # A newer connect on this client instance established a live
+            # link for the same address after the release was scheduled;
+            # releasing by address now would tear that link down.
+            return False
+        return await self._shielded_disconnect()
+
     async def _shielded_disconnect(self) -> bool:
         """
         Release the ESP-side connection, surviving re-cancellation.
@@ -263,7 +273,9 @@ class ESPHomeClient(BaseBleakClient):
         itself cancelled (loop teardown) is a leaked proxy slot, so it is
         logged as a warning rather than swallowed silently.
         """
-        disconnect_task = asyncio.create_task(self._disconnect_no_wait())
+        disconnect_task = asyncio.create_task(
+            self._disconnect_no_wait(SHIELDED_DISCONNECT_TIMEOUT)
+        )
         absorbed = False
         # Loop on the inner task's state, not on the awaits: once the
         # inner task is done a shield returns it directly and awaiting a
@@ -276,7 +288,7 @@ class ESPHomeClient(BaseBleakClient):
                 # A cancel that reached the inner task itself is not a
                 # caller cancellation to honor; only count the ones the
                 # shield absorbed on our behalf.
-                absorbed = not disconnect_task.cancelled()
+                absorbed = absorbed or not disconnect_task.cancelled()
             except Exception:  # pylint: disable=broad-except
                 break
         if disconnect_task.cancelled():
@@ -329,7 +341,7 @@ class ESPHomeClient(BaseBleakClient):
                     "%s: Releasing orphaned ESP-side connection",
                     self._description,
                 )
-                orphan_task = self._loop.create_task(self._shielded_disconnect())
+                orphan_task = self._loop.create_task(self._release_orphaned_link())
                 self._orphan_disconnect_tasks.add(orphan_task)
                 orphan_task.add_done_callback(self._on_orphan_release_done)
             return
@@ -529,15 +541,23 @@ class ESPHomeClient(BaseBleakClient):
         await self._disconnect_no_wait()
         await self._wait_for_free_connection_slot(DISCONNECT_TIMEOUT)
 
-    async def _disconnect_no_wait(self) -> None:
-        """Release the ESP-side connection without the free-slot wait."""
+    async def _disconnect_no_wait(self, timeout: float | None = None) -> None:
+        """
+        Release the ESP-side connection without the free-slot wait.
+
+        ``timeout`` bounds the disconnect RPC; the shielded cleanup paths
+        pass a short one because they absorb cancellation for the whole
+        RPC, while the public ``disconnect()`` path keeps aioesphomeapi's
+        default so a congested proxy is not turned into a spurious
+        ``TimeoutError``.
+        """
         try:
-            # Bound explicitly: the shielded cleanup paths absorb
-            # cancellation for the whole RPC, so aioesphomeapi's 20s
-            # default would make an uncancellable window that long.
-            await self._client.bluetooth_device_disconnect(
-                self._address_as_int, timeout=DISCONNECT_TIMEOUT
-            )
+            if timeout is None:
+                await self._client.bluetooth_device_disconnect(self._address_as_int)
+            else:
+                await self._client.bluetooth_device_disconnect(
+                    self._address_as_int, timeout=timeout
+                )
         finally:
             self._async_ble_device_disconnected()
 
