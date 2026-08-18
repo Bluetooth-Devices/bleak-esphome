@@ -142,7 +142,9 @@ async def test_on_bluetooth_connection_state_error_sets_exception(
     client = _make_client(client_data)
     fut: asyncio.Future[bool] = client._loop.create_future()
     # Unknown error code falls through to ESPHOME_GATT_ERRORS lookup
-    client._on_bluetooth_connection_state(fut, False, False, 23, 99999)
+    client._on_bluetooth_connection_state(
+        fut, has_cache=False, connected=False, mtu=23, error=99999
+    )
     assert fut.done()
     with pytest.raises(BleakError, match="while connecting"):
         fut.result()
@@ -156,7 +158,11 @@ async def test_on_bluetooth_connection_state_known_error_uses_name(
     client = _make_client(client_data)
     fut: asyncio.Future[bool] = client._loop.create_future()
     client._on_bluetooth_connection_state(
-        fut, False, False, 23, BLEConnectionError.ESP_GATT_CONN_TIMEOUT.value
+        fut,
+        has_cache=False,
+        connected=False,
+        mtu=23,
+        error=BLEConnectionError.ESP_GATT_CONN_TIMEOUT.value,
     )
     assert fut.done()
     with pytest.raises(BleakError, match="ESP_GATT_CONN_TIMEOUT"):
@@ -170,7 +176,9 @@ async def test_on_bluetooth_connection_state_disconnect_fails_future(
     """connected=False with no error code fails the future as ``Disconnected``."""
     client = _make_client(client_data)
     fut: asyncio.Future[bool] = client._loop.create_future()
-    client._on_bluetooth_connection_state(fut, False, False, 23, 0)
+    client._on_bluetooth_connection_state(
+        fut, has_cache=False, connected=False, mtu=23, error=0
+    )
     assert fut.done()
     with pytest.raises(BleakError, match="Disconnected"):
         fut.result()
@@ -184,11 +192,15 @@ async def test_on_bluetooth_connection_state_idempotent_when_future_done(
     client = _make_client(client_data)
     fut: asyncio.Future[bool] = client._loop.create_future()
     # First call resolves the future.
-    client._on_bluetooth_connection_state(fut, False, True, 23, 0)
+    client._on_bluetooth_connection_state(
+        fut, has_cache=False, connected=True, mtu=23, error=0
+    )
     assert fut.result() is True
     # Second call (disconnect after success) must not raise even though the
     # future is already done.
-    client._on_bluetooth_connection_state(fut, False, False, 23, 0)
+    client._on_bluetooth_connection_state(
+        fut, has_cache=False, connected=False, mtu=23, error=0
+    )
     assert not client.is_connected
 
 
@@ -250,7 +262,9 @@ async def test_on_bluetooth_connection_state_preserves_cached_mtu(
     client._mtu = cached_mtu
     client._cache.clear_gatt_mtu_cache(client._address_as_int)
     fut: asyncio.Future[bool] = client._loop.create_future()
-    client._on_bluetooth_connection_state(fut, True, True, reported_mtu, 0)
+    client._on_bluetooth_connection_state(
+        fut, has_cache=True, connected=True, mtu=reported_mtu, error=0
+    )
     assert fut.result() is True
     assert client._mtu == cached_mtu
     assert client._cache.get_gatt_mtu_cache(client._address_as_int) is None
@@ -274,7 +288,9 @@ async def test_on_bluetooth_connection_state_adopts_current_link_mtu(
     client._mtu = 517
     reported_mtu = 23
     fut: asyncio.Future[bool] = client._loop.create_future()
-    client._on_bluetooth_connection_state(fut, False, True, reported_mtu, 0)
+    client._on_bluetooth_connection_state(
+        fut, has_cache=False, connected=True, mtu=reported_mtu, error=0
+    )
     assert fut.result() is True
     assert client.mtu_size == reported_mtu
     assert client._cache.get_gatt_mtu_cache(client._address_as_int) == reported_mtu

@@ -394,6 +394,12 @@ class ESPHomeClient(BaseBleakClient):
             # ESP_GATTC_OPEN_EVT, before MTU exchange completes, so the value
             # is the firmware's placeholder rather than a negotiated one.
             # ``has_cache`` already requires a cached MTU, so keep that.
+            #
+            # That leaves a residual gap: on the cached path the carried-over
+            # value is still the cross-proxy one, so a peripheral that
+            # negotiated a large MTU through one proxy keeps it when
+            # reconnected through another. Closing that needs a per-proxy
+            # cache key or an MTU report after the exchange completes.
             if not has_cache:
                 self._mtu = mtu
                 self._cache.set_gatt_mtu_cache(self._address_as_int, mtu)
