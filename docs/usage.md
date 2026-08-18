@@ -142,7 +142,7 @@ reconnect / discovery machinery).
 `connect_scanner(cli, device_info, available)` wires an
 `aioesphomeapi.APIClient` to an `ESPHomeScanner` + `ESPHomeClient` and
 subscribes to the proxy's advertisement, scanner-state, and connection-slot
-streams. It returns an `ESPHomeClientData` and leaves three jobs to the
+streams. It returns an `ESPHomeClientData` and leaves four jobs to the
 caller:
 
 1. Call `client_data.scanner.async_setup()` to attach the scanner to the
@@ -152,9 +152,10 @@ caller:
 3. Fire every callback in `client_data.disconnect_callbacks` when the ESP
    disconnects, so `ESPHomeClient` instances drop their subscriptions.
    Iterate a snapshot of the set — each callback removes itself during
-   cleanup. Also set `client_data.bluetooth_device.available = False`
-   first, so the connector's `can_connect` gate stops offering the dead
-   proxy for new connection attempts.
+   cleanup.
+4. Call `client_data.bluetooth_device.async_set_unavailable()` first, so
+   the connector's `can_connect` gate stops offering the dead proxy and
+   callers waiting for a free connection slot fail fast.
 
 ```python
 import habluetooth
@@ -174,7 +175,7 @@ unregister_scanner = habluetooth.get_manager().async_register_scanner(
 )
 
 # Later, when the ESP disconnects:
-client_data.bluetooth_device.available = False
+client_data.bluetooth_device.async_set_unavailable()
 for callback in list(client_data.disconnect_callbacks):
     callback()
 unregister_scanner()
@@ -183,12 +184,6 @@ unregister_scanner()
 If you also want to override which `disconnect_callbacks` set is used —
 for example, to share one set across several scanners — reassign
 `client_data.disconnect_callbacks` **before** calling `async_setup()`.
-
-When the ESP disconnects, also call
-`client_data.bluetooth_device.async_set_unavailable()`. It closes the
-connector's `can_connect` gate and immediately fails any caller waiting
-for a free connection slot, so connect attempts stop parking their full
-timeout on a proxy that is already gone.
 
 ## Scanning Modes
 

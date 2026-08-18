@@ -196,6 +196,9 @@ async def test_untrack_client_only_removes_matching_handler(
     new_handler.reset_mock()
     bluetooth_device.async_update_ble_connection_limits(3, 3, [])
     new_handler.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_set_unavailable_fails_pending_slot_waiters(
     bluetooth_device: ESPHomeBluetoothDevice,
 ) -> None:
@@ -220,6 +223,18 @@ async def test_wait_after_unavailable_fails_fast(
     with pytest.raises(TimeoutError, match="Proxy became unavailable"):
         await bluetooth_device.wait_for_ble_connections_free(60.0)
     assert bluetooth_device._ble_connection_free_futures == set()
+
+
+@pytest.mark.asyncio
+async def test_slot_update_clears_the_unavailability_latch(
+    bluetooth_device: ESPHomeBluetoothDevice,
+) -> None:
+    """A proxy reporting slot state again clears the fail fast latch."""
+    bluetooth_device.async_set_unavailable()
+    with pytest.raises(TimeoutError, match="Proxy became unavailable"):
+        await bluetooth_device.wait_for_ble_connections_free(60.0)
+    bluetooth_device.async_update_ble_connection_limits(2, 3, [42])
+    assert await bluetooth_device.wait_for_ble_connections_free(60.0) == 2
 
 
 @pytest.mark.asyncio

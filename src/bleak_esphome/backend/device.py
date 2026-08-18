@@ -93,7 +93,9 @@ class ESPHomeBluetoothDevice:
 
         A caller parked in ``wait_for_ble_connections_free`` would
         otherwise sit out its full timeout on a proxy already known to be
-        gone; failing fast lets it retry against another proxy.
+        gone; failing fast lets it retry against another proxy. The latch
+        clears when the proxy reports slot state again via
+        ``async_update_ble_connection_limits``.
         """
         self.available = False
         # Distinct from ``available``, which defaults to False before the
@@ -112,6 +114,10 @@ class ESPHomeBluetoothDevice:
         self, free: int, limit: int, allocated: list[int]
     ) -> None:
         """Update the BLE connection limits."""
+        # A proxy reporting slot state is demonstrably alive; clear the
+        # unavailability latch so a long-lived device that was marked
+        # unavailable is not permanently poisoned for slot waiters.
+        self._unavailable = False
         _LOGGER.debug(
             "%s [%s]: BLE connection limits: used=%s free=%s limit=%s allocated=%s",
             self.name,
