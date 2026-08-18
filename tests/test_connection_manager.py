@@ -207,6 +207,7 @@ async def test_on_connect_registers_scanner_and_resolves_start(
     )
     assert conn_manager._unregister_scanner is unregister_scanner
     assert conn_manager._disconnect_callbacks is mock_client_data.disconnect_callbacks
+    assert conn_manager._bluetooth_device is mock_client_data.bluetooth_device
     assert conn_manager._start_future is not None
     assert conn_manager._start_future.done()
     assert conn_manager._start_future.result() is None
@@ -279,13 +280,41 @@ async def test_on_disconnect_fires_client_data_disconnect_callbacks(
     """
     cb_one = Mock()
     cb_two = Mock()
-    conn_manager._disconnect_callbacks = {cb_one, cb_two}
+    callbacks: set[Callable[[], None]] = {cb_one, cb_two}
+    conn_manager._disconnect_callbacks = callbacks
 
     await conn_manager._on_disconnect(expected_disconnect=False)
 
     cb_one.assert_called_once_with()
     cb_two.assert_called_once_with()
-    assert conn_manager._disconnect_callbacks is None
+    # ``cast`` re-widens the attribute type mypy narrowed after the
+    # assignment above so the assert is not flagged unreachable.
+    assert (
+        cast("set[Callable[[], None]] | None", conn_manager._disconnect_callbacks)
+        is None
+    )
+    # Cleared in place as well: clients hold a reference to the set, and
+    # a stale entry would keep its client alive in an orphaned set.
+    assert not callbacks
+
+
+@pytest.mark.asyncio
+async def test_on_disconnect_marks_bluetooth_device_unavailable(
+    conn_manager: APIConnectionManager,
+) -> None:
+    """
+    ``_on_disconnect`` flags the bluetooth device as unavailable.
+
+    The connector's ``can_connect`` gate reads ``available``; leaving it
+    set would keep offering a proxy whose API connection is gone.
+    """
+    bluetooth_device = Mock(available=True)
+    conn_manager._bluetooth_device = bluetooth_device
+
+    await conn_manager._on_disconnect(expected_disconnect=False)
+
+    assert bluetooth_device.available is False
+    assert conn_manager._bluetooth_device is None
 
 
 @pytest.mark.asyncio
@@ -329,6 +358,54 @@ async def test_stop_unregisters_scanner_if_registered(
     # ``cast`` re-widens the attribute type that mypy narrowed to ``Mock``
     # after the earlier assignment so ``is None`` is not flagged unreachable.
     assert cast(Callable[[], None] | None, manager._unregister_scanner) is None
+
+
+@pytest.mark.asyncio
+async def test_stop_tears_down_session_state(
+    conn_manager_with_mocked_reconnect: tuple[APIConnectionManager, Mock, AsyncMock],
+) -> None:
+    """
+    ``stop()`` runs the same session teardown as ``_on_disconnect``.
+
+    A stop that never saw a disconnect callback must still fire the
+    client disconnect callbacks, clear the shared set in place, and
+    mark the bluetooth device unavailable.
+    """
+    manager, _, _ = conn_manager_with_mocked_reconnect
+    callback = Mock()
+    callbacks: set[Callable[[], None]] = {callback}
+    manager._disconnect_callbacks = callbacks
+    bluetooth_device = Mock(available=True)
+    manager._bluetooth_device = bluetooth_device
+
+    await manager.stop()
+
+    callback.assert_called_once_with()
+    assert not callbacks
+    # ``cast`` re-widens attribute types mypy narrowed after the direct
+    # assignments above so the asserts are not flagged unreachable.
+    assert cast("set[Callable[[], None]] | None", manager._disconnect_callbacks) is None
+    assert bluetooth_device.available is False
+    assert cast("Mock | None", manager._bluetooth_device) is None
+
+
+@pytest.mark.asyncio
+async def test_stop_after_disconnect_does_not_refire_callbacks(
+    conn_manager_with_mocked_reconnect: tuple[APIConnectionManager, Mock, AsyncMock],
+) -> None:
+    """A ``stop()`` following ``_on_disconnect`` must not refire callbacks."""
+    manager, _, _ = conn_manager_with_mocked_reconnect
+    callback = Mock()
+    manager._disconnect_callbacks = {callback}
+    bluetooth_device = Mock(available=True)
+    manager._bluetooth_device = bluetooth_device
+
+    await manager._on_disconnect(expected_disconnect=True)
+    callback.assert_called_once_with()
+    assert bluetooth_device.available is False
+
+    await manager.stop()
+    callback.assert_called_once_with()
 
 
 @pytest.mark.asyncio

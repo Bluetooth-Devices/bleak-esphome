@@ -13,6 +13,8 @@ from ._cancellation import is_spurious_cancellation
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from .backend.device import ESPHomeBluetoothDevice
+
 
 class ESPHomeStartAborted(Exception):
     """Raised when ``APIConnectionManager.start()`` is aborted by ``stop()``."""
@@ -44,6 +46,7 @@ class APIConnectionManager:
         self._unregister_scanner: Callable[[], None] | None = None
         self._unsetup_scanner: Callable[[], None] | None = None
         self._disconnect_callbacks: set[Callable[[], None]] | None = None
+        self._bluetooth_device: ESPHomeBluetoothDevice | None = None
         self._start_future: asyncio.Future[None] | None = None
 
     def _teardown_scanner(self) -> None:
@@ -61,15 +64,25 @@ class APIConnectionManager:
             if unregister is not None:
                 unregister()
 
-    async def _on_disconnect(self, expected_disconnect: bool) -> None:
-        """Handle the disconnection of the API client."""
-        if self._disconnect_callbacks is not None:
+    def _teardown_session(self) -> None:
+        """Tear down the per-session client state and the scanner."""
+        if self._bluetooth_device is not None:
+            # Mark the proxy unusable for the connector's can_connect gate.
+            self._bluetooth_device.available = False
+            self._bluetooth_device = None
+        if (disconnect_callbacks := self._disconnect_callbacks) is not None:
+            self._disconnect_callbacks = None
             # Each callback discards itself from the set, so iterate a
             # snapshot to avoid "set changed size during iteration".
-            for callback in list(self._disconnect_callbacks):
+            for callback in list(disconnect_callbacks):
                 callback()
-            self._disconnect_callbacks = None
+            # Clear in place: clients hold a reference to this set object.
+            disconnect_callbacks.clear()
         self._teardown_scanner()
+
+    async def _on_disconnect(self, expected_disconnect: bool) -> None:
+        """Handle the disconnection of the API client."""
+        self._teardown_session()
 
     async def _on_connect(self) -> None:
         """Handle the connection of the API client."""
@@ -85,6 +98,7 @@ class APIConnectionManager:
             scanner
         )
         self._disconnect_callbacks = client_data.disconnect_callbacks
+        self._bluetooth_device = client_data.bluetooth_device
         if self._start_future is not None and not self._start_future.done():
             self._start_future.set_result(None)
 
@@ -149,4 +163,6 @@ class APIConnectionManager:
             await self._cli.disconnect()
         if self._start_future is not None and not self._start_future.done():
             self._start_future.cancel()
-        self._teardown_scanner()
+        # Same teardown as _on_disconnect so a stop() that never saw a
+        # disconnect callback still clears the session state.
+        self._teardown_session()
