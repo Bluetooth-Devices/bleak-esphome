@@ -126,19 +126,40 @@ BleakError("Pairing failed due to error: <code>")
 
 What to do, in order:
 
-1. Bond explicitly instead of relying on the peripheral to trigger it: pass
-   `pair=True` to `connect()`. This backend pairs immediately after link-up
-   and before service discovery, which is what a peripheral that protects
-   its whole GATT database expects.
+1. Bond explicitly instead of relying on the peripheral to trigger it. `pair`
+   is a constructor argument, not a `connect()` keyword:
+
+   ```python
+   # direct bleak
+   client = bleak.BleakClient(device, pair=True)
+   await client.connect()
+
+   # or via bleak_retry_connector
+   client = await establish_connection(
+       BleakClientWithServiceCache, device, name="MyDevice", pair=True
+   )
+   ```
+
+   This backend pairs immediately after link-up and before service discovery,
+   which is what a peripheral that protects its whole GATT database expects.
 2. If that raises `NotImplementedError`, the proxy firmware predates the
    `PAIRING` flag — see the section above.
-3. If pairing is attempted but returns an error, assume the peripheral needs
+3. If pairing reports success but protected handles still fail, the ESP32 may
+   be holding a stale bond the peripheral no longer honours (peripheral
+   factory-reset, or its bond table evicted the entry). Call `await
+   client.unpair()` on the connected client to drop the proxy-side bond, then
+   reconnect with pairing enabled. `unpair()` is gated on the same `PAIRING`
+   flag as `pair()`, so the caveat in step 2 applies to it too.
+4. If pairing is attempted but returns an error, assume the peripheral needs
    interactive pairing and route it through the host's own adapter instead:
    set `active: false` on the `bluetooth_proxy` block of every proxy that can
    hear the device, then bond the host adapter normally. A proxy without
    `ACTIVE_CONNECTIONS` is registered as a non-connectable scanner, so it is
    never a connection candidate — this is a hard exclusion, not an RSSI
-   preference.
+   preference. It is also per-proxy, not per-device: those proxies stop
+   accepting connections for _all_ peripherals they serve, and the device must
+   be in radio range of the host adapter for this to help. Prefer restricting
+   it to proxies that serve only this device.
 
 ## `BleakError("Failed to get services from remote esp")`
 
