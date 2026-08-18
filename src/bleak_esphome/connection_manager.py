@@ -182,14 +182,29 @@ class APIConnectionManager:
         self._mark_unavailable()
         try:
             if self._reconnect_logic is not None:
-                await self._reconnect_logic.stop()
+                try:
+                    await self._reconnect_logic.stop()
+                except Exception:
+                    # A later shutdown step can replace this as the
+                    # propagating error; log so the root cause is never
+                    # lost. Cancellation passes through unlogged.
+                    _LOGGER.exception(
+                        "%s: Error stopping reconnect logic", self._address
+                    )
+                    raise
         finally:
             # Each shutdown step runs even if the previous one raised;
             # otherwise a failing reconnect stop would leave the API
             # client connected and a pending start() blocked forever.
             try:
                 if self._cli is not None:
-                    await self._cli.disconnect()
+                    try:
+                        await self._cli.disconnect()
+                    except Exception:
+                        _LOGGER.exception(
+                            "%s: Error disconnecting API client", self._address
+                        )
+                        raise
             finally:
                 if self._start_future is not None and not self._start_future.done():
                     self._start_future.cancel()

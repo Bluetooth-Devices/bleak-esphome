@@ -402,9 +402,13 @@ async def test_on_disconnect_isolates_raising_callback(
     the other callbacks still fire, the shared set is still cleared, and
     the scanner is still unregistered so nothing leaks in habluetooth.
     """
-    boom = Mock(side_effect=RuntimeError("boom"))
+    boom_one = Mock(side_effect=RuntimeError("boom one"))
+    boom_two = Mock(side_effect=RuntimeError("boom two"))
     ok = Mock()
-    callbacks: set[Callable[[], None]] = {boom, ok}
+    # Two raising callbacks make the assertion order independent: with a
+    # whole-loop try/except regression the second raiser is never reached
+    # regardless of set iteration order.
+    callbacks: set[Callable[[], None]] = {boom_one, boom_two, ok}
     conn_manager._disconnect_callbacks = callbacks
     unregister = Mock()
     conn_manager._unregister_scanner = unregister
@@ -412,16 +416,24 @@ async def test_on_disconnect_isolates_raising_callback(
     with caplog.at_level(logging.ERROR):
         await conn_manager._on_disconnect(expected_disconnect=False)
 
-    boom.assert_called_once_with()
+    boom_one.assert_called_once_with()
+    boom_two.assert_called_once_with()
     ok.assert_called_once_with()
     assert not callbacks
     unregister.assert_called_once_with()
-    assert "Error in disconnect callback" in caplog.text
+    error_records = [
+        record
+        for record in caplog.records
+        if record.levelno == logging.ERROR
+        and "Error in disconnect callback" in record.message
+    ]
+    assert len(error_records) == 2
 
 
 @pytest.mark.asyncio
 async def test_stop_marks_unavailable_first_and_tears_down_on_error(
     conn_manager_with_mocked_reconnect: tuple[APIConnectionManager, Mock, AsyncMock],
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """
     ``stop()`` closes the connect gate up front and tears down on error.
@@ -442,8 +454,15 @@ async def test_stop_marks_unavailable_first_and_tears_down_on_error(
         raise RuntimeError("stop boom")
 
     mock_reconnect_logic.stop = AsyncMock(side_effect=_stop_and_raise)
-    with pytest.raises(RuntimeError, match="stop boom"):
+    with (
+        caplog.at_level(logging.ERROR),
+        pytest.raises(RuntimeError, match="stop boom"),
+    ):
         await manager.stop()
+
+    # The root cause is logged even if a later step were to replace it as
+    # the propagating error.
+    assert "Error stopping reconnect logic" in caplog.text
 
     # The gate was already closed when the first shutdown await ran.
     assert seen_available == [False]
@@ -458,6 +477,7 @@ async def test_stop_marks_unavailable_first_and_tears_down_on_error(
 @pytest.mark.asyncio
 async def test_stop_cancels_pending_start_when_disconnect_raises(
     config: ESPHomeDeviceConfig,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """A raising client disconnect must not leave a pending start() blocked."""
     manager = APIConnectionManager(config)
@@ -469,11 +489,15 @@ async def test_stop_cancels_pending_start_when_disconnect_raises(
     unregister = Mock()
     manager._unregister_scanner = unregister
 
-    with pytest.raises(RuntimeError, match="disconnect boom"):
+    with (
+        caplog.at_level(logging.ERROR),
+        pytest.raises(RuntimeError, match="disconnect boom"),
+    ):
         await manager.stop()
 
     assert manager._start_future.cancelled()
     unregister.assert_called_once_with()
+    assert "Error disconnecting API client" in caplog.text
 
 
 @pytest.mark.asyncio
