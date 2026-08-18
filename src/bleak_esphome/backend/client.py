@@ -393,7 +393,12 @@ class ESPHomeClient(BaseBleakClient):
             # The one exception is a cached connect: the proxy reports at
             # ESP_GATTC_OPEN_EVT, before the MTU exchange completes, so the
             # value is the firmware's placeholder rather than a negotiated
-            # one. ``has_cache`` already requires a cached MTU, so keep that.
+            # one. ``has_cache`` already requires a cached MTU, so that is
+            # what is kept -- not because it is known to match this link,
+            # but because it is the only value on offer. The cached path
+            # therefore retains the same class of staleness fixed below;
+            # closing it needs the firmware to report the MTU after
+            # ESP_GATTC_CFG_MTU_EVT rather than at ESP_GATTC_OPEN_EVT.
             if not has_cache:
                 if self._mtu is not None and self._mtu != mtu:
                     # A cached service collection closed over the old MTU

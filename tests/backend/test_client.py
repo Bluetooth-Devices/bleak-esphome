@@ -2117,3 +2117,43 @@ async def test_set_connection_params_not_connected(
     with pytest.raises(BleakError) as exc_info:
         await esphome_client.set_connection_params(800, 800, 0, 300)
     assert "is not connected" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_reconnect_at_lower_mtu_shrinks_max_write_without_response(
+    connected_client: ESPHomeClient,
+    esphome_bluetooth_gatt_services: ESPHomeBluetoothGATTServices,
+) -> None:
+    """
+    A reconnect at a lower MTU shrinks max_write_without_response_size.
+
+    Walks the whole chain the fix exists for: services are discovered and
+    cached on a link that negotiated 517, the next link reports 23, and
+    the rebuilt collection must hand out ``23 - GATT_HEADER_SIZE`` rather
+    than a size the new link cannot carry.
+    """
+    client = connected_client
+    client._mtu = 517
+    services = await fetch_services(client, esphome_bluetooth_gatt_services)
+    assert client._cache.get_gatt_services_cache(client._address_as_int) is services
+
+    # The next link reports a smaller MTU on a non-cached connect.
+    fut: asyncio.Future[bool] = client._loop.create_future()
+    client._on_bluetooth_connection_state(
+        fut, has_cache=False, connected=True, mtu=23, error=0
+    )
+    assert fut.result() is True
+
+    # ``dangerous_use_bleak_cache`` would serve the stale collection if the
+    # adoption had not invalidated it.
+    services = await fetch_services(
+        client, esphome_bluetooth_gatt_services, dangerous_use_bleak_cache=True
+    )
+    chars = [
+        char
+        for service in services.services.values()
+        for char in service.characteristics
+    ]
+    assert chars, "fixture must expose at least one characteristic"
+    for char in chars:
+        assert char.max_write_without_response_size == 23 - GATT_HEADER_SIZE
