@@ -149,13 +149,13 @@ caller:
    running loop.
 2. Register the scanner with the host-side Bluetooth manager (and
    un-register it when the ESP disconnects).
-3. Fire every callback in `client_data.disconnect_callbacks` when the ESP
-   disconnects, so `ESPHomeClient` instances drop their subscriptions.
-   Iterate a snapshot of the set — each callback removes itself during
-   cleanup.
-4. Call `client_data.bluetooth_device.async_set_unavailable()` first, so
-   the connector's `can_connect` gate stops offering the dead proxy and
-   callers waiting for a free connection slot fail fast.
+3. Call `client_data.bluetooth_device.async_set_unavailable()` first when
+   the ESP disconnects, so the connector's `can_connect` gate stops
+   offering the dead proxy and callers waiting for a free connection
+   slot fail fast.
+4. Fire every callback in `client_data.disconnect_callbacks`, so
+   `ESPHomeClient` instances drop their subscriptions. Iterate a
+   snapshot of the set — each callback removes itself during cleanup.
 
 ```python
 import habluetooth

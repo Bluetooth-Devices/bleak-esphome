@@ -95,7 +95,9 @@ class ESPHomeBluetoothDevice:
         otherwise sit out its full timeout on a proxy already known to be
         gone; failing fast lets it retry against another proxy. The latch
         clears when the proxy reports slot state again via
-        ``async_update_ble_connection_limits``.
+        ``async_update_ble_connection_limits``; ``available`` is not
+        restored by that, so a caller reusing this device must set it
+        back to ``True`` on reconnect.
         """
         self.available = False
         # Distinct from ``available``, which defaults to False before the

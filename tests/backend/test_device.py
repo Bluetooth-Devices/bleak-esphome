@@ -238,6 +238,27 @@ async def test_slot_update_clears_the_unavailability_latch(
 
 
 @pytest.mark.asyncio
+async def test_saturated_slot_update_clears_the_unavailability_latch(
+    bluetooth_device: ESPHomeBluetoothDevice,
+) -> None:
+    """
+    A ``free=0`` slot report also clears the fail fast latch.
+
+    A saturated proxy is alive, not dead; the reset is deliberately
+    unconditional at the top of the update, so a waiter parks for a slot
+    instead of failing fast.
+    """
+    bluetooth_device.async_set_unavailable()
+    bluetooth_device.async_update_ble_connection_limits(0, 3, [])
+    task = asyncio.create_task(bluetooth_device.wait_for_ble_connections_free(60.0))
+    await asyncio.sleep(0)
+    # The waiter parks rather than raising immediately.
+    assert not task.done()
+    bluetooth_device.async_update_ble_connection_limits(1, 3, [42])
+    assert await task == 1
+
+
+@pytest.mark.asyncio
 async def test_set_unavailable_skips_done_futures(
     bluetooth_device: ESPHomeBluetoothDevice,
 ) -> None:
