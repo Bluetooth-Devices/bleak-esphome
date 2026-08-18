@@ -35,7 +35,11 @@ from bleak.backends.characteristic import BleakGATTCharacteristic
 from bleak.exc import BleakError
 from pytest_asyncio import fixture as aio_fixture
 
-from bleak_esphome.backend.client import ESPHomeClient, ESPHomeClientData
+from bleak_esphome.backend.client import (
+    DISCONNECT_TIMEOUT,
+    ESPHomeClient,
+    ESPHomeClientData,
+)
 
 from ._helpers import ESP_MAC_ADDRESS, _make_client
 
@@ -216,7 +220,9 @@ async def test_on_bluetooth_connection_state_late_connect_does_not_resurrect(
         assert client._mtu is None
         assert client._orphan_disconnect_tasks
         await next(iter(client._orphan_disconnect_tasks))
-    mock_disconnect.assert_called_once_with(client._address_as_int)
+    mock_disconnect.assert_called_once_with(
+        client._address_as_int, timeout=DISCONNECT_TIMEOUT
+    )
 
 
 @pytest.mark.asyncio
