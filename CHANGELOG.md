@@ -1,5 +1,13 @@
 # Changelog
 
+## v3.10.1 (2026-08-18)
+
+### Bug fixes
+
+
+- Reconcile client connected state with proxy allocated slot list ([`f283610`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/f2836104732b1a0bab42ac7c79e3acd718f46782))
+
+
 ## v3.10.0 (2026-08-18)
 
 ### Features
