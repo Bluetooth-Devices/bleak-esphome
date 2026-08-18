@@ -252,10 +252,11 @@ class ESPHomeClient(BaseBleakClient):
 
     async def _release_orphaned_link(self) -> bool:
         """Release an orphaned link unless a newer connect owns it now."""
-        if self._is_connected:
+        if self._is_connected or self._cancel_connection_state is not None:
             # A newer connect on this client instance established a live
-            # link for the same address after the release was scheduled;
-            # releasing by address now would tear that link down.
+            # link for the same address, or has an attempt in flight
+            # (bleak_retry_connector retries on the same instance);
+            # releasing by address now would tear that attempt down.
             return False
         return await self._shielded_disconnect()
 
@@ -490,6 +491,19 @@ class ESPHomeClient(BaseBleakClient):
                     # link; it outranks the original error for the
                     # caller, which stays visible as the cause.
                     raise asyncio.CancelledError from connect_error
+                if isinstance(connect_error, Exception):
+                    # Same settle rationale as the setup-failure path:
+                    # let the slot free up before the retry's short entry
+                    # gate. Skipped for BaseException so a real signal is
+                    # not stalled behind a slow proxy.
+                    try:
+                        await self._wait_for_free_connection_slot(DISCONNECT_TIMEOUT)
+                    except Exception as settle_error:  # pylint: disable=broad-except
+                        _LOGGER.debug(
+                            "%s: Slot did not settle after failed connect: %s",
+                            self._description,
+                            settle_error,
+                        )
                 raise
 
         try:

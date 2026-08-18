@@ -342,7 +342,9 @@ async def test_bleak_client_connect(
     ) as mock_disconnect:
         await client.disconnect()
 
-    mock_disconnect.assert_called_once()
+    # The public path keeps aioesphomeapi's default timeout; only the
+    # shielded cleanup paths pass an explicit short one.
+    mock_disconnect.assert_called_once_with(BLE_ADDRESS_AS_INT)
 
 
 @pytest.mark.asyncio
@@ -621,6 +623,46 @@ async def test_bleak_client_connect_error_after_link_up_disconnects_esp(
 
 
 @pytest.mark.asyncio
+async def test_bleak_client_connect_error_after_link_up_logs_settle_timeout(
+    bleak_pair: tuple[BleakClient, ESPHomeClient],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """
+    Test a slot that never settles after a connect error is logged.
+
+    The settle after an error-after-link-up release must not mask the
+    original error, but its timeout is the direct cause of the next
+    retry's entry gate failing, so it is logged rather than dropped.
+    """
+    bleak_client, client = bleak_pair
+    with (
+        patch.object(
+            client._client,
+            "bluetooth_device_connect",
+            return_value=Mock(),
+        ) as mock_connect,
+        patch.object(client._client, "bluetooth_device_disconnect"),
+        patch.object(
+            client,
+            "_wait_for_free_connection_slot",
+            # First call is the connect entry gate; the second is the
+            # settle after the release, which times out.
+            side_effect=[None, TimeoutError("no slot")],
+        ),
+        caplog.at_level(logging.DEBUG),
+    ):
+        task = asyncio.create_task(bleak_client.connect(dangerous_use_bleak_cache=True))
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        callback = mock_connect.call_args_list[0][0][1]
+        callback(True, 23, 1)
+        with pytest.raises(BleakError, match="while connecting"):
+            await task
+
+    assert "Slot did not settle after failed connect" in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_bleak_client_connect_cancel_after_link_up_disconnect_failure_logged(
     bleak_pair: tuple[BleakClient, ESPHomeClient],
     caplog: pytest.LogCaptureFixture,
@@ -732,8 +774,18 @@ async def test_bleak_client_orphan_release_skipped_when_reconnected(
         client._is_connected = True
         assert await orphan_task is False
 
+        # The guard also yields to an attempt still in flight, marked by
+        # a live connection-state subscription.
+        client._is_connected = False
+        client._cancel_connection_state = Mock()
+        fut2: asyncio.Future[bool] = client._loop.create_future()
+        fut2.cancel()
+        client._on_bluetooth_connection_state(fut2, True, 23, 0)
+        orphan_task = next(iter(client._orphan_disconnect_tasks))
+        assert await orphan_task is False
+        client._cancel_connection_state = None
+
     mock_disconnect.assert_not_called()
-    assert client.is_connected
 
 
 @pytest.mark.asyncio
