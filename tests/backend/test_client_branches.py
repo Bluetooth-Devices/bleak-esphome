@@ -604,8 +604,9 @@ async def test_stop_notify_warns_when_cccd_missing(
 async def test_stop_notify_cccd_failure_survives_failing_release(
     client_data: ESPHomeClientData,
     esphome_bluetooth_gatt_services: ESPHomeBluetoothGATTServices,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """A failing release does not mask the CCCD write error."""
+    """A failing release does not mask the CCCD write error but is logged."""
     client = _make_client(client_data)
     client._is_connected = True
     with patch.object(
@@ -617,6 +618,39 @@ async def test_stop_notify_cccd_failure_survives_failing_release(
     char = services.get_characteristic("00002a05-0000-1000-8000-00805f9b34fb")
     assert char is not None
     stop = AsyncMock(side_effect=RuntimeError("release failed"))
+    client._notify_cancels[char.handle] = (stop, Mock())
+    with (
+        caplog.at_level(logging.WARNING),
+        patch.object(
+            client._client,
+            "bluetooth_gatt_write_descriptor",
+            side_effect=BluetoothGATTAPIError(BluetoothGATTError(address=1, handle=2)),
+        ),
+        pytest.raises(BleakError),
+    ):
+        await client.stop_notify(char)
+    stop.assert_awaited_once()
+    assert char.handle not in client._notify_cancels
+    assert "Failed to release the proxy notify subscription" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_stop_notify_cccd_failure_survives_cancelled_release(
+    client_data: ESPHomeClientData,
+    esphome_bluetooth_gatt_services: ESPHomeBluetoothGATTServices,
+) -> None:
+    """A cancelled release does not replace the CCCD write error."""
+    client = _make_client(client_data)
+    client._is_connected = True
+    with patch.object(
+        client._client,
+        "bluetooth_gatt_get_services",
+        return_value=esphome_bluetooth_gatt_services,
+    ):
+        services = await client._get_services()
+    char = services.get_characteristic("00002a05-0000-1000-8000-00805f9b34fb")
+    assert char is not None
+    stop = AsyncMock(side_effect=asyncio.CancelledError())
     client._notify_cancels[char.handle] = (stop, Mock())
     with (
         patch.object(

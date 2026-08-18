@@ -951,6 +951,13 @@ class ESPHomeClient(BaseBleakClient):
         handle, matching the BlueZ backend's behavior. Callers do not
         need to track which characteristics they have subscribed to.
 
+        On connection v3 (``REMOTE_CACHING``) proxies the client config
+        descriptor is cleared so the peripheral stops notifying. That part
+        is best-effort: if the descriptor cannot be found it is logged as a
+        warning and this method still returns successfully, so a successful
+        return does not guarantee the peripheral stopped sending
+        notifications.
+
         Args:
         ----
             characteristic (BleakGATTCharacteristic):
@@ -1004,9 +1011,21 @@ class ESPHomeClient(BaseBleakClient):
             # write fails, so the local bookkeeping cannot drift from the
             # already-popped handle. The release is best-effort here because
             # the CCCD failure is the actionable root cause and must not be
-            # replaced by a secondary error from the cleanup path.
-            with contextlib.suppress(Exception):
+            # replaced by a secondary error from the cleanup path -- including
+            # a CancelledError, which contextlib.suppress(Exception) would let
+            # escape. Log the failed release so the leaked subscription is not
+            # invisible: the handle is already popped, so nothing else will
+            # report it.
+            try:
                 await notify_stop()
+            except BaseException:
+                _LOGGER.warning(
+                    "%s: Failed to release the proxy notify subscription for "
+                    "handle %s; the proxy may keep forwarding notifications",
+                    self._description,
+                    characteristic.handle,
+                    exc_info=True,
+                )
             raise
         await notify_stop()
 
