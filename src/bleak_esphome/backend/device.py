@@ -33,6 +33,9 @@ class ESPHomeBluetoothDevice:
     cache: ESPHomeBluetoothCache = field(default_factory=ESPHomeBluetoothCache)
     _connection_slots_callback: Callable[[Allocations], None] | None = None
     _called_callback: bool = False
+    _tracked_clients: dict[int, Callable[[], None]] = field(default_factory=dict)
+    _seen_allocated: bool = False
+    _warned_untrusted: bool = False
 
     def async_subscribe_connection_slots(
         self, callback: Callable[[Allocations], None]
@@ -40,6 +43,41 @@ class ESPHomeBluetoothDevice:
         """Subscribe to connection slot changes."""
         self._connection_slots_callback = callback
         self._called_callback = False
+
+    def async_track_client(
+        self, address: int, on_ble_disconnected: Callable[[], None]
+    ) -> None:
+        """
+        Track a connected client so it can be reconciled against allocations.
+
+        ``on_ble_disconnected`` is invoked when the proxy's authoritative
+        allocated list no longer contains ``address``.
+        """
+        if (
+            existing := self._tracked_clients.get(address)
+        ) is not None and existing != on_ble_disconnected:
+            # The displaced client loses this reconciliation backstop; it
+            # still holds its own subscription and disconnect callback,
+            # but the overlap is worth a trace in a bug report.
+            _LOGGER.debug(
+                "%s [%s]: Replacing tracked client for %s",
+                self.name,
+                self.mac_address,
+                int_to_bluetooth_address(address),
+            )
+        self._tracked_clients[address] = on_ble_disconnected
+
+    def async_untrack_client(
+        self, address: int, on_ble_disconnected: Callable[[], None]
+    ) -> None:
+        """
+        Stop tracking a connected client.
+
+        Only removes the entry when it still belongs to the same client;
+        a newer client may already have replaced it for this address.
+        """
+        if self._tracked_clients.get(address) == on_ble_disconnected:
+            del self._tracked_clients[address]
 
     def async_update_ble_connection_limits(
         self, free: int, limit: int, allocated: list[int]
@@ -70,6 +108,10 @@ class ESPHomeBluetoothDevice:
                 if not fut.done():
                     fut.set_result(free)
             self._ble_connection_free_futures.clear()
+        # Heal local client state before notifying subscribers so the
+        # published allocation snapshot and the clients' connected state
+        # are always consistent with each other.
+        self._async_reconcile_connections()
         if (changed or not self._called_callback) and (
             connection_slots_callback := self._connection_slots_callback
         ):
@@ -82,6 +124,93 @@ class ESPHomeBluetoothDevice:
                     [int_to_bluetooth_address(address) for address in allocated],
                 )
             )
+
+    def _async_reconcile_connections(self) -> None:
+        """
+        Disconnect tracked clients absent from the proxy's allocated list.
+
+        The allocated list is authoritative for which addresses hold a
+        connection on the proxy, so a tracked client missing from it lost
+        its connection and the ``connected=false`` notification was lost
+        (congested link, or an ESP-side link loss that never produced a
+        notification). Firing its disconnect handler
+        tears down the client state and lets the consumer reconnect
+        instead of holding a phantom connection forever.
+
+        Only trusted when the list length matches the used slot count.
+        Firmware maintains ``free`` and ``allocated`` as one fact (an
+        address enters the list at slot reservation, before the link is
+        even attempted), so the lengths always match on firmware that
+        reports the list; older firmware reports ``free``/``limit`` with
+        no ``allocated`` at all, which looks like an empty list, and the
+        mismatch skips reconciliation so nothing is torn down on it.
+        """
+        allocated = self.ble_allocations
+        used = self.ble_connections_limit - self.ble_connections_free
+        if allocated:
+            self._seen_allocated = True
+        if len(allocated) != used:
+            if self._seen_allocated and not self._warned_untrusted:
+                # This firmware does report the list, so a mismatch is a
+                # genuine slot accounting anomaly on the proxy that
+                # disables the phantom connection heal; surface it once
+                # rather than hiding it at debug like the legacy
+                # firmware case below.
+                self._warned_untrusted = True
+                _LOGGER.warning(
+                    "%s [%s]: Proxy slot accounting is inconsistent"
+                    " (used=%s allocated=%s); connection reconciliation"
+                    " is disabled until it matches again",
+                    self.name,
+                    self.mac_address,
+                    used,
+                    allocated,
+                )
+            elif self._tracked_clients:
+                _LOGGER.debug(
+                    "%s [%s]: Skipping connection reconcile, allocated list"
+                    " not trusted: used=%s allocated=%s",
+                    self.name,
+                    self.mac_address,
+                    used,
+                    allocated,
+                )
+            return
+        # A matching update re-arms the anomaly warning so a recurring
+        # inconsistency is visible again after a recovery.
+        self._warned_untrusted = False
+        # Snapshot: handlers untrack themselves during the loop.
+        for address, on_ble_disconnected in list(self._tracked_clients.items()):
+            if address in allocated:
+                continue
+            # Warning: this means the proxy's connected=false notification
+            # was lost (congested link, or an ESP-side link loss that
+            # never produced one); the state was out of sync until this
+            # self heal.
+            _LOGGER.warning(
+                "%s [%s]: Reconciling stale connection to %s: "
+                "not in allocated list %s",
+                self.name,
+                self.mac_address,
+                int_to_bluetooth_address(address),
+                allocated,
+            )
+            # Untrack before invoking so the teardown is attempted exactly
+            # once; if the handler raises partway (it ends in consumer
+            # supplied code) the entry must not linger and re-fire the
+            # warning plus traceback on every later slot update.
+            self.async_untrack_client(address, on_ble_disconnected)
+            try:
+                on_ble_disconnected()
+            except Exception:  # pylint: disable=broad-except
+                # One raising handler must not strand the remaining stale
+                # clients until the next slot change.
+                _LOGGER.exception(
+                    "%s [%s]: Error reconciling stale connection to %s",
+                    self.name,
+                    self.mac_address,
+                    int_to_bluetooth_address(address),
+                )
 
     def _wait_for_ble_connections_free_timeout(self, fut: asyncio.Future[int]) -> None:
         """Timeout the wait_for_ble_connections_free future."""

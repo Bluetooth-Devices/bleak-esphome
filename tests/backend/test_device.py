@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from unittest.mock import Mock
 
 import pytest
@@ -66,6 +67,135 @@ async def test_wait_for_ble_connections_free_cancellation_cleans_up(
     with pytest.raises(asyncio.CancelledError):
         await task
     assert bluetooth_device._ble_connection_free_futures == set()
+
+
+@pytest.mark.asyncio
+async def test_reconcile_skips_untrusted_allocated_list(
+    bluetooth_device: ESPHomeBluetoothDevice,
+) -> None:
+    """
+    An allocated list shorter than the used slot count is not trusted.
+
+    Older firmware reports free/limit without the allocated list at all,
+    which looks like a length mismatch and must not disconnect tracked
+    clients.
+    """
+    handler = Mock()
+    bluetooth_device.async_track_client(42, handler)
+    bluetooth_device.async_update_ble_connection_limits(1, 3, [])
+    handler.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_reconcile_only_disconnects_missing_addresses(
+    bluetooth_device: ESPHomeBluetoothDevice,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Only the clients missing from the allocated list are disconnected."""
+    stale = Mock()
+    live = Mock()
+    bluetooth_device.async_track_client(42, stale)
+    bluetooth_device.async_track_client(43, live)
+    with caplog.at_level(logging.WARNING):
+        bluetooth_device.async_update_ble_connection_limits(2, 3, [43])
+    stale.assert_called_once_with()
+    live.assert_not_called()
+    # Out of sync state is a failure somewhere; it must surface without
+    # debug logging enabled.
+    assert "Reconciling stale connection" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_reconcile_isolates_raising_handler(
+    bluetooth_device: ESPHomeBluetoothDevice,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """
+    A raising disconnect handler must not strand the other stale clients.
+
+    The handler ends in consumer supplied code; if one raises, the loop
+    logs it and still reconciles the remaining stale clients rather than
+    leaving them phantom until the next slot change.
+    """
+    boom = Mock(side_effect=RuntimeError("boom"))
+    ok = Mock()
+    bluetooth_device.async_track_client(42, boom)
+    bluetooth_device.async_track_client(43, ok)
+    with caplog.at_level(logging.WARNING):
+        bluetooth_device.async_update_ble_connection_limits(3, 3, [])
+    boom.assert_called_once_with()
+    ok.assert_called_once_with()
+    assert "Error reconciling stale connection" in caplog.text
+    # The raising client was untracked before invocation, so a later update
+    # does not retry it and re-fire the warning plus traceback.
+    caplog.clear()
+    bluetooth_device.async_update_ble_connection_limits(3, 3, [])
+    boom.assert_called_once_with()
+    assert "Reconciling stale connection" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_track_client_logs_when_displacing_existing_entry(
+    bluetooth_device: ESPHomeBluetoothDevice,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Displacing a tracked client for the same address leaves a trace."""
+    old_handler = Mock()
+    new_handler = Mock()
+    bluetooth_device.async_track_client(42, old_handler)
+    with caplog.at_level(logging.DEBUG):
+        bluetooth_device.async_track_client(42, new_handler)
+    assert "Replacing tracked client" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_reconcile_warns_once_on_slot_accounting_anomaly(
+    bluetooth_device: ESPHomeBluetoothDevice,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """
+    A mismatch on list-reporting firmware warns once until it recovers.
+
+    Legacy firmware that never reports the list stays at debug; firmware
+    that has reported it and then mismatches has a genuine accounting
+    anomaly that disables the heal, which must be visible in production
+    logs, once per episode.
+    """
+    handler = Mock()
+    bluetooth_device.async_track_client(42, handler)
+    with caplog.at_level(logging.WARNING):
+        # Legacy-looking mismatch before any list was seen: no warning.
+        bluetooth_device.async_update_ble_connection_limits(1, 3, [])
+        assert "slot accounting is inconsistent" not in caplog.text
+        # The list is reported, then mismatches: warn once.
+        bluetooth_device.async_update_ble_connection_limits(1, 3, [42, 43])
+        bluetooth_device.async_update_ble_connection_limits(1, 3, [42])
+        assert caplog.text.count("slot accounting is inconsistent") == 1
+        bluetooth_device.async_update_ble_connection_limits(1, 3, [43])
+        assert caplog.text.count("slot accounting is inconsistent") == 1
+        # A matching update re-arms the warning for the next episode.
+        bluetooth_device.async_update_ble_connection_limits(1, 3, [42, 43])
+        bluetooth_device.async_update_ble_connection_limits(1, 3, [42])
+        assert caplog.text.count("slot accounting is inconsistent") == 2
+    handler.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_untrack_client_only_removes_matching_handler(
+    bluetooth_device: ESPHomeBluetoothDevice,
+) -> None:
+    """Untracking with a stale handler must not evict a newer client."""
+    old_handler = Mock()
+    new_handler = Mock()
+    bluetooth_device.async_track_client(42, new_handler)
+    bluetooth_device.async_untrack_client(42, old_handler)
+    bluetooth_device.async_update_ble_connection_limits(3, 3, [])
+    new_handler.assert_called_once_with()
+
+    bluetooth_device.async_untrack_client(42, new_handler)
+    new_handler.reset_mock()
+    bluetooth_device.async_update_ble_connection_limits(3, 3, [])
+    new_handler.assert_not_called()
 
 
 @pytest.mark.asyncio

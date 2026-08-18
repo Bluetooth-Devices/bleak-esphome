@@ -189,6 +189,9 @@ class ESPHomeClient(BaseBleakClient):
             notify_abort()
         self._notify_cancels.clear()
         self._disconnect_callbacks.discard(self._async_esp_disconnected)
+        self._bluetooth_device.async_untrack_client(
+            self._address_as_int, self._async_ble_device_disconnected
+        )
         if self._cancel_connection_state:
             self._cancel_connection_state()
             self._cancel_connection_state = None
@@ -267,6 +270,9 @@ class ESPHomeClient(BaseBleakClient):
             self._description,
         )
         self._disconnect_callbacks.add(self._async_esp_disconnected)
+        self._bluetooth_device.async_track_client(
+            self._address_as_int, self._async_ble_device_disconnected
+        )
         connected_future.set_result(connected)
 
     @api_error_as_bleak_error

@@ -148,6 +148,30 @@ give each proxy a clearly stronger signal for its intended device (position
 and antenna orientation), and avoid having two proxies with near-identical
 RSSI competing for the same peripheral.
 
+## My `disconnected_callback` fired without a disconnect event in the logs
+
+A connected client can be torn down by allocation reconciliation, without a
+`connected=false` notification ever arriving. Every connection-slot update
+from the proxy carries the authoritative list of allocated (connected)
+addresses; if a client this library believes is connected is missing from
+that list, the proxy no longer holds the connection — its `connected=false`
+notification was lost (a congested link, or an ESP-side link loss that
+never produced one) — and the
+client is disconnected locally so the consumer can reconnect instead of
+holding a phantom connection forever. Because it means the proxy and the
+host were out of sync, this path logs a WARNING:
+
+```
+<name> [<mac>]: Reconciling stale connection to <address>: not in allocated list [...]
+```
+
+The list is only trusted when its length matches the used slot count
+(`limit - free`). Firmware maintains the two as one fact, an address enters
+the list when its slot is reserved, before the link is even attempted, so
+they always match when the list is reported at all. Firmware that predates
+the allocated list reports used slots with an empty list; that mismatch
+skips reconciliation, so it cannot tear down a healthy client.
+
 ## Connect attempts are rejected by `bleak` before the proxy is ever called
 
 The scanner is registered as non-connectable. This happens when the
