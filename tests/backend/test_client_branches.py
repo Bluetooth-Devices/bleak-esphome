@@ -193,6 +193,26 @@ async def test_on_bluetooth_connection_state_idempotent_when_future_done(
 
 
 @pytest.mark.asyncio
+async def test_on_bluetooth_connection_state_late_connect_does_not_resurrect(
+    client_data: ESPHomeClientData,
+) -> None:
+    """
+    A ``connected=True`` callback with a completed future is ignored.
+
+    The future being done means the connect attempt already finished
+    (failed, timed out, or was cancelled) and the owning ``connect()``
+    has bailed; a late connected notification must not flip
+    ``_is_connected`` back on or cache the reported MTU.
+    """
+    client = _make_client(client_data)
+    fut: asyncio.Future[bool] = client._loop.create_future()
+    fut.cancel()
+    client._on_bluetooth_connection_state(fut, True, 23, 0)
+    assert not client.is_connected
+    assert client._mtu is None
+
+
+@pytest.mark.asyncio
 async def test_on_bluetooth_connection_state_preserves_cached_mtu(
     client_data: ESPHomeClientData,
 ) -> None:

@@ -218,6 +218,25 @@ class ESPHomeClient(BaseBleakClient):
             self._disconnected_callback()
             self._disconnected_callback = None
 
+    async def _shielded_disconnect(self) -> None:
+        """
+        Release the ESP-side connection, surviving re-cancellation.
+
+        The disconnect is shielded so a cancellation arriving while it is
+        running cannot interrupt it half-way and leave the device connected
+        on the ESP side. If a re-cancellation does arrive, the disconnect is
+        drained best-effort before the cancellation propagates. Errors are
+        suppressed: this is cleanup on an already-failing path and the
+        original outcome is the actionable one for the caller.
+        """
+        disconnect_task = asyncio.create_task(self._disconnect())
+        with contextlib.suppress(Exception):
+            try:
+                await asyncio.shield(disconnect_task)
+            except asyncio.CancelledError:
+                with contextlib.suppress(Exception):
+                    await disconnect_task
+
     def _on_bluetooth_connection_state(
         self,
         connected_future: asyncio.Future[bool],
@@ -233,16 +252,22 @@ class ESPHomeClient(BaseBleakClient):
             mtu,
             error,
         )
+        if not connected:
+            self._async_ble_device_disconnected()
+
+        if connected_future.done():
+            # The connect attempt already finished (timed out, failed, or
+            # was cancelled) so the owning ``connect()`` has bailed and
+            # cleanup may already have run. A late ``connected=True`` must
+            # not mark the client connected again: nobody owns it anymore
+            # and the state would never be corrected.
+            return
+
         if connected:
             self._is_connected = True
             if not self._mtu:
                 self._mtu = mtu
                 self._cache.set_gatt_mtu_cache(self._address_as_int, mtu)
-        else:
-            self._async_ble_device_disconnected()
-
-        if connected_future.done():
-            return
 
         if error:
             try:
@@ -328,6 +353,10 @@ class ESPHomeClient(BaseBleakClient):
                         # to avoid a warning about an un-retrieved
                         # exception.
                         await connected_future
+                else:
+                    # Make the abandoned attempt terminal so a late
+                    # connection-state callback cannot resurrect state.
+                    connected_future.cancel()
                 self._async_disconnected_cleanup()
                 # If the current task is not actually being cancelled,
                 # the cancellation came from inside (e.g. the
@@ -355,18 +384,18 @@ class ESPHomeClient(BaseBleakClient):
             try:
                 await connected_future
             except asyncio.CancelledError:
-                # Clean up the connection-state subscription that was
-                # registered by bluetooth_device_connect above, since we
-                # are bailing out before the normal disconnect path runs.
-                # Done for both the spurious-cancel (BleakError conversion)
-                # and the real-cancel (bare raise) branches so the
-                # subscription does not leak and trigger the
-                # ``not properly disconnected before destruction`` warning
-                # from ``__del__``.
-                cancel_connection_state = self._cancel_connection_state
-                self._cancel_connection_state = None
-                if cancel_connection_state is not None:
-                    cancel_connection_state()
+                # The cancellation may have been delivered after the link
+                # already came up (``connected_future`` can hold a result
+                # while the awaiting task was cancelled before resuming);
+                # release the ESP-side connection so the proxy's slot is
+                # not leaked on a connection no client owns.
+                if self._is_connected:
+                    await self._shielded_disconnect()
+                # Clean up local state and the connection-state
+                # subscription so it does not leak and trigger the
+                # ``not properly disconnected before destruction``
+                # warning from ``__del__``.
+                self._async_disconnected_cleanup()
                 # If the current task is not actually being cancelled,
                 # treat a cancellation of connected_future as a normal
                 # connection failure so bleak_retry_connector can retry
@@ -377,6 +406,11 @@ class ESPHomeClient(BaseBleakClient):
                     ) from None
                 raise
             except BaseException:
+                # The future can also fail after the link came up
+                # (``connected=True`` with an error code); release the
+                # ESP-side connection so the slot is not leaked.
+                if self._is_connected:
+                    await self._shielded_disconnect()
                 self._async_disconnected_cleanup()
                 raise
 
@@ -389,22 +423,9 @@ class ESPHomeClient(BaseBleakClient):
         except asyncio.CancelledError:
             # On cancel we must still raise CancelledError to avoid
             # blocking the cancellation even if the disconnect call
-            # fails. Shield the disconnect so a re-cancellation arriving
-            # while it is running cannot interrupt it half-way and leave
-            # the device connected on the ESP side. If a re-cancel does
-            # arrive, finish awaiting the disconnect before re-raising
-            # so the cancellation still propagates to the caller.
-            disconnect_task = asyncio.create_task(self._disconnect())
-            with contextlib.suppress(Exception):
-                try:
-                    await asyncio.shield(disconnect_task)
-                except asyncio.CancelledError:
-                    # Re-cancelled while the shielded disconnect was in
-                    # flight. Drain disconnect_task best-effort so it
-                    # does not leak before the original CancelledError
-                    # is re-raised below.
-                    with contextlib.suppress(Exception):
-                        await disconnect_task
+            # fails, so release the ESP-side connection best-effort
+            # before re-raising.
+            await self._shielded_disconnect()
             raise
         except Exception:
             # Best-effort cleanup: release the BLE connection on the ESP
