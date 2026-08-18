@@ -615,6 +615,130 @@ async def test_bleak_client_connect_error_after_link_up_disconnects_esp(
 
 
 @pytest.mark.asyncio
+async def test_bleak_client_connect_cancel_after_link_up_disconnect_failure_logged(
+    bleak_pair: tuple[BleakClient, ESPHomeClient],
+) -> None:
+    """
+    Test a failing release does not mask the cancellation.
+
+    If the ESP-side disconnect fails while cleaning up a cancelled
+    connect, the error is logged and swallowed; the cancellation still
+    propagates to the caller.
+    """
+    bleak_client, client = bleak_pair
+    with (
+        patch.object(
+            client._client,
+            "bluetooth_device_connect",
+            return_value=Mock(),
+        ) as mock_connect,
+        patch.object(
+            client._client,
+            "bluetooth_device_disconnect",
+            side_effect=APIConnectionError("boom"),
+        ) as mock_disconnect,
+    ):
+        task = asyncio.create_task(bleak_client.connect(dangerous_use_bleak_cache=True))
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        callback = mock_connect.call_args_list[0][0][1]
+        callback(True, 23, 0)
+        assert task.cancel() is True
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert task.cancelled()
+
+    mock_disconnect.assert_called_once_with(BLE_ADDRESS_AS_INT)
+    assert not client.is_connected
+
+
+@pytest.mark.asyncio
+async def test_bleak_client_connect_cancel_after_error_retrieves_future(
+    bleak_pair: tuple[BleakClient, ESPHomeClient],
+) -> None:
+    """
+    Test a cancel racing a stored connect error retrieves the error.
+
+    When the connection-state callback stores a ``BleakError`` and the
+    task is cancelled before resuming, the handler must retrieve the
+    stored exception (so asyncio does not log ``Future exception was
+    never retrieved``), release the link, and propagate the cancel.
+    """
+    bleak_client, client = bleak_pair
+    with (
+        patch.object(
+            client._client,
+            "bluetooth_device_connect",
+            return_value=Mock(),
+        ) as mock_connect,
+        patch.object(
+            client._client,
+            "bluetooth_device_disconnect",
+        ) as mock_disconnect,
+    ):
+        task = asyncio.create_task(bleak_client.connect(dangerous_use_bleak_cache=True))
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        callback = mock_connect.call_args_list[0][0][1]
+        # connected with an error code: stores a BleakError on the future
+        # while _is_connected is already set.
+        callback(True, 23, 1)
+        assert task.cancel() is True
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert task.cancelled()
+
+    mock_disconnect.assert_called_once_with(BLE_ADDRESS_AS_INT)
+    assert not client.is_connected
+
+
+@pytest.mark.asyncio
+async def test_bleak_client_connect_error_then_cancel_during_release(
+    bleak_pair: tuple[BleakClient, ESPHomeClient],
+) -> None:
+    """
+    Test a cancel absorbed during the error-path release still wins.
+
+    When the connect fails after the link came up and a cancellation
+    arrives while the shielded release is in flight, the release runs to
+    completion and the cancellation outranks the original error.
+    """
+    bleak_client, client = bleak_pair
+    in_disconnect = asyncio.Event()
+    release_disconnect = asyncio.Event()
+    disconnect_finished = asyncio.Event()
+
+    async def _slow_disconnect() -> None:
+        in_disconnect.set()
+        await release_disconnect.wait()
+        disconnect_finished.set()
+
+    with (
+        patch.object(
+            client._client,
+            "bluetooth_device_connect",
+            return_value=Mock(),
+        ) as mock_connect,
+        patch.object(client, "_disconnect_no_wait", side_effect=_slow_disconnect),
+    ):
+        task = asyncio.create_task(bleak_client.connect(dangerous_use_bleak_cache=True))
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        callback = mock_connect.call_args_list[0][0][1]
+        callback(True, 23, 1)
+        await in_disconnect.wait()
+        assert task.cancel() is True
+        await asyncio.sleep(0)
+        release_disconnect.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert task.cancelled()
+        assert disconnect_finished.is_set()
+
+    assert not client.is_connected
+
+
+@pytest.mark.asyncio
 async def test_bleak_client_connect_cancel_after_link_up_disconnect_shielded(
     bleak_pair: tuple[BleakClient, ESPHomeClient],
 ) -> None:
@@ -631,11 +755,10 @@ async def test_bleak_client_connect_cancel_after_link_up_disconnect_shielded(
     release_disconnect = asyncio.Event()
     disconnect_finished = asyncio.Event()
 
-    async def _slow_disconnect() -> bool:
+    async def _slow_disconnect() -> None:
         in_disconnect.set()
         await release_disconnect.wait()
         disconnect_finished.set()
-        return True
 
     with (
         patch.object(
@@ -643,7 +766,7 @@ async def test_bleak_client_connect_cancel_after_link_up_disconnect_shielded(
             "bluetooth_device_connect",
             return_value=Mock(),
         ) as mock_connect,
-        patch.object(client, "_disconnect", side_effect=_slow_disconnect),
+        patch.object(client, "_disconnect_no_wait", side_effect=_slow_disconnect),
     ):
         task = asyncio.create_task(bleak_client.connect(dangerous_use_bleak_cache=True))
         await asyncio.sleep(0)
@@ -670,13 +793,13 @@ async def test_bleak_client_late_connected_callback_does_not_resurrect(
     bleak_pair: tuple[BleakClient, ESPHomeClient],
 ) -> None:
     """
-    Test a late ``connected=True`` after a cancelled connect is ignored.
+    Test a late ``connected=True`` through the full ``connect()`` cancel path.
 
-    Once the connect attempt has been abandoned (future done, cleanup ran),
-    a late connection-state callback must not mark the client connected
-    again; nobody owns the client anymore and the state would never be
-    corrected. The ESP did just establish the link though, so the client
-    must release it rather than leave it pinning a proxy slot.
+    Once the attempt has been abandoned, a late connection-state callback
+    must not mark the client connected again and must release the link
+    the ESP just established. The unit-level twin in
+    ``test_client_branches.py`` drives the callback directly and also
+    guards the MTU cache.
     """
     bleak_client, client = bleak_pair
     mock_cancel_connection_state = Mock()
@@ -703,11 +826,10 @@ async def test_bleak_client_late_connected_callback_does_not_resurrect(
         assert not client.is_connected
         assert client._async_esp_disconnected not in client._disconnect_callbacks
         # Drain the orphan-release task spawned by the late callback.
-        assert client._orphan_disconnect_task is not None
-        await client._orphan_disconnect_task
+        assert client._orphan_disconnect_tasks
+        await next(iter(client._orphan_disconnect_tasks))
 
     mock_disconnect.assert_called_once_with(BLE_ADDRESS_AS_INT)
-    assert not client.is_connected
 
 
 @pytest.mark.asyncio
@@ -917,11 +1039,10 @@ async def test_bleak_client_connect_get_services_cleanup_shielded(
         in_get_services.set()
         await asyncio.Event().wait()
 
-    async def _slow_disconnect() -> bool:
+    async def _slow_disconnect() -> None:
         in_disconnect.set()
         await release_disconnect.wait()
         disconnect_finished.set()
-        return True
 
     with (
         patch.object(
@@ -930,7 +1051,7 @@ async def test_bleak_client_connect_get_services_cleanup_shielded(
             return_value=Mock(),
         ) as mock_connect,
         patch.object(client, "_get_services", side_effect=_hang_get_services),
-        patch.object(client, "_disconnect", side_effect=_slow_disconnect),
+        patch.object(client, "_disconnect_no_wait", side_effect=_slow_disconnect),
     ):
         task = asyncio.create_task(bleak_client.connect(dangerous_use_bleak_cache=True))
         await asyncio.sleep(0)

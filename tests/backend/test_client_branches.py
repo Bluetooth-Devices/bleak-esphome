@@ -199,11 +199,9 @@ async def test_on_bluetooth_connection_state_late_connect_does_not_resurrect(
     """
     A ``connected=True`` callback with a completed future is ignored.
 
-    The future being done means the connect attempt already finished
-    (failed, timed out, or was cancelled) and the owning ``connect()``
-    has bailed; a late connected notification must not flip
-    ``_is_connected`` back on or cache the reported MTU. It must release
-    the just-established ESP-side link instead of leaving it orphaned.
+    Unit-level twin of the ``connect()``-path test in ``test_client.py``:
+    drives the callback directly with a cancelled future and additionally
+    guards that the reported MTU is not cached for the abandoned attempt.
     """
     client = _make_client(client_data)
     client._bluetooth_device.ble_connections_free = 1
@@ -216,8 +214,8 @@ async def test_on_bluetooth_connection_state_late_connect_does_not_resurrect(
         client._on_bluetooth_connection_state(fut, True, 23, 0)
         assert not client.is_connected
         assert client._mtu is None
-        assert client._orphan_disconnect_task is not None
-        await client._orphan_disconnect_task
+        assert client._orphan_disconnect_tasks
+        await next(iter(client._orphan_disconnect_tasks))
     mock_disconnect.assert_called_once_with(client._address_as_int)
 
 
@@ -497,9 +495,7 @@ async def test_connect_get_services_failure_disconnects(
             return_value=Mock(),
         ) as mock_connect,
         patch.object(client, "_get_services", side_effect=_boom),
-        patch.object(
-            client, "_disconnect", new=AsyncMock(return_value=True)
-        ) as mock_disc,
+        patch.object(client, "_disconnect_no_wait", new=AsyncMock()) as mock_disc,
     ):
         task = asyncio.create_task(bleak_client.connect(dangerous_use_bleak_cache=True))
         await asyncio.sleep(0)
