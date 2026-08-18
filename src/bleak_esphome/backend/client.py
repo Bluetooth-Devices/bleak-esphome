@@ -53,6 +53,7 @@ GATT_HEADER_SIZE = 3
 DISCONNECT_TIMEOUT = 5.0
 CONNECT_FREE_SLOT_TIMEOUT = 2.0
 GATT_READ_TIMEOUT = 30.0
+GATT_NOTIFY_TIMEOUT = 30.0
 DEFAULT_TIMEOUT = 30.0
 
 # CCCD (Characteristic Client Config Descriptor)
@@ -746,11 +747,13 @@ class ESPHomeClient(BaseBleakClient):
             callback (NotifyCallback): Called with the notification
                 ``bytearray`` each time the server sends data.
             **kwargs:
-                timeout (float): Seconds to wait for the proxy to confirm
-                    the subscription. Defaults to 30.0.
+                timeout (float): Seconds to wait for each round-trip to the
+                    proxy (the subscribe, and the CCCD write that follows it
+                    on v3/REMOTE_CACHING connections). Defaults to 30.0.
 
         """
         self._raise_if_not_connected()
+        timeout = kwargs.get("timeout", GATT_NOTIFY_TIMEOUT)
         ble_handle = characteristic.handle
         if ble_handle in self._notify_cancels:
             raise BleakError(
@@ -773,7 +776,7 @@ class ESPHomeClient(BaseBleakClient):
                 self._address_as_int,
                 ble_handle,
                 lambda handle, data: callback(data),
-                kwargs.get("timeout", DEFAULT_TIMEOUT),
+                timeout,
             )
         )
 
@@ -804,6 +807,7 @@ class ESPHomeClient(BaseBleakClient):
                 self._address_as_int,
                 cccd_descriptor.handle,
                 CCCD_NOTIFY_BYTES if supports_notify else CCCD_INDICATE_BYTES,
+                timeout,
             )
         except BaseException:
             # Use BaseException to handle CancelledError as well as Exception.

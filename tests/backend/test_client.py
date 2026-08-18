@@ -1233,6 +1233,7 @@ async def test_start_notify_success_with_ccd_write(
         connected_client._address_as_int,
         cccd.handle,
         b"\x02\x00",
+        30.0,
     )
     assert char.handle in connected_client._notify_cancels
 
@@ -1245,7 +1246,7 @@ async def test_start_notify_timeout(
     kwargs: dict[str, float],
     expected: float,
 ) -> None:
-    """Test that start_notify uses a 30s timeout, overridable via kwargs."""
+    """Test start_notify uses a 30s timeout on both legs, overridable."""
     services = await fetch_services(connected_client, esphome_bluetooth_gatt_services)
     char = services.get_characteristic(INDICATE_CHAR_UUID)
     assert char is not None
@@ -1256,11 +1257,14 @@ async def test_start_notify_timeout(
             "bluetooth_gatt_start_notify",
             return_value=(AsyncMock(), Mock()),
         ) as mock_start_notify,
-        patch.object(connected_client._client, "bluetooth_gatt_write_descriptor"),
+        patch.object(
+            connected_client._client, "bluetooth_gatt_write_descriptor"
+        ) as mock_write_descriptor,
     ):
         await connected_client.start_notify(char, lambda data: None, **kwargs)
 
     assert mock_start_notify.call_args[0][3] == expected
+    assert mock_write_descriptor.call_args[0][3] == expected
 
 
 @pytest.mark.asyncio
