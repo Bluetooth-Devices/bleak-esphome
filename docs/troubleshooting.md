@@ -142,12 +142,13 @@ What to do, in order:
 
    This backend pairs immediately after link-up and before service discovery,
    which is what a peripheral that protects its whole GATT database expects.
+
 2. If that raises `NotImplementedError`, the proxy firmware predates the
    `PAIRING` flag — see the section above.
 3. If pairing reports success but protected handles still fail, the ESP32 may
    be holding a stale bond the peripheral no longer honours (peripheral
    factory-reset, or its bond table evicted the entry). Call `await
-   client.unpair()` on the connected client to drop the proxy-side bond, then
+client.unpair()` on the connected client to drop the proxy-side bond, then
    reconnect with pairing enabled. `unpair()` is gated on the same `PAIRING`
    flag as `pair()`, so the caveat in step 2 applies to it too.
 4. If pairing is attempted but returns an error, assume the peripheral needs
