@@ -152,10 +152,16 @@ The two levers, strongest first:
    its scanner as non-connectable (see the next section) and habluetooth never
    considers it a connection candidate. Its advertisements are still
    forwarded, so scan coverage is unaffected. This is the only deterministic
-   lever — it removes a competitor rather than out-weighing one.
+   lever — it removes a competitor rather than outweighing one. It applies to
+   every device that proxy hears, not just the one you are trying to place,
+   so only use it where the passive proxy is not the sole connectable node in
+   range of some other peripheral.
 2. **Widen the RSSI margin.** Give each proxy a clearly stronger signal for
    its intended device (position and antenna orientation), and avoid having
    two proxies with near-identical RSSI competing for the same peripheral.
+   Note that habluetooth scales its failure and slot penalties by the RSSI
+   gap itself, so a wider margin does not outweigh a proxy that is repeatedly
+   failing or out of slots — this lever only helps in the near-tie case.
 
 Note that a proxy is not the only possible connection candidate: a local
 Bluetooth adapter on the host is registered with habluetooth by the host
