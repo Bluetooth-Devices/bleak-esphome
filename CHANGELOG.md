@@ -1,5 +1,19 @@
 # Changelog
 
+## v3.10.0 (2026-08-18)
+
+### Features
+
+
+- Require aioesphomeapi 45.12.0 for bluetooth_device_disconnect_no_wait ([`7cfb510`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/7cfb510dd76416071b29c2c35d5193e9c9efa953))
+
+
+### Documentation
+
+
+- Troubleshoot disconnect reasons and proxy pinning (#404) ([`f43ae55`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/f43ae55466015cb8c227b76191def3055484afdc))
+
+
 ## v3.9.7 (2026-07-06)
 
 ### Bug fixes
