@@ -274,6 +274,20 @@ async def test_failed_cleared_push_rearms_the_forced_push(
 
 
 @pytest.mark.asyncio
+async def test_set_unavailable_skips_push_when_nothing_to_clear(
+    bluetooth_device: ESPHomeBluetoothDevice,
+) -> None:
+    """An already zeroed device pushes nothing on unavailability."""
+    pushed: list[Allocations] = []
+    bluetooth_device.async_subscribe_connection_slots(pushed.append)
+    bluetooth_device.async_set_unavailable()
+    assert pushed == []
+    # Idempotent: a second call also pushes nothing.
+    bluetooth_device.async_set_unavailable()
+    assert pushed == []
+
+
+@pytest.mark.asyncio
 async def test_set_unavailable_publishes_zeroed_free_for_idle_proxy(
     bluetooth_device: ESPHomeBluetoothDevice,
 ) -> None:
