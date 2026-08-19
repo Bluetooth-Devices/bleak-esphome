@@ -1,5 +1,13 @@
 # Changelog
 
+## v3.10.2 (2026-08-19)
+
+### Bug fixes
+
+
+- Tear down session state on disconnect and stop in connection manager ([`2de78a8`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/2de78a8b060718d2c8fbefd559461ba8fc1a6855))
+
+
 ## v3.10.1 (2026-08-18)
 
 ### Bug fixes
