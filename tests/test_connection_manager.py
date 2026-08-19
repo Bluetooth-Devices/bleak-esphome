@@ -392,6 +392,22 @@ async def test_stop_tears_down_session_state(
 
 
 @pytest.mark.asyncio
+async def test_teardown_closes_gate_before_disconnect_callbacks(
+    conn_manager: APIConnectionManager,
+) -> None:
+    """The connect gate is closed before consumer disconnect callbacks fire."""
+    device = ESPHomeBluetoothDevice("proxy", "AA:BB:CC:DD:EE:FF", available=True)
+    conn_manager._bluetooth_device = device
+    seen: list[bool] = []
+    callbacks: set[Callable[[], None]] = {lambda: seen.append(device.available)}
+    conn_manager._disconnect_callbacks = callbacks
+
+    await conn_manager._on_disconnect(expected_disconnect=False)
+
+    assert seen == [False]
+
+
+@pytest.mark.asyncio
 async def test_on_disconnect_fails_parked_slot_waiter_end_to_end(
     conn_manager: APIConnectionManager,
 ) -> None:

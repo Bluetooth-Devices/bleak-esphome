@@ -375,6 +375,22 @@ async def test_bleak_client_connect(
 
 
 @pytest.mark.asyncio
+async def test_bleak_client_disconnect_completes_on_unavailable_device(
+    bleak_pair: tuple[BleakClient, ESPHomeClient],
+) -> None:
+    """Disconnect completes when the proxy went unavailable mid teardown."""
+    _bleak_client, client = bleak_pair
+    client._bluetooth_device.available = True
+    client._bluetooth_device.async_set_unavailable()
+    with patch.object(
+        client._client,
+        "bluetooth_device_disconnect",
+    ) as mock_disconnect:
+        await client.disconnect()
+    mock_disconnect.assert_called_once()
+
+
+@pytest.mark.asyncio
 async def test_bleak_client_reconciled_when_missing_from_allocations(
     bleak_pair: tuple[BleakClient, ESPHomeClient],
     esphome_bluetooth_gatt_services: ESPHomeBluetoothGATTServices,

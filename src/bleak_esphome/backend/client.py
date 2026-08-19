@@ -545,7 +545,9 @@ class ESPHomeClient(BaseBleakClient):
             await self._client.bluetooth_device_disconnect(self._address_as_int)
         finally:
             self._async_ble_device_disconnected()
-        await self._wait_for_free_connection_slot(DISCONNECT_TIMEOUT)
+        # Settle only; a teardown path has nothing to fail over to.
+        with contextlib.suppress(TimeoutError):
+            await self._wait_for_free_connection_slot(DISCONNECT_TIMEOUT)
 
     async def _wait_for_free_connection_slot(self, timeout: float) -> None:
         """Wait for a free connection slot."""
