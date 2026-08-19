@@ -143,10 +143,31 @@ habluetooth may move a device between them — which surfaces as the `0x100`
 local-cancel disconnect above.
 
 There is no device→proxy affinity API in this library. To bias placement,
-influence the inputs habluetooth uses rather than looking for a knob here:
-give each proxy a clearly stronger signal for its intended device (position
-and antenna orientation), and avoid having two proxies with near-identical
-RSSI competing for the same peripheral.
+influence the inputs habluetooth uses rather than looking for a knob here.
+The two levers, strongest first:
+
+1. **Remove a proxy from connection selection entirely.** A proxy whose
+   firmware sets `active: false` in its `bluetooth_proxy:` block does not
+   advertise the `ACTIVE_CONNECTIONS` flag, so `connect_scanner()` registers
+   its scanner as non-connectable (see the next section) and habluetooth never
+   considers it a connection candidate. Its advertisements are still
+   forwarded, so scan coverage is unaffected. This is the only deterministic
+   lever — it removes a competitor rather than outweighing one. It applies to
+   every device that proxy hears, not just the one you are trying to place,
+   so only use it where the passive proxy is not the sole connectable node in
+   range of some other peripheral.
+2. **Widen the RSSI margin.** Give each proxy a clearly stronger signal for
+   its intended device (position and antenna orientation), and avoid having
+   two proxies with near-identical RSSI competing for the same peripheral.
+   Note that habluetooth scales its failure and slot penalties by the RSSI
+   gap itself, so a wider margin does not outweigh a proxy that is repeatedly
+   failing or out of slots — this lever only helps in the near-tie case.
+
+Note that a proxy is not the only possible connection candidate: a local
+Bluetooth adapter on the host is registered with habluetooth by the host
+application, not by this library, and competes on the same RSSI basis.
+Excluding it is a host-side configuration question, outside
+`bleak-esphome`'s scope.
 
 ## When does `disconnected_callback` fire?
 
