@@ -293,7 +293,7 @@ class ESPHomeClient(BaseBleakClient):
                 exc_info=True,
             )
         # No consumer notification: an abandoned attempt must not fire
-        # (and null) ``disconnected_callback``.
+        # ``disconnected_callback`` for a client the consumer never got.
         self._async_disconnected_cleanup()
         return sent
 

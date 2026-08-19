@@ -855,7 +855,12 @@ async def test_bleak_client_abandoned_attempt_preserves_disconnected_callback(
             # Attempt 1 fails; the consumer never saw a connected client.
             task, callback = await start_connect(client, mock_connect, pair=pair)
             callback(True, 23, 1 if failure_shape == "error_code" else 0)
-            with pytest.raises(BleakError):
+            raises_kwargs = (
+                {"match": "Disconnected during connect setup"}
+                if failure_shape == "drop_cache_return"
+                else {}
+            )
+            with pytest.raises(BleakError, **raises_kwargs):
                 await task
             assert disconnected_callback.call_count == (1 if drop_notifies else 0)
             assert client._disconnected_callback is disconnected_callback

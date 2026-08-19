@@ -275,7 +275,7 @@ async def test_esp_disconnected_invokes_bleak_callback(
 async def test_esp_disconnected_does_not_refire_callback(
     client_data: ESPHomeClientData,
 ) -> None:
-    """A second ESP disconnect after the callback cleared is a no-op."""
+    """A second ESP disconnect with no new link up is a no-op."""
     client = _make_client(client_data)
     client._is_connected = True
     callback = Mock()

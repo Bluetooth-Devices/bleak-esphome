@@ -152,10 +152,11 @@ RSSI competing for the same peripheral.
 
 Whenever the proxy reports the link down for a connection that had come
 up, including a drop while pairing or service discovery is still
-running, matching bleak's bluez backend; the callback persists across
-connect and disconnect cycles on a reused client. Library side
-abandonment of a failed attempt is silent and surfaces through the
-raising `connect()` alone. If the link drops during setup but service
+running, matching bleak's bluez backend for device initiated drops; the
+callback persists across connect and disconnect cycles on a reused
+client. Unlike bluez, library side abandonment of a failed attempt is
+silent, because the consumer never received the client; it surfaces
+through the raising `connect()` alone. If the link drops during setup but service
 discovery still resolves from cache, `connect()` raises
 `BleakError("<device>: Disconnected during connect setup")` rather than
 returning a client on a dead link.
