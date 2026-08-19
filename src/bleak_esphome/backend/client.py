@@ -160,6 +160,7 @@ class ESPHomeClient(BaseBleakClient):
         self._client = client_data.client
         self._is_connected = False
         self._pending_release = False
+        self._connect_completed = False
         self._mtu: int | None = None
         self._cancel_connection_state: Callable[[], None] | None = None
         self._notify_cancels: dict[
@@ -188,6 +189,7 @@ class ESPHomeClient(BaseBleakClient):
         self.services = BleakGATTServiceCollection()
         self._is_connected = False
         self._pending_release = False
+        self._connect_completed = False
         for _, notify_abort in self._notify_cancels.values():
             notify_abort()
         self._notify_cancels.clear()
@@ -201,9 +203,12 @@ class ESPHomeClient(BaseBleakClient):
 
     def _async_ble_device_disconnected(self) -> None:
         """Handle the BLE device disconnecting from the ESP."""
-        was_connected = self._is_connected
+        # Notify the consumer only for a connection connect() handed
+        # over; a drop during setup is surfaced by the failing connect,
+        # and notifying would also null the callback for the retry.
+        notify = self._is_connected and self._connect_completed
         self._async_disconnected_cleanup()
-        if was_connected:
+        if notify:
             _LOGGER.debug("%s: BLE device disconnected", self._description)
             self._async_call_bleak_disconnected_callback()
 
@@ -523,6 +528,9 @@ class ESPHomeClient(BaseBleakClient):
             # No settle on cancels and signals; still release.
             self._abandon_connect_attempt()
             raise
+        # The connection is now the consumer's; a later drop notifies
+        # its disconnected_callback.
+        self._connect_completed = True
 
     @api_error_as_bleak_error
     async def disconnect(self) -> None:

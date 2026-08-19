@@ -749,7 +749,7 @@ async def test_bleak_client_connect_services_drop_skips_settle(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("failure_shape", ["error_code", "pair", "services"])
+@pytest.mark.parametrize("failure_shape", ["error_code", "pair", "services", "drop"])
 async def test_bleak_client_abandoned_attempt_preserves_disconnected_callback(
     bleak_pair: tuple[BleakClient, ESPHomeClient],
     esphome_bluetooth_gatt_services: ESPHomeBluetoothGATTServices,
@@ -763,11 +763,17 @@ async def test_bleak_client_abandoned_attempt_preserves_disconnected_callback(
     retry connector reuses one client instance, and a later successful
     connect still has to deliver the real disconnect notification. Pinned
     for every abandonment shape: a connect error after link up, a failed
-    pairing, and a failed service discovery.
+    pairing, a failed service discovery, and a device initiated drop
+    during discovery.
     """
     bleak_client, client = bleak_pair
     disconnected_callback = Mock()
     client._disconnected_callback = disconnected_callback
+
+    async def _drop_during_services(*args: Any, **kwargs: Any) -> Any:
+        # Device initiated drop mid discovery, then the op fails.
+        client._async_ble_device_disconnected()
+        raise BleakError("dropped during discovery")
 
     with (
         patch_connect_rpcs(client) as (mock_connect, _mock_disconnect),
@@ -796,6 +802,12 @@ async def test_bleak_client_abandoned_attempt_preserves_disconnected_callback(
                 failure_stack.enter_context(
                     patch.object(
                         client, "_get_services", side_effect=_boom_get_services
+                    )
+                )
+            if failure_shape == "drop":
+                failure_stack.enter_context(
+                    patch.object(
+                        client, "_get_services", side_effect=_drop_during_services
                     )
                 )
             # Attempt 1 fails; the consumer never saw a connected client.
