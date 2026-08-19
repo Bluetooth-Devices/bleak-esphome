@@ -235,6 +235,20 @@ class ESPHomeClient(BaseBleakClient):
                 f"{self._description}: Connect attempt was cancelled"
             ) from None
 
+    def _normalize_connect_future(
+        self, fut: asyncio.Future[bool], msg: str | None = None
+    ) -> None:
+        """
+        Make an abandoned attempt's future terminal and retrieved.
+
+        A pending future left behind would let a late ``connected=True``
+        take the success path and resurrect the abandoned client.
+        """
+        if fut.done():
+            self._retrieve_future_error(fut)
+        else:
+            fut.cancel(msg)
+
     def _retrieve_future_error(self, fut: asyncio.Future[bool]) -> None:
         """Mark a stored error retrieved so asyncio does not warn about it."""
         if fut.done() and not fut.cancelled() and (exc := fut.exception()):
@@ -448,41 +462,31 @@ class ESPHomeClient(BaseBleakClient):
                         )
                     )
                 except asyncio.CancelledError:
-                    if connected_future.done():
-                        self._retrieve_future_error(connected_future)
-                    else:
-                        # Make the abandoned attempt terminal so a late
-                        # connection-state callback cannot resurrect state.
-                        connected_future.cancel()
+                    self._normalize_connect_future(connected_future)
                     # A duplicate release is harmless. Cancel-shaped exits
                     # never settle; the next entry gate waits anyway.
                     self._abandon_connect_attempt()
                     self._raise_if_spurious_cancellation()
                     raise
                 except Exception as ex:
-                    if connected_future.done():
-                        # Prefer to raise the exception from the connect call
-                        # as it is more descriptive than a stored future error.
-                        self._retrieve_future_error(connected_future)
-                    else:
-                        connected_future.cancel(
-                            f"Unhandled exception in connect call: {ex}"
-                        )
+                    # The connect call's error is preferred over a stored
+                    # future error as it is more descriptive.
+                    self._normalize_connect_future(
+                        connected_future,
+                        f"Unhandled exception in connect call: {ex}",
+                    )
                     settle_needed = self._abandon_connect_attempt()
                     raise
                 except BaseException:
                     # True BaseExceptions bypass the outer settle; still
                     # release the link and normalize the future.
-                    if connected_future.done():
-                        self._retrieve_future_error(connected_future)
-                    else:
-                        connected_future.cancel()
+                    self._normalize_connect_future(connected_future)
                     self._abandon_connect_attempt()
                     raise
                 try:
                     await connected_future
                 except asyncio.CancelledError:
-                    self._retrieve_future_error(connected_future)
+                    self._normalize_connect_future(connected_future)
                     # The cancel can land after the link came up; release
                     # so the slot is not leaked. Cancel-shaped exits never
                     # settle; the next entry gate waits anyway.
@@ -492,6 +496,7 @@ class ESPHomeClient(BaseBleakClient):
                 except BaseException:
                     # The future can fail after the link came up; release
                     # so the slot is not leaked.
+                    self._normalize_connect_future(connected_future)
                     settle_needed = self._abandon_connect_attempt()
                     raise
         except Exception:

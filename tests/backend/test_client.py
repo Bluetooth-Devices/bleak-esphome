@@ -1176,6 +1176,73 @@ async def test_bleak_client_connect_rpc_signal_cleans_up(
 
 
 @pytest.mark.asyncio
+async def test_bleak_client_connect_await_signal_makes_future_terminal(
+    bleak_pair: tuple[BleakClient, ESPHomeClient],
+) -> None:
+    """
+    Test a signal delivered at the future await cancels the future.
+
+    A pending future left behind would let a late ``connected=True``
+    take the success path and resurrect the abandoned client with no
+    release, leaking the proxy slot.
+    """
+    _bleak_client, client = bleak_pair
+    with patch_connect_rpcs(client) as (mock_connect, mock_disconnect):
+        coro = client.connect(pair=False, dangerous_use_bleak_cache=True)
+        # Drive manually so the signal lands at the await itself, with
+        # the future still pending.
+        coro.send(None)
+        with pytest.raises(_Signal):
+            coro.throw(_Signal())
+        callback = mock_connect.call_args_list[-1][0][1]
+        callback(True, 23, 0)
+    assert not client.is_connected
+    assert client._async_esp_disconnected not in client._disconnect_callbacks
+    # The late link up is released as an orphan, not resurrected.
+    mock_disconnect.assert_called_once_with(BLE_ADDRESS_AS_INT)
+
+
+@pytest.mark.asyncio
+async def test_bleak_client_connect_await_signal_retrieves_stored_error(
+    bleak_pair: tuple[BleakClient, ESPHomeClient],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A signal racing a stored future error retrieves the error."""
+    _bleak_client, client = bleak_pair
+    with patch_connect_rpcs(client) as (mock_connect, _mock_disconnect):
+        coro = client.connect(pair=False, dangerous_use_bleak_cache=True)
+        coro.send(None)
+        callback = mock_connect.call_args_list[-1][0][1]
+        # Fail the future, then deliver the signal before the coroutine
+        # resumes.
+        callback(False, 23, 1)
+        with (
+            caplog.at_level(logging.DEBUG),
+            pytest.raises(_Signal),
+        ):
+            coro.throw(_Signal())
+    assert not client.is_connected
+    assert "Discarding stored connect error" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_normalize_connect_future_branches(
+    bleak_pair: tuple[BleakClient, ESPHomeClient],
+) -> None:
+    """The helper cancels a pending future and retrieves a done one."""
+    _bleak_client, client = bleak_pair
+    loop = asyncio.get_running_loop()
+    pending: asyncio.Future[bool] = loop.create_future()
+    client._normalize_connect_future(pending, "boom")
+    assert pending.cancelled()
+    done: asyncio.Future[bool] = loop.create_future()
+    done.set_exception(BleakError("stored"))
+    client._normalize_connect_future(done)
+    # Retrieved, so asyncio does not warn at GC time.
+    assert done.exception() is not None
+
+
+@pytest.mark.asyncio
 async def test_bleak_client_connect_outer_base_exception_cleans_up(
     bleak_pair: tuple[BleakClient, ESPHomeClient],
 ) -> None:
