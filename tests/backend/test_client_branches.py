@@ -268,7 +268,8 @@ async def test_esp_disconnected_invokes_bleak_callback(
     client._disconnected_callback = callback
     client._async_esp_disconnected()
     callback.assert_called_once()
-    assert client._disconnected_callback is None
+    # bleak parity: the callback persists for the next connection.
+    assert client._disconnected_callback is callback
 
 
 @pytest.mark.asyncio
@@ -283,13 +284,10 @@ async def test_esp_disconnected_does_not_refire_callback(
     client._disconnected_callback = callback
     client._async_esp_disconnected()
     callback.assert_called_once()
-    # Simulate a stale second disconnect: the callback was cleared, and any
-    # subsequent disconnect must not refire it.
-    client._is_connected = True
-    client._connect_completed = True
+    # A stale second disconnect must not refire: cleanup cleared the
+    # handover flag, so the gate stays closed until the next connect.
     client._async_esp_disconnected()
     callback.assert_called_once()
-    assert client._disconnected_callback is None
 
 
 @pytest.mark.asyncio

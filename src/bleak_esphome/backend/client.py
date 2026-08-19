@@ -221,10 +221,15 @@ class ESPHomeClient(BaseBleakClient):
         self._async_ble_device_disconnected()
 
     def _async_call_bleak_disconnected_callback(self) -> None:
-        """Call the disconnected callback to inform the bleak consumer."""
+        """
+        Call the disconnected callback to inform the bleak consumer.
+
+        The callback persists for the client's next connection, matching
+        the other bleak backends; once per connection is guaranteed by
+        the handover gate, which cleanup clears before this runs.
+        """
         if self._disconnected_callback:
             self._disconnected_callback()
-            self._disconnected_callback = None
 
     def _raise_if_spurious_cancellation(self) -> None:
         """

@@ -749,6 +749,38 @@ async def test_bleak_client_connect_services_drop_skips_settle(
 
 
 @pytest.mark.asyncio
+async def test_bleak_client_disconnected_callback_fires_every_cycle(
+    bleak_pair: tuple[BleakClient, ESPHomeClient],
+    esphome_bluetooth_gatt_services: ESPHomeBluetoothGATTServices,
+) -> None:
+    """
+    The callback persists and fires on every owned disconnect.
+
+    bleak backends never null the disconnected callback; a client
+    instance reused across connect and disconnect cycles must notify on
+    each one.
+    """
+    bleak_client, client = bleak_pair
+    disconnected_callback = Mock()
+    client._disconnected_callback = disconnected_callback
+    with (
+        patch_connect_rpcs(client) as (mock_connect, _mock_disconnect),
+        patch.object(
+            client._client,
+            "bluetooth_gatt_get_services",
+            return_value=esphome_bluetooth_gatt_services,
+        ),
+    ):
+        for cycle in (1, 2):
+            task, callback = await start_connect(bleak_client, mock_connect)
+            callback(True, 23, 0)
+            await task
+            assert client.is_connected
+            callback(False, 23, 0)
+            assert disconnected_callback.call_count == cycle
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "failure_shape", ["error_code", "pair", "services", "drop", "drop_cache_return"]
 )
