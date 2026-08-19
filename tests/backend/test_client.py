@@ -21,7 +21,6 @@ from habluetooth import BaseHaRemoteScanner, HaBluetoothConnector
 
 from bleak_esphome.backend.client import (
     CONNECT_FREE_SLOT_TIMEOUT,
-    DEFAULT_MTU,
     GATT_HEADER_SIZE,
     ESPHomeClient,
     ESPHomeClientData,
@@ -2167,10 +2166,11 @@ async def test_max_write_without_response_falls_back_when_mtu_evicted(
     esphome_bluetooth_gatt_services: ESPHomeBluetoothGATTServices,
 ) -> None:
     """
-    An evicted MTU entry falls back to the conservative default.
+    An evicted MTU entry falls back to the build-time MTU.
 
     The services and MTU LRUs evict independently, so a cached collection
-    can outlive the MTU it was built against.
+    can outlive the MTU it was built against; the link it was built on is
+    a better answer than the conservative default.
     """
     client = connected_client
     client._mtu = 517
@@ -2184,4 +2184,33 @@ async def test_max_write_without_response_falls_back_when_mtu_evicted(
     ]
     assert chars, "fixture must expose at least one characteristic"
     for char in chars:
-        assert char.max_write_without_response_size == DEFAULT_MTU - GATT_HEADER_SIZE
+        assert char.max_write_without_response_size == 517 - GATT_HEADER_SIZE
+
+
+@pytest.mark.asyncio
+async def test_clear_cache_rebuild_keeps_current_link_write_size(
+    connected_client: ESPHomeClient,
+    esphome_bluetooth_gatt_services: ESPHomeBluetoothGATTServices,
+) -> None:
+    """
+    A rebuild after ``clear_cache()`` still reports this link's size.
+
+    ``clear_cache()`` drops the MTU entry without resetting ``self._mtu``,
+    so the rebuilt collection has no cache entry to read and must fall
+    back to the MTU of the live link rather than the default.
+    """
+    client = connected_client
+    client._mtu = 517
+    client._cache.set_gatt_mtu_cache(client._address_as_int, 517)
+    await fetch_services(client, esphome_bluetooth_gatt_services)
+    client._cache.clear_gatt_services_cache(client._address_as_int)
+    client._cache.clear_gatt_mtu_cache(client._address_as_int)
+    rebuilt = await fetch_services(client, esphome_bluetooth_gatt_services)
+    chars = [
+        char
+        for service in rebuilt.services.values()
+        for char in service.characteristics
+    ]
+    assert chars, "fixture must expose at least one characteristic"
+    for char in chars:
+        assert char.max_write_without_response_size == 517 - GATT_HEADER_SIZE

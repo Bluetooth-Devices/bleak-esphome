@@ -663,11 +663,14 @@ class ESPHomeClient(BaseBleakClient):
         # but the ATT MTU is negotiated per link. Read it from the shared
         # cache at call time instead of freezing the size in at build time,
         # so a cache hit on a later link reports what *that* link can carry.
-        # If the MTU entry has been evicted (the two LRUs evict
-        # independently) nothing vouches for a larger size, so fall back to
-        # the conservative default.
+        # If the MTU entry is missing (the two LRUs evict independently, and
+        # ``clear_cache()`` drops the MTU entry without touching
+        # ``self._mtu``) fall back to the MTU of the link this collection was
+        # built on -- the same value ``main`` froze in.
+        built_mtu = self.mtu_size
+
         def get_max_write_without_response() -> int:
-            mtu = cache.get_gatt_mtu_cache(address_as_int) or DEFAULT_MTU
+            mtu = cache.get_gatt_mtu_cache(address_as_int) or built_mtu
             return mtu - GATT_HEADER_SIZE
 
         services = BleakGATTServiceCollection()
