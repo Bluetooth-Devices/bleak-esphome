@@ -1023,10 +1023,10 @@ class ESPHomeClient(BaseBleakClient):
             # failure is the actionable root cause and must not be replaced
             # by a secondary error from the cleanup path -- except for a
             # CancelledError, which is a request to stop and has to win over
-            # any error it interrupts, so it is deliberately not caught here.
+            # any error it interrupts, so it is re-raised as-is below.
             try:
                 await notify_stop()
-            except Exception as release_err:
+            except BaseException as release_err:
                 # Put the entry back so a later stop_notify retries the
                 # release instead of hitting the missing-handle no-op, and
                 # note the failure on the error the caller sees: while the
@@ -1040,6 +1040,11 @@ class ESPHomeClient(BaseBleakClient):
                     characteristic.handle,
                     exc_info=True,
                 )
+                if isinstance(release_err, asyncio.CancelledError):
+                    # A cancellation is a request to stop, so it wins over
+                    # the CCCD error it interrupted instead of being demoted
+                    # to a note on it.
+                    raise
                 err.add_note(
                     "Releasing the proxy notify subscription for handle "
                     f"{characteristic.handle} also failed with {release_err!r}; "
