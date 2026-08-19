@@ -142,19 +142,20 @@ reconnect / discovery machinery).
 `connect_scanner(cli, device_info, available)` wires an
 `aioesphomeapi.APIClient` to an `ESPHomeScanner` + `ESPHomeClient` and
 subscribes to the proxy's advertisement, scanner-state, and connection-slot
-streams. It returns an `ESPHomeClientData` and leaves three jobs to the
+streams. It returns an `ESPHomeClientData` and leaves four jobs to the
 caller:
 
 1. Call `client_data.scanner.async_setup()` to attach the scanner to the
    running loop.
 2. Register the scanner with the host-side Bluetooth manager (and
    un-register it when the ESP disconnects).
-3. Fire every callback in `client_data.disconnect_callbacks` when the ESP
-   disconnects, so `ESPHomeClient` instances drop their subscriptions.
-   Iterate a snapshot of the set — each callback removes itself during
-   cleanup. Also set `client_data.bluetooth_device.available = False`
-   first, so the connector's `can_connect` gate stops offering the dead
-   proxy for new connection attempts.
+3. Call `client_data.bluetooth_device.async_set_unavailable()` first when
+   the ESP disconnects, so the connector's `can_connect` gate stops
+   offering the dead proxy and callers waiting for a free connection
+   slot fail fast.
+4. Fire every callback in `client_data.disconnect_callbacks`, so
+   `ESPHomeClient` instances drop their subscriptions. Iterate a
+   snapshot of the set — each callback removes itself during cleanup.
 
 ```python
 import habluetooth
@@ -174,7 +175,7 @@ unregister_scanner = habluetooth.get_manager().async_register_scanner(
 )
 
 # Later, when the ESP disconnects:
-client_data.bluetooth_device.available = False
+client_data.bluetooth_device.async_set_unavailable()
 for callback in list(client_data.disconnect_callbacks):
     callback()
 unregister_scanner()

@@ -31,6 +31,7 @@ class ESPHomeBluetoothDevice:
     loop: asyncio.AbstractEventLoop = field(default_factory=asyncio.get_running_loop)
     available: bool = False
     cache: ESPHomeBluetoothCache = field(default_factory=ESPHomeBluetoothCache)
+    _unavailable: bool = False
     _connection_slots_callback: Callable[[Allocations], None] | None = None
     _called_callback: bool = False
     _tracked_clients: dict[int, Callable[[], None]] = field(default_factory=dict)
@@ -79,10 +80,78 @@ class ESPHomeBluetoothDevice:
         if self._tracked_clients.get(address) == on_ble_disconnected:
             del self._tracked_clients[address]
 
+    def _unavailable_message(self) -> str:
+        """Return the failure text for a wait on an unavailable proxy."""
+        return (
+            f"{self.name} [{self.mac_address}]: Proxy became unavailable "
+            "while waiting for a free BLE connection slot"
+        )
+
+    def async_set_unavailable(self) -> None:
+        """
+        Mark the proxy unavailable and fail pending slot waiters.
+
+        Failing fast lets a parked waiter retry against another proxy
+        instead of sitting out its full timeout. The latch clears on the
+        next slot report; ``available`` is not restored by that, so a
+        reusing caller must set it back to ``True`` on reconnect, which
+        disarms the fail fast immediately. The free count stays zero
+        until the first slot report. This method never raises, so
+        teardown paths can call it without guards.
+        """
+        self.available = False
+        # Distinct from ``available``: only an explicit unavailability
+        # arms the wait entry guard.
+        self._unavailable = True
+        # Clear the dead session's allocated list and free count so a
+        # reused device cannot serve stale state; ``limit`` keeps the
+        # last reported capacity.
+        had_state = bool(self.ble_allocations) or bool(self.ble_connections_free)
+        self.ble_allocations = []
+        self.ble_connections_free = 0
+        if futures := self._ble_connection_free_futures:
+            message = self._unavailable_message()
+            for fut in futures:
+                # A cancelled waiter can leave a done future in the set.
+                if not fut.done():
+                    fut.set_exception(TimeoutError(message))
+            futures.clear()
+        if had_state and not self._async_publish_allocations(
+            self.ble_connections_limit, 0, []
+        ):
+            # Re-arm the forced push so the next slot report corrects
+            # the subscriber's stale snapshot.
+            self._called_callback = False
+
+    def _async_publish_allocations(
+        self, limit: int, free: int, allocated: list[str]
+    ) -> bool:
+        """Push an allocation snapshot to the subscriber; True if it landed."""
+        if (connection_slots_callback := self._connection_slots_callback) is None:
+            return False
+        try:
+            connection_slots_callback(
+                Allocations(self.mac_address, limit, free, allocated)
+            )
+        except Exception:  # pylint: disable=broad-except
+            # Consumer supplied code; the subscriber may keep a stale
+            # snapshot until the next push.
+            _LOGGER.exception(
+                "%s [%s]: Error pushing allocations",
+                self.name,
+                self.mac_address,
+            )
+            return False
+        return True
+
     def async_update_ble_connection_limits(
         self, free: int, limit: int, allocated: list[int]
     ) -> None:
         """Update the BLE connection limits."""
+        # A proxy reporting slot state is demonstrably alive; clear the
+        # unavailability latch so a long-lived device that was marked
+        # unavailable is not permanently poisoned for slot waiters.
+        self._unavailable = False
         _LOGGER.debug(
             "%s [%s]: BLE connection limits: used=%s free=%s limit=%s allocated=%s",
             self.name,
@@ -112,18 +181,14 @@ class ESPHomeBluetoothDevice:
         # published allocation snapshot and the clients' connected state
         # are always consistent with each other.
         self._async_reconcile_connections()
-        if (changed or not self._called_callback) and (
-            connection_slots_callback := self._connection_slots_callback
+        if (changed or not self._called_callback) and self._async_publish_allocations(
+            limit,
+            free,
+            [int_to_bluetooth_address(address) for address in allocated],
         ):
+            # Committed only when the push landed, so a raising
+            # subscriber keeps the first snapshot forced-push armed.
             self._called_callback = True
-            connection_slots_callback(
-                Allocations(
-                    self.mac_address,
-                    limit,
-                    free,
-                    [int_to_bluetooth_address(address) for address in allocated],
-                )
-            )
 
     def _async_reconcile_connections(self) -> None:
         """
@@ -235,9 +300,15 @@ class ESPHomeBluetoothDevice:
         report at least one free slot via ``async_update_ble_connection_limits``.
 
         Raises:
-            TimeoutError: if no slot becomes free within ``timeout`` seconds.
+            TimeoutError: if no slot becomes free within ``timeout``
+                seconds, or immediately if the proxy becomes unavailable
+                while waiting (see ``async_set_unavailable``).
 
         """
+        if self._unavailable and not self.available:
+            # Fail fast instead of parking the full timeout on a proxy
+            # that is provably dead.
+            raise TimeoutError(self._unavailable_message())
         if self.ble_connections_free > 0:
             return self.ble_connections_free
         fut: asyncio.Future[int] = self.loop.create_future()

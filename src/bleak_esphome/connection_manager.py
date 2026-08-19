@@ -68,36 +68,53 @@ class APIConnectionManager:
                 unregister()
 
     def _mark_unavailable(self) -> None:
-        """Close the connector's can_connect gate for this session's proxy."""
-        if self._bluetooth_device is not None:
-            self._bluetooth_device.available = False
-            self._bluetooth_device = None
+        """
+        Close the connector's can_connect gate for this session's proxy.
+
+        Also fails any caller parked waiting for a free connection slot,
+        so connect attempts stop burning their timeout on a proxy whose
+        API connection is gone. Never raises, so teardown paths need no
+        guards.
+        """
+        if (bluetooth_device := self._bluetooth_device) is None:
+            return
+        # Drop the reference first so a raising call cannot re-fire
+        # against the same dead device on the next teardown.
+        self._bluetooth_device = None
+        try:
+            bluetooth_device.async_set_unavailable()
+        except Exception:  # pylint: disable=broad-except
+            # Never raises by contract; a regression must not skip the
+            # rest of the teardown.
+            _LOGGER.exception("%s: Error marking device unavailable", self._address)
+
+    def _fire_disconnect_callbacks(self) -> None:
+        """Fire and clear the per-session client disconnect callbacks."""
+        if (disconnect_callbacks := self._disconnect_callbacks) is None:
+            return
+        self._disconnect_callbacks = None
+        try:
+            # Each callback discards itself from the set, so iterate a
+            # snapshot. A callback ends in consumer supplied code; one
+            # raising must not skip the other clients.
+            for callback in list(disconnect_callbacks):
+                try:
+                    callback()
+                except Exception:  # pylint: disable=broad-except
+                    _LOGGER.exception("%s: Error in disconnect callback", self._address)
+        finally:
+            # Clear in place: clients hold a reference to this set
+            # object.
+            disconnect_callbacks.clear()
 
     def _teardown_session(self) -> None:
         """Tear down the per-session client state and the scanner."""
         self._mark_unavailable()
         try:
-            if (disconnect_callbacks := self._disconnect_callbacks) is not None:
-                self._disconnect_callbacks = None
-                try:
-                    # Each callback discards itself from the set, so iterate
-                    # a snapshot to avoid "set changed size during
-                    # iteration". A callback ends in consumer supplied code;
-                    # one raising must not skip the other clients.
-                    for callback in list(disconnect_callbacks):
-                        try:
-                            callback()
-                        except Exception:  # pylint: disable=broad-except
-                            _LOGGER.exception(
-                                "%s: Error in disconnect callback", self._address
-                            )
-                finally:
-                    # Clear in place: clients hold a reference to this set
-                    # object.
-                    disconnect_callbacks.clear()
+            self._fire_disconnect_callbacks()
         finally:
-            # The scanner unregister must run regardless; skipping it would
-            # leak the registration in habluetooth's manager.
+            # The scanner unregister must run regardless; skipping it
+            # would leak the registration in habluetooth's manager.
             self._teardown_scanner()
 
     async def _on_disconnect(self, expected_disconnect: bool) -> None:

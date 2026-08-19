@@ -199,6 +199,251 @@ async def test_untrack_client_only_removes_matching_handler(
 
 
 @pytest.mark.asyncio
+async def test_set_unavailable_fails_pending_slot_waiters(
+    bluetooth_device: ESPHomeBluetoothDevice,
+) -> None:
+    """A parked slot waiter fails fast when the proxy goes unavailable."""
+    bluetooth_device.available = True
+    # Seed real session state so the clearing assertions below are not
+    # satisfied vacuously by the fixture's empty defaults; free stays
+    # zero so the waiter parks.
+    bluetooth_device.async_update_ble_connection_limits(0, 2, [42, 43])
+    pushed: list[Allocations] = []
+    bluetooth_device.async_subscribe_connection_slots(pushed.append)
+    task = asyncio.create_task(bluetooth_device.wait_for_ble_connections_free(60.0))
+    await asyncio.sleep(0)
+    assert not task.done()
+    bluetooth_device.async_set_unavailable()
+    with pytest.raises(TimeoutError, match="Proxy became unavailable"):
+        await task
+    assert bluetooth_device.available is False
+    assert bluetooth_device._ble_connection_free_futures == set()
+    # The dead session's allocated list and free count must not survive
+    # into a reuse, and the cleared snapshot is pushed so the
+    # subscriber's stored copy does not keep the stale state either.
+    assert bluetooth_device.ble_allocations == []
+    assert bluetooth_device.ble_connections_free == 0
+    assert pushed[-1].allocated == []
+    assert pushed[-1].free == 0
+
+
+@pytest.mark.asyncio
+async def test_update_isolates_raising_subscriber(
+    bluetooth_device: ESPHomeBluetoothDevice,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A raising slot subscriber must not abort a slot report."""
+    bluetooth_device.async_subscribe_connection_slots(
+        Mock(side_effect=ValueError("subscriber boom"))
+    )
+    with caplog.at_level(logging.ERROR):
+        bluetooth_device.async_update_ble_connection_limits(1, 3, [42])
+    # The report itself still landed.
+    assert bluetooth_device.ble_connections_free == 1
+    assert "Error pushing allocations" in caplog.text
+    # The failed push keeps the first snapshot forced push armed: an
+    # identical update retries once the subscriber heals.
+    pushed: list[Allocations] = []
+    bluetooth_device._connection_slots_callback = pushed.append
+    bluetooth_device.async_update_ble_connection_limits(1, 3, [42])
+    assert len(pushed) == 1
+
+
+@pytest.mark.asyncio
+async def test_failed_cleared_push_rearms_the_forced_push(
+    bluetooth_device: ESPHomeBluetoothDevice,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A failed cleared snapshot push re-arms the forced push."""
+    bluetooth_device.available = True
+    good: list[Allocations] = []
+    bluetooth_device.async_subscribe_connection_slots(good.append)
+    bluetooth_device.async_update_ble_connection_limits(1, 3, [42])
+    assert len(good) == 1
+    bluetooth_device._connection_slots_callback = Mock(
+        side_effect=ValueError("subscriber boom")
+    )
+    with caplog.at_level(logging.ERROR):
+        bluetooth_device.async_set_unavailable()
+    # The subscriber heals; an update matching the zeroed state still
+    # pushes because the failed clear re-armed the forced push.
+    bluetooth_device._connection_slots_callback = good.append
+    bluetooth_device.async_update_ble_connection_limits(0, 3, [])
+    assert len(good) == 2
+    assert good[-1].free == 0
+
+
+@pytest.mark.asyncio
+async def test_set_unavailable_skips_push_when_nothing_to_clear(
+    bluetooth_device: ESPHomeBluetoothDevice,
+) -> None:
+    """An already zeroed device pushes nothing on unavailability."""
+    pushed: list[Allocations] = []
+    bluetooth_device.async_subscribe_connection_slots(pushed.append)
+    bluetooth_device.async_set_unavailable()
+    assert pushed == []
+    # Idempotent: a second call also pushes nothing.
+    bluetooth_device.async_set_unavailable()
+    assert pushed == []
+
+
+@pytest.mark.asyncio
+async def test_set_unavailable_publishes_zeroed_free_for_idle_proxy(
+    bluetooth_device: ESPHomeBluetoothDevice,
+) -> None:
+    """
+    An idle proxy dying still publishes its zeroed free count.
+
+    With no allocations to clear, the free count is the only cleared
+    fact; the push must still fire so the subscriber's cached snapshot
+    does not keep advertising free slots on a dead proxy.
+    """
+    bluetooth_device.available = True
+    bluetooth_device.async_update_ble_connection_limits(3, 3, [])
+    pushed: list[Allocations] = []
+    bluetooth_device.async_subscribe_connection_slots(pushed.append)
+    bluetooth_device.async_set_unavailable()
+    assert pushed[-1].free == 0
+    assert pushed[-1].allocated == []
+
+
+@pytest.mark.asyncio
+async def test_set_unavailable_raising_subscriber_does_not_strand_waiters(
+    bluetooth_device: ESPHomeBluetoothDevice,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """
+    A raising slot subscriber cannot strand the parked waiters.
+
+    The waiters are failed before the cleared snapshot push runs, and
+    the push itself is guarded because it ends in consumer supplied
+    code, so ``async_set_unavailable`` never raises.
+    """
+    bluetooth_device.available = True
+    bluetooth_device.async_update_ble_connection_limits(0, 2, [42, 43])
+    bluetooth_device.async_subscribe_connection_slots(
+        Mock(side_effect=ValueError("subscriber boom"))
+    )
+    task = asyncio.create_task(bluetooth_device.wait_for_ble_connections_free(60.0))
+    await asyncio.sleep(0)
+    assert not task.done()
+
+    with caplog.at_level(logging.ERROR):
+        bluetooth_device.async_set_unavailable()
+
+    with pytest.raises(TimeoutError, match="Proxy became unavailable"):
+        await task
+    assert bluetooth_device.ble_allocations == []
+    assert "Error pushing allocations" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_wait_after_unavailable_fails_fast(
+    bluetooth_device: ESPHomeBluetoothDevice,
+) -> None:
+    """A waiter entering after the proxy went away fails immediately."""
+    bluetooth_device.async_set_unavailable()
+    with pytest.raises(TimeoutError, match="Proxy became unavailable"):
+        await bluetooth_device.wait_for_ble_connections_free(60.0)
+    assert bluetooth_device._ble_connection_free_futures == set()
+
+
+@pytest.mark.asyncio
+async def test_slot_update_clears_the_unavailability_latch(
+    bluetooth_device: ESPHomeBluetoothDevice,
+) -> None:
+    """A proxy reporting slot state again clears the fail fast latch."""
+    bluetooth_device.async_set_unavailable()
+    with pytest.raises(TimeoutError, match="Proxy became unavailable"):
+        await bluetooth_device.wait_for_ble_connections_free(60.0)
+    bluetooth_device.async_update_ble_connection_limits(2, 3, [42])
+    assert await bluetooth_device.wait_for_ble_connections_free(60.0) == 2
+
+
+@pytest.mark.asyncio
+async def test_reuse_after_unavailable_does_not_trust_stale_free_count(
+    bluetooth_device: ESPHomeBluetoothDevice,
+) -> None:
+    """
+    A reused device must not serve the dead session's free count.
+
+    ``async_set_unavailable`` zeroes ``ble_connections_free``, so a
+    caller that restores ``available`` on reconnect parks for the new
+    session's first slot report instead of getting an immediate return
+    from a count the dead session left behind.
+    """
+    bluetooth_device.available = True
+    bluetooth_device.async_update_ble_connection_limits(2, 3, [42])
+    bluetooth_device.async_set_unavailable()
+    assert bluetooth_device.ble_connections_free == 0
+    assert bluetooth_device.ble_connections_limit == 3
+    bluetooth_device.available = True
+    task = asyncio.create_task(bluetooth_device.wait_for_ble_connections_free(60.0))
+    await asyncio.sleep(0)
+    assert not task.done()
+    bluetooth_device.async_update_ble_connection_limits(1, 3, [43])
+    assert await task == 1
+
+
+@pytest.mark.asyncio
+async def test_restoring_available_disarms_the_fail_fast(
+    bluetooth_device: ESPHomeBluetoothDevice,
+) -> None:
+    """
+    A reuser restoring ``available`` disarms the fail fast immediately.
+
+    The latch itself only clears on the next slot report, but a caller
+    that marked the device available again must not have its waiters
+    failed by the stale latch in the meantime.
+    """
+    bluetooth_device.async_set_unavailable()
+    bluetooth_device.available = True
+    task = asyncio.create_task(bluetooth_device.wait_for_ble_connections_free(60.0))
+    await asyncio.sleep(0)
+    assert not task.done()
+    bluetooth_device.async_update_ble_connection_limits(1, 3, [42])
+    assert await task == 1
+
+
+@pytest.mark.asyncio
+async def test_saturated_slot_update_clears_the_unavailability_latch(
+    bluetooth_device: ESPHomeBluetoothDevice,
+) -> None:
+    """
+    A ``free=0`` slot report also clears the fail fast latch.
+
+    A saturated proxy is alive, not dead; the reset is deliberately
+    unconditional at the top of the update, so a waiter parks for a slot
+    instead of failing fast.
+    """
+    bluetooth_device.async_set_unavailable()
+    bluetooth_device.async_update_ble_connection_limits(0, 3, [])
+    task = asyncio.create_task(bluetooth_device.wait_for_ble_connections_free(60.0))
+    await asyncio.sleep(0)
+    # The waiter parks rather than raising immediately.
+    assert not task.done()
+    bluetooth_device.async_update_ble_connection_limits(1, 3, [42])
+    assert await task == 1
+
+
+@pytest.mark.asyncio
+async def test_set_unavailable_skips_done_futures(
+    bluetooth_device: ESPHomeBluetoothDevice,
+) -> None:
+    """A done future is skipped while a pending one still fails fast."""
+    loop = asyncio.get_running_loop()
+    done_fut: asyncio.Future[int] = loop.create_future()
+    done_fut.cancel()
+    pending_fut: asyncio.Future[int] = loop.create_future()
+    bluetooth_device._ble_connection_free_futures.update({done_fut, pending_fut})
+    bluetooth_device.async_set_unavailable()
+    assert done_fut.cancelled()
+    with pytest.raises(TimeoutError, match="Proxy became unavailable"):
+        await pending_fut
+    assert bluetooth_device._ble_connection_free_futures == set()
+
+
+@pytest.mark.asyncio
 async def test_wait_for_ble_connections_free_timer_after_result_does_not_raise(
     bluetooth_device: ESPHomeBluetoothDevice,
 ) -> None:

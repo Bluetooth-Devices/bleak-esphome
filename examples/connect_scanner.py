@@ -13,11 +13,12 @@ example performs explicitly:
    running loop.
 2. Register the scanner with the host-side Bluetooth manager (and
    un-register it when the ESP disconnects).
-3. Fire every callback in ``client_data.disconnect_callbacks`` when the ESP
-   disconnects. Iterate a snapshot of the set — each callback removes
-   itself during cleanup.
-4. Set ``client_data.bluetooth_device.available = False`` first, so the
-   connector's ``can_connect`` gate stops offering the dead proxy.
+3. Call ``client_data.bluetooth_device.async_set_unavailable()`` when the
+   ESP disconnects, so the connector's ``can_connect`` gate stops offering
+   the dead proxy and callers waiting for a free connection slot fail
+   fast.
+4. Fire every callback in ``client_data.disconnect_callbacks``. Iterate a
+   snapshot of the set — each callback removes itself during cleanup.
 
 Replace ``DEVICE_ADDRESS`` / ``NOISE_PSK`` with your proxy's details before
 running. This talks to real hardware, so it cannot run in CI.
@@ -95,11 +96,13 @@ async def run() -> None:
         for device, adv in devices.values():
             print(f"{device} (rssi={adv.rssi})")
     finally:
-        # Responsibility 4: close the connect gate before firing callbacks
-        # so the dead proxy is not offered for new connection attempts.
+        # Responsibility 3: close the connect gate and fail slot waiters
+        # before firing callbacks, so the dead proxy is not offered for
+        # new connection attempts.
         if client_data is not None:
-            client_data.bluetooth_device.available = False
-        # Responsibility 3: fire the disconnect callbacks (snapshot the set —
+            # Never raises, so no guard is needed here.
+            client_data.bluetooth_device.async_set_unavailable()
+        # Responsibility 4: fire the disconnect callbacks (snapshot the set —
         # each callback removes itself). Guard each one so a single bad
         # callback cannot abort the rest of teardown, and keep un-register and
         # disconnect in their own guarded steps so they always run.

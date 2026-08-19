@@ -131,6 +131,15 @@ at that layer rather than in this library: reduce Wi-Fi/BLE contention on the
 proxy's channel, improve RF line-of-sight to the peripheral, or reduce how
 many devices a single proxy is asked to hold at once.
 
+## `Proxy became unavailable while waiting for a free BLE connection slot`
+
+A connect attempt was waiting for a free connection slot on a proxy whose
+API connection dropped. Instead of parking for the full timeout on a proxy
+that is provably gone, the waiter fails immediately with this message so
+the retry logic can move to another proxy. The fail fast disarms as soon
+as the proxy reports slot state again, or when a caller reusing the
+device marks it available on reconnect.
+
 ## Can I pin a BLE device to a specific proxy?
 
 No. `bleak-esphome` does not decide which proxy connects to which device. It

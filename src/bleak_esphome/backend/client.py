@@ -310,17 +310,18 @@ class ESPHomeClient(BaseBleakClient):
         self._async_disconnected_cleanup()
         return False
 
-    async def _settle_slot_after_failure(self, context: str) -> None:
+    async def _settle_slot(self, context: str, timeout: float) -> None:
         """
-        Wait for the freed slot to settle after a failed attempt.
+        Wait for the freed slot to settle after a failure or disconnect.
 
-        Capped to the same window as the next attempt's entry gate in
-        ``connect()``; a settle failure is logged, never raised, so it
-        cannot mask the original error. Slot level, not link level: any
-        free slot on the proxy returns immediately.
+        Callers pass the window that matters to them: the connect gate
+        window for retries, ``DISCONNECT_TIMEOUT`` for teardown. A
+        settle failure is logged, never raised, so it cannot mask the
+        original outcome. Slot level, not link level: any free slot on
+        the proxy returns immediately.
         """
         try:
-            await self._wait_for_free_connection_slot(CONNECT_FREE_SLOT_TIMEOUT)
+            await self._wait_for_free_connection_slot(timeout)
         except TimeoutError as settle_error:
             # The expected shape on a slow or saturated proxy.
             _LOGGER.debug(
@@ -509,7 +510,7 @@ class ESPHomeClient(BaseBleakClient):
             # Settle outside the ``connecting()`` pause; cancels and
             # signals bypass this handler and are never stalled behind it.
             if settle_needed:
-                await self._settle_slot_after_failure("failed connect")
+                await self._settle_slot("failed connect", CONNECT_FREE_SLOT_TIMEOUT)
             raise
 
         try:
@@ -522,7 +523,9 @@ class ESPHomeClient(BaseBleakClient):
             # Release, then settle before the retry; never mask the
             # original error.
             if self._abandon_connect_attempt():
-                await self._settle_slot_after_failure("failed connect setup")
+                await self._settle_slot(
+                    "failed connect setup", CONNECT_FREE_SLOT_TIMEOUT
+                )
             raise
         except BaseException:
             # No settle on cancels and signals; still release.
@@ -545,7 +548,8 @@ class ESPHomeClient(BaseBleakClient):
             await self._client.bluetooth_device_disconnect(self._address_as_int)
         finally:
             self._async_ble_device_disconnected()
-        await self._wait_for_free_connection_slot(DISCONNECT_TIMEOUT)
+        # Settle only; a teardown path has nothing to fail over to.
+        await self._settle_slot("disconnect", DISCONNECT_TIMEOUT)
 
     async def _wait_for_free_connection_slot(self, timeout: float) -> None:
         """Wait for a free connection slot."""

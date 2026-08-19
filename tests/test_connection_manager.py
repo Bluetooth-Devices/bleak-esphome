@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 import pytest
 import pytest_asyncio
 
+from bleak_esphome.backend.device import ESPHomeBluetoothDevice
 from bleak_esphome.connection_manager import (
     APIConnectionManager,
     ESPHomeDeviceConfig,
@@ -309,12 +310,12 @@ async def test_on_disconnect_marks_bluetooth_device_unavailable(
     The connector's ``can_connect`` gate reads ``available``; leaving it
     set would keep offering a proxy whose API connection is gone.
     """
-    bluetooth_device = Mock(available=True)
+    bluetooth_device = Mock(spec=ESPHomeBluetoothDevice, available=True)
     conn_manager._bluetooth_device = bluetooth_device
 
     await conn_manager._on_disconnect(expected_disconnect=False)
 
-    assert bluetooth_device.available is False
+    bluetooth_device.async_set_unavailable.assert_called_once_with()
     assert conn_manager._bluetooth_device is None
 
 
@@ -376,7 +377,7 @@ async def test_stop_tears_down_session_state(
     callback = Mock()
     callbacks: set[Callable[[], None]] = {callback}
     manager._disconnect_callbacks = callbacks
-    bluetooth_device = Mock(available=True)
+    bluetooth_device = Mock(spec=ESPHomeBluetoothDevice, available=True)
     manager._bluetooth_device = bluetooth_device
 
     await manager.stop()
@@ -386,8 +387,47 @@ async def test_stop_tears_down_session_state(
     # ``cast`` re-widens the attribute type mypy narrowed after the direct
     # assignment above so the assert is not flagged unreachable.
     assert cast("set[Callable[[], None]] | None", manager._disconnect_callbacks) is None
-    assert bluetooth_device.available is False
+    bluetooth_device.async_set_unavailable.assert_called_once_with()
     assert manager._bluetooth_device is None
+
+
+@pytest.mark.asyncio
+async def test_teardown_closes_gate_before_disconnect_callbacks(
+    conn_manager: APIConnectionManager,
+) -> None:
+    """The connect gate is closed before consumer disconnect callbacks fire."""
+    device = ESPHomeBluetoothDevice("proxy", "AA:BB:CC:DD:EE:FF", available=True)
+    conn_manager._bluetooth_device = device
+    seen: list[bool] = []
+    callbacks: set[Callable[[], None]] = {lambda: seen.append(device.available)}
+    conn_manager._disconnect_callbacks = callbacks
+
+    await conn_manager._on_disconnect(expected_disconnect=False)
+
+    assert seen == [False]
+
+
+@pytest.mark.asyncio
+async def test_on_disconnect_fails_parked_slot_waiter_end_to_end(
+    conn_manager: APIConnectionManager,
+) -> None:
+    """
+    A real parked slot waiter fails fast when the manager tears down.
+
+    Uses a real ``ESPHomeBluetoothDevice`` rather than a mock so the
+    manager to device wiring is proven end to end.
+    """
+    device = ESPHomeBluetoothDevice("proxy", "AA:BB:CC:DD:EE:FF", available=True)
+    conn_manager._bluetooth_device = device
+    task = asyncio.create_task(device.wait_for_ble_connections_free(60.0))
+    await asyncio.sleep(0)
+    assert not task.done()
+
+    await conn_manager._on_disconnect(expected_disconnect=False)
+
+    with pytest.raises(TimeoutError, match="Proxy became unavailable"):
+        await task
+    assert device.available is False
 
 
 @pytest.mark.asyncio
@@ -431,6 +471,39 @@ async def test_on_disconnect_isolates_raising_callback(
 
 
 @pytest.mark.asyncio
+async def test_teardown_survives_raising_set_unavailable(
+    conn_manager: APIConnectionManager,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """
+    A raising ``async_set_unavailable`` must not skip the teardown.
+
+    The method never raises by contract; the guard at the choke point
+    contains a regression, logs it, and lets the disconnect callbacks
+    and the scanner unregister proceed.
+    """
+    bluetooth_device = Mock(spec=ESPHomeBluetoothDevice, available=True)
+    bluetooth_device.async_set_unavailable.side_effect = RuntimeError("device boom")
+    conn_manager._bluetooth_device = bluetooth_device
+    callback = Mock()
+    callbacks: set[Callable[[], None]] = {callback}
+    conn_manager._disconnect_callbacks = callbacks
+    unregister = Mock()
+    conn_manager._unregister_scanner = unregister
+
+    with caplog.at_level(logging.ERROR):
+        await conn_manager._on_disconnect(expected_disconnect=False)
+
+    callback.assert_called_once_with()
+    assert not callbacks
+    unregister.assert_called_once_with()
+    assert "Error marking device unavailable" in caplog.text
+    # The reference was dropped before the call, so the next teardown
+    # cannot re-fire against the same dead device.
+    assert conn_manager._bluetooth_device is None
+
+
+@pytest.mark.asyncio
 async def test_stop_marks_unavailable_first_and_tears_down_on_error(
     conn_manager_with_mocked_reconnect: tuple[APIConnectionManager, Mock, AsyncMock],
     caplog: pytest.LogCaptureFixture,
@@ -443,14 +516,14 @@ async def test_stop_marks_unavailable_first_and_tears_down_on_error(
     even if a shutdown await raises.
     """
     manager, mock_reconnect_logic, mock_disconnect = conn_manager_with_mocked_reconnect
-    bluetooth_device = Mock(available=True)
+    bluetooth_device = Mock(spec=ESPHomeBluetoothDevice, available=True)
     manager._bluetooth_device = bluetooth_device
     unregister = Mock()
     manager._unregister_scanner = unregister
-    seen_available: list[bool] = []
+    gate_closed_first: list[bool] = []
 
     async def _stop_and_raise() -> None:
-        seen_available.append(bluetooth_device.available)
+        gate_closed_first.append(bluetooth_device.async_set_unavailable.called)
         raise RuntimeError("stop boom")
 
     mock_reconnect_logic.stop = AsyncMock(side_effect=_stop_and_raise)
@@ -465,7 +538,7 @@ async def test_stop_marks_unavailable_first_and_tears_down_on_error(
     assert "Error stopping reconnect logic" in caplog.text
 
     # The gate was already closed when the first shutdown await ran.
-    assert seen_available == [False]
+    assert gate_closed_first == [True]
     unregister.assert_called_once_with()
     # ``cast`` re-widens the attribute type mypy narrowed after the direct
     # assignment above so the following statements are not unreachable.
@@ -508,15 +581,16 @@ async def test_stop_after_disconnect_does_not_refire_callbacks(
     manager, _, _ = conn_manager_with_mocked_reconnect
     callback = Mock()
     manager._disconnect_callbacks = {callback}
-    bluetooth_device = Mock(available=True)
+    bluetooth_device = Mock(spec=ESPHomeBluetoothDevice, available=True)
     manager._bluetooth_device = bluetooth_device
 
     await manager._on_disconnect(expected_disconnect=True)
     callback.assert_called_once_with()
-    assert bluetooth_device.available is False
+    bluetooth_device.async_set_unavailable.assert_called_once_with()
 
     await manager.stop()
     callback.assert_called_once_with()
+    bluetooth_device.async_set_unavailable.assert_called_once_with()
 
 
 @pytest.mark.asyncio
