@@ -296,7 +296,8 @@ class ESPHomeClient(BaseBleakClient):
 
         Capped to the same window as the next attempt's entry gate in
         ``connect()``; a settle failure is logged, never raised, so it
-        cannot mask the original error.
+        cannot mask the original error. Slot level, not link level: any
+        free slot on the proxy returns immediately.
         """
         try:
             await self._wait_for_free_connection_slot(CONNECT_FREE_SLOT_TIMEOUT)
@@ -471,7 +472,11 @@ class ESPHomeClient(BaseBleakClient):
                     raise
                 except BaseException:
                     # True BaseExceptions bypass the outer settle; still
-                    # release the link.
+                    # release the link and normalize the future.
+                    if connected_future.done():
+                        self._retrieve_future_error(connected_future)
+                    else:
+                        connected_future.cancel()
                     self._abandon_connect_attempt()
                     raise
                 try:

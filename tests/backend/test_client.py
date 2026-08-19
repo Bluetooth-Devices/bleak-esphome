@@ -1137,29 +1137,42 @@ async def test_bleak_client_connect_outer_cancel_without_subscription(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("resolved", [False, True])
 async def test_bleak_client_connect_rpc_signal_cleans_up(
     bleak_pair: tuple[BleakClient, ESPHomeClient],
+    caplog: pytest.LogCaptureFixture,
+    resolved: bool,
 ) -> None:
     """
     Test a signal raised by the connect RPC itself still tears down.
 
     aioesphomeapi releases the ESP side in its own failure handlers; the
     local abandonment must still run so the subscription and state do
-    not leak.
+    not leak, and a future the state callback already failed must be
+    retrieved so asyncio does not warn at GC time.
     """
     bleak_client, client = bleak_pair
+
+    def _maybe_resolve_then_signal(*args: Any, **kwargs: Any) -> Any:
+        if resolved:
+            # Fail the connect future via the state callback first.
+            args[1](False, 23, 1)
+        raise _Signal
+
     with (
         patch.object(
             client._client,
             "bluetooth_device_connect",
-            side_effect=_Signal,
+            side_effect=_maybe_resolve_then_signal,
         ),
+        caplog.at_level(logging.DEBUG),
         pytest.raises(_Signal),
     ):
         await bleak_client.connect(dangerous_use_bleak_cache=True)
 
     assert not client.is_connected
     assert client._cancel_connection_state is None
+    assert ("Discarding stored connect error" in caplog.text) is resolved
 
 
 @pytest.mark.asyncio
