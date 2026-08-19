@@ -914,7 +914,29 @@ class ESPHomeClient(BaseBleakClient):
             # Send the disable, mirroring the CCCD unwind below.
             # ``bluetooth_gatt_stop_notify`` is sync so it is safe here, and
             # disabling a subscription that never landed is a no-op.
-            self._client.bluetooth_gatt_stop_notify(self._address_as_int, ble_handle)
+            #
+            # This unwinds the peripheral only. aioesphomeapi registers the
+            # notification message callback before its own await and unwinds
+            # it on ``except Exception``, so a cancellation leaves that
+            # handler registered on the proxy connection and not yet in
+            # ``_notify_callbacks``, which is what
+            # ``bluetooth_gatt_stop_notify`` pops. Removing it needs an
+            # upstream fix.
+            try:
+                self._client.bluetooth_gatt_stop_notify(
+                    self._address_as_int, ble_handle
+                )
+            except Exception:
+                # send_message raises when the connection is gone; the
+                # original failure (or CancelledError) must be the one that
+                # propagates.
+                _LOGGER.debug(
+                    "%s: Failed to disable notifications for handle %s after an "
+                    "abandoned subscribe",
+                    self._description,
+                    ble_handle,
+                    exc_info=True,
+                )
             raise
 
         if not self._feature_flags & BluetoothProxyFeature.REMOTE_CACHING.value:

@@ -2018,6 +2018,51 @@ async def test_start_notify_subscribe_abandoned_disables_notifications(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "side_effect",
+    [Exception("subscribe failed"), asyncio.CancelledError()],
+    ids=["failure", "cancelled"],
+)
+async def test_start_notify_subscribe_abandoned_disable_raises(
+    connected_client: ESPHomeClient,
+    esphome_bluetooth_gatt_services: ESPHomeBluetoothGATTServices,
+    side_effect: BaseException,
+) -> None:
+    """
+    A failing disable must not replace the original exception.
+
+    ``bluetooth_gatt_stop_notify`` sends on the API connection, which
+    raises when the connection is gone. The original failure — or the
+    ``CancelledError``, so cancellation still propagates — must be what
+    reaches the caller.
+    """
+    services = await fetch_services(connected_client, esphome_bluetooth_gatt_services)
+    char = services.get_characteristic(INDICATE_CHAR_UUID)
+    assert char is not None
+
+    with (
+        patch.object(
+            connected_client._client,
+            "bluetooth_gatt_start_notify",
+            side_effect=side_effect,
+        ),
+        patch.object(
+            connected_client._client,
+            "bluetooth_gatt_stop_notify",
+            side_effect=Exception("connection is closed"),
+        ) as mock_stop,
+        pytest.raises(type(side_effect)) as exc_info,
+    ):
+        await connected_client.start_notify(char, lambda data: None)
+
+    assert exc_info.value is side_effect or isinstance(
+        exc_info.value, asyncio.CancelledError
+    )
+    mock_stop.assert_called_once_with(connected_client._address_as_int, char.handle)
+    assert char.handle not in connected_client._notify_cancels
+
+
+@pytest.mark.asyncio
 async def test_start_notify_subscribe_success_does_not_disable(
     connected_client: ESPHomeClient,
     esphome_bluetooth_gatt_services: ESPHomeBluetoothGATTServices,
