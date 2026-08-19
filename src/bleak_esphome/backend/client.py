@@ -8,7 +8,7 @@ import logging
 import sys
 from dataclasses import dataclass, field
 from functools import partial, wraps
-from typing import TYPE_CHECKING, Any, Concatenate, ParamSpec, TypeVar
+from typing import TYPE_CHECKING, Any, Concatenate, ParamSpec, TypeAlias, TypeVar
 
 from aioesphomeapi import (
     ESP_CONNECTION_ERROR_DESCRIPTION,
@@ -43,6 +43,11 @@ if TYPE_CHECKING:
     from .device import ESPHomeBluetoothDevice
     from .scanner import ESPHomeScanner
 
+    # (release, abort) pair returned by ``bluetooth_gatt_start_notify``.
+    _NotifyCancel: TypeAlias = tuple[
+        Callable[[], Coroutine[Any, Any, None]], Callable[[], None]
+    ]
+
     if sys.version_info < (3, 12):
         from typing_extensions import Buffer
     else:
@@ -69,6 +74,21 @@ _LOGGER = logging.getLogger(__name__)
 _ESPHomeClient = TypeVar("_ESPHomeClient", bound="ESPHomeClient")
 _R = TypeVar("_R")
 _P = ParamSpec("_P")
+_E = TypeVar("_E", bound=BaseException)
+
+
+def _with_notes(err: _E, cause: BaseException) -> _E:
+    """
+    Carry any notes on ``cause`` over to the error the caller sees.
+
+    The api errors below are re-raised as bleak errors, so a note attached
+    to the original -- for example ``stop_notify``'s failed-release detail
+    -- would otherwise only be reachable through ``__cause__`` and be
+    absent from the traceback of the error the caller actually catches.
+    """
+    for note in getattr(cause, "__notes__", ()):
+        err.add_note(note)
+    return err
 
 
 def api_error_as_bleak_error(
@@ -84,7 +104,7 @@ def api_error_as_bleak_error(
         try:
             return await func(self, *args, **kwargs)
         except TimeoutAPIError as err:
-            raise TimeoutError(str(err)) from err
+            raise _with_notes(TimeoutError(str(err)), err) from err
         except BluetoothConnectionDroppedError as ex:
             _LOGGER.debug(
                 "%s: BLE device disconnected during %s operation",
@@ -92,7 +112,7 @@ def api_error_as_bleak_error(
                 func.__name__,
             )
             self._async_ble_device_disconnected()
-            raise BleakError(str(ex)) from ex
+            raise _with_notes(BleakError(str(ex)), ex) from ex
         except BluetoothGATTAPIError as ex:
             # If the device disconnects in the middle of an operation
             # be sure to mark it as disconnected so any library using
@@ -109,9 +129,9 @@ def api_error_as_bleak_error(
                     func.__name__,
                 )
                 self._async_ble_device_disconnected()
-            raise BleakError(str(ex)) from ex
+            raise _with_notes(BleakError(str(ex)), ex) from ex
         except APIConnectionError as err:
-            raise BleakError(str(err)) from err
+            raise _with_notes(BleakError(str(err)), err) from err
 
     return _async_wrap_bluetooth_operation
 
@@ -163,9 +183,7 @@ class ESPHomeClient(BaseBleakClient):
         self._pending_release = False
         self._mtu: int | None = None
         self._cancel_connection_state: Callable[[], None] | None = None
-        self._notify_cancels: dict[
-            int, tuple[Callable[[], Coroutine[Any, Any, None]], Callable[[], None]]
-        ] = {}
+        self._notify_cancels: dict[int, _NotifyCancel] = {}
         self._device_info = client_data.device_info
         self._feature_flags = device_info.bluetooth_proxy_feature_flags_compat(
             client_data.api_version
@@ -967,8 +985,10 @@ class ESPHomeClient(BaseBleakClient):
         the descriptor write. While a failed release is retained it also
         blocks ``start_notify`` on that handle, which shares the same
         bookkeeping as its duplicate-subscription guard; the release failure
-        is attached to the raised error as a note so the caller can tell the
-        two apart. A disconnect clears the entry.
+        is attached as a note to the error the caller receives so the two can
+        be told apart. A release that fails because the device disconnected
+        drops the entry instead of retaining it, so a reconnect can subscribe
+        to that handle again.
 
         Args:
         ----
@@ -1032,7 +1052,9 @@ class ESPHomeClient(BaseBleakClient):
                 # note the failure on the error the caller sees: while the
                 # entry is retained it also blocks start_notify on this
                 # handle, which is not something the CCCD error conveys.
-                self._notify_cancels[characteristic.handle] = notify_cancel
+                retained = self._restore_notify_cancel(
+                    characteristic.handle, notify_cancel
+                )
                 _LOGGER.warning(
                     "%s: Failed to release the proxy notify subscription for "
                     "handle %s; the proxy may keep forwarding notifications",
@@ -1048,9 +1070,14 @@ class ESPHomeClient(BaseBleakClient):
                 err.add_note(
                     "Releasing the proxy notify subscription for handle "
                     f"{characteristic.handle} also failed with {release_err!r}; "
-                    "the proxy may keep forwarding notifications and "
-                    "start_notify on this handle stays blocked until a later "
-                    "stop_notify succeeds or the device disconnects."
+                    "the proxy may keep forwarding notifications."
+                    + (
+                        " start_notify on this handle stays blocked until a"
+                        " later stop_notify succeeds or the device"
+                        " disconnects."
+                        if retained
+                        else ""
+                    )
                 )
             raise
         try:
@@ -1058,8 +1085,37 @@ class ESPHomeClient(BaseBleakClient):
         except BaseException:
             # A failing release is retryable, so put the entry back rather
             # than leaving the handle unsubscribed in our bookkeeping only.
-            self._notify_cancels[characteristic.handle] = notify_cancel
+            self._restore_notify_cancel(characteristic.handle, notify_cancel)
             raise
+
+    def _restore_notify_cancel(
+        self,
+        handle: int,
+        notify_cancel: _NotifyCancel,
+    ) -> bool:
+        """
+        Put a popped notify entry back so a failed release stays retryable.
+
+        Nothing is restored once the device has disconnected: the popped
+        entry was invisible to ``_async_disconnected_cleanup``, so putting
+        it back would resurrect state nothing clears again and block
+        ``start_notify`` on that handle for the life of the client. The
+        abort half is run instead, mirroring what the cleanup would have
+        done had the entry still been in the dict. ``setdefault`` keeps a
+        subscription made after the pop from being clobbered.
+
+        Returns
+        -------
+            ``True`` when the entry is now in the dict, which is also when
+            it blocks ``start_notify`` on that handle.
+
+        """
+        if not self._is_connected:
+            _, notify_abort = notify_cancel
+            notify_abort()
+            return False
+        self._notify_cancels.setdefault(handle, notify_cancel)
+        return True
 
     def _raise_if_not_connected(self) -> None:
         """Raise a BleakError if not connected."""

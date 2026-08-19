@@ -632,8 +632,71 @@ async def test_stop_notify_cccd_failure_survives_failing_release(
     stop.assert_awaited_once()
     assert char.handle in client._notify_cancels
     assert "Failed to release the proxy notify subscription" in caplog.text
-    notes = getattr(excinfo.value.__cause__, "__notes__", [])
+    # The note has to be on the error the caller actually catches, not only
+    # on the api error the decorator wrapped.
+    notes = getattr(excinfo.value, "__notes__", [])
     assert any("also failed with" in note for note in notes)
+
+
+@pytest.mark.asyncio
+async def test_stop_notify_drops_entry_when_release_fails_after_disconnect(
+    client_data: ESPHomeClientData,
+    esphome_bluetooth_gatt_services: ESPHomeBluetoothGATTServices,
+) -> None:
+    """A disconnect during the CCCD write must not resurrect the entry."""
+    client = _make_client(client_data)
+    client._is_connected = True
+    with patch.object(
+        client._client,
+        "bluetooth_gatt_get_services",
+        return_value=esphome_bluetooth_gatt_services,
+    ):
+        services = await client._get_services()
+    char = services.get_characteristic("00002a05-0000-1000-8000-00805f9b34fb")
+    assert char is not None
+    stop = AsyncMock(side_effect=RuntimeError("release failed"))
+    abort = Mock()
+    client._notify_cancels[char.handle] = (stop, abort)
+
+    async def _disconnect_and_raise(*args: Any, **kwargs: Any) -> None:
+        client._async_disconnected_cleanup()
+        raise BluetoothGATTAPIError(BluetoothGATTError(address=1, handle=2))
+
+    with (
+        patch.object(
+            client._client,
+            "bluetooth_gatt_write_descriptor",
+            side_effect=_disconnect_and_raise,
+        ),
+        pytest.raises(BleakError),
+    ):
+        await client.stop_notify(char)
+    stop.assert_awaited_once()
+    abort.assert_called_once()
+    assert char.handle not in client._notify_cancels
+
+
+@pytest.mark.asyncio
+async def test_stop_notify_release_failure_keeps_newer_subscription(
+    client_data: ESPHomeClientData,
+) -> None:
+    """A restored entry never clobbers a subscription made after the pop."""
+    client = _make_client(client_data)
+    client._is_connected = True
+    client._feature_flags &= ~BluetoothProxyFeature.REMOTE_CACHING.value
+    newer = (AsyncMock(), Mock())
+
+    async def _resubscribe() -> None:
+        client._notify_cancels[99] = newer
+        raise RuntimeError("release failed")
+
+    char = Mock()
+    char.handle = 99
+    char.uuid = "00002a05-0000-1000-8000-00805f9b34fb"
+    client._notify_cancels[99] = (_resubscribe, Mock())
+    with pytest.raises(RuntimeError):
+        await client.stop_notify(char)
+    assert client._notify_cancels[99] is newer
 
 
 @pytest.mark.asyncio
