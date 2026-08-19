@@ -206,7 +206,7 @@ class ESPHomeClient(BaseBleakClient):
         # Notify the consumer only for a connection connect() handed
         # over; a drop during setup is surfaced by the failing connect,
         # and notifying would also null the callback for the retry.
-        notify = self._is_connected and self._connect_completed
+        notify = self._connect_completed
         self._async_disconnected_cleanup()
         if notify:
             _LOGGER.debug("%s: BLE device disconnected", self._description)
@@ -528,6 +528,11 @@ class ESPHomeClient(BaseBleakClient):
             # No settle on cancels and signals; still release.
             self._abandon_connect_attempt()
             raise
+        if not self._is_connected:
+            # The link dropped during setup but the last step still
+            # returned (cached services); hand over nothing.
+            self._abandon_connect_attempt()
+            raise BleakError(f"{self._description}: Disconnected during connect setup")
         # The connection is now the consumer's; a later drop notifies
         # its disconnected_callback.
         self._connect_completed = True

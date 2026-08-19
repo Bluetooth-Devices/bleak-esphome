@@ -749,7 +749,9 @@ async def test_bleak_client_connect_services_drop_skips_settle(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("failure_shape", ["error_code", "pair", "services", "drop"])
+@pytest.mark.parametrize(
+    "failure_shape", ["error_code", "pair", "services", "drop", "drop_cache_return"]
+)
 async def test_bleak_client_abandoned_attempt_preserves_disconnected_callback(
     bleak_pair: tuple[BleakClient, ESPHomeClient],
     esphome_bluetooth_gatt_services: ESPHomeBluetoothGATTServices,
@@ -764,7 +766,8 @@ async def test_bleak_client_abandoned_attempt_preserves_disconnected_callback(
     connect still has to deliver the real disconnect notification. Pinned
     for every abandonment shape: a connect error after link up, a failed
     pairing, a failed service discovery, and a device initiated drop
-    during discovery.
+    during discovery, whether or not the services still resolve from
+    cache afterwards.
     """
     bleak_client, client = bleak_pair
     disconnected_callback = Mock()
@@ -774,6 +777,12 @@ async def test_bleak_client_abandoned_attempt_preserves_disconnected_callback(
         # Device initiated drop mid discovery, then the op fails.
         client._async_ble_device_disconnected()
         raise BleakError("dropped during discovery")
+
+    async def _drop_then_cached_services(*args: Any, **kwargs: Any) -> Any:
+        # Device initiated drop mid discovery, but the services still
+        # resolve (cache); connect() must not hand over the dead link.
+        client._async_ble_device_disconnected()
+        return Mock()
 
     with (
         patch_connect_rpcs(client) as (mock_connect, _mock_disconnect),
@@ -798,17 +807,13 @@ async def test_bleak_client_abandoned_attempt_preserves_disconnected_callback(
                         ),
                     )
                 )
-            if failure_shape == "services":
+            if side_effect := {
+                "services": _boom_get_services,
+                "drop": _drop_during_services,
+                "drop_cache_return": _drop_then_cached_services,
+            }.get(failure_shape):
                 failure_stack.enter_context(
-                    patch.object(
-                        client, "_get_services", side_effect=_boom_get_services
-                    )
-                )
-            if failure_shape == "drop":
-                failure_stack.enter_context(
-                    patch.object(
-                        client, "_get_services", side_effect=_drop_during_services
-                    )
+                    patch.object(client, "_get_services", side_effect=side_effect)
                 )
             # Attempt 1 fails; the consumer never saw a connected client.
             task, callback = await start_connect(client, mock_connect, pair=pair)

@@ -289,6 +289,7 @@ async def test_esp_disconnected_does_not_refire_callback(
     client._connect_completed = True
     client._async_esp_disconnected()
     callback.assert_called_once()
+    assert client._disconnected_callback is None
 
 
 @pytest.mark.asyncio
