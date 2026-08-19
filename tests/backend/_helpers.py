@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from bleak import BleakClient
 from bleak.backends.device import BLEDevice
@@ -82,7 +82,7 @@ def make_bleak_client(
 
 
 async def start_connect(
-    bleak_client: BleakClient, mock_connect: Any
+    connectable: Any, mock_connect: Any, **connect_kwargs: Any
 ) -> tuple[Any, Any]:
     """
     Start a ``connect()`` attempt and hand back its state callback.
@@ -91,14 +91,43 @@ async def start_connect(
     on ``connected_future``, and extracts the connection-state callback
     from the patched ``bluetooth_device_connect``. Centralizes the
     positional callback extraction so a change to the RPC's signature is
-    a one-place fix.
+    a one-place fix. ``connectable`` is anything with a ``connect``
+    coroutine (the ``BleakClient`` wrapper or the backend directly);
+    extra keyword arguments such as ``pair`` are forwarded to it.
     """
-    task = asyncio.create_task(bleak_client.connect(dangerous_use_bleak_cache=True))
+    connect_kwargs.setdefault("dangerous_use_bleak_cache", True)
+    task = asyncio.create_task(connectable.connect(**connect_kwargs))
     await asyncio.sleep(0)
     await asyncio.sleep(0)
     assert mock_connect.call_args_list, "bluetooth_device_connect was not called"
     callback = mock_connect.call_args_list[-1][0][1]
     return task, callback
+
+
+@contextmanager
+def patch_connect_rpcs(
+    client: ESPHomeClient, *, disconnect_side_effect: Any = None
+) -> Iterator[tuple[Any, Any]]:
+    """
+    Patch the connect and no-wait disconnect RPCs together.
+
+    Yields ``(mock_connect, mock_disconnect)``; the connect RPC returns a
+    plain ``Mock`` subscription handle and the disconnect mock optionally
+    raises ``disconnect_side_effect``.
+    """
+    with (
+        patch.object(
+            client._client,
+            "bluetooth_device_connect",
+            return_value=Mock(),
+        ) as mock_connect,
+        patch.object(
+            client._client,
+            "bluetooth_device_disconnect_no_wait",
+            side_effect=disconnect_side_effect,
+        ) as mock_disconnect,
+    ):
+        yield mock_connect, mock_disconnect
 
 
 @contextmanager

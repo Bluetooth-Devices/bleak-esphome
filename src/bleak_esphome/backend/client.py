@@ -218,6 +218,21 @@ class ESPHomeClient(BaseBleakClient):
             self._disconnected_callback()
             self._disconnected_callback = None
 
+    def _raise_if_spurious_cancellation(self) -> None:
+        """
+        Convert a spurious cancellation into a retryable error.
+
+        If the current task is not actually being cancelled, the
+        ``CancelledError`` came from inside (for example the connect
+        future being cancelled externally); convert it to a
+        ``BleakError`` so bleak_retry_connector's retry logic can handle
+        it instead of aborting the caller.
+        """
+        if is_spurious_cancellation():
+            raise BleakError(
+                f"{self._description}: Connect attempt was cancelled"
+            ) from None
+
     def _retrieve_future_error(self, fut: asyncio.Future[bool]) -> None:
         """Mark a stored error retrieved so asyncio does not warn about it."""
         if fut.done() and not fut.cancelled() and (exc := fut.exception()):
@@ -234,12 +249,10 @@ class ESPHomeClient(BaseBleakClient):
         Sends the disconnect synchronously so cleanup and cancellation
         paths have nothing to await and no uncancellable window; the ESP
         frees the slot when it processes the request and reports the
-        state change through the usual subscriptions. A failed send means
-        a leaked proxy slot and warns; a dead API connection is the
-        exception and logs at debug, since the proxy releases every link
-        it holds once its subscriber is gone. Local state is torn down
-        either way. Returns True when the request was actually sent, so
-        callers can skip settling for a slot that cannot free.
+        state change through the usual subscriptions. Local state is
+        torn down either way; the except clauses below carry the
+        logging policy. Returns True when the request was actually
+        sent.
         """
         sent = False
         try:
@@ -281,10 +294,6 @@ class ESPHomeClient(BaseBleakClient):
         settle for attempts that never held a slot.
         """
         if self._is_connected:
-            # Settle only when the request went out; a failed send (a
-            # dead API connection above all) means ``free`` can never
-            # update over that same connection, so waiting would stall
-            # for the full timeout with scanning paused.
             return self._release_connection_no_wait()
         self._async_disconnected_cleanup()
         return False
@@ -459,15 +468,7 @@ class ESPHomeClient(BaseBleakClient):
                     # its own failure handlers, but abandoning uniformly does
                     # not rely on that; a duplicate release is harmless.
                     self._abandon_connect_attempt()
-                    # If the current task is not actually being cancelled,
-                    # the cancellation came from inside (e.g. the
-                    # connect_future being cancelled externally). Convert
-                    # it to a BleakError so bleak_retry_connector's retry
-                    # logic can handle it instead of aborting the caller.
-                    if is_spurious_cancellation():
-                        raise BleakError(
-                            f"{self._description}: Connect attempt was cancelled"
-                        ) from None
+                    self._raise_if_spurious_cancellation()
                     raise
                 except Exception as ex:
                     if connected_future.done():
@@ -478,7 +479,10 @@ class ESPHomeClient(BaseBleakClient):
                         connected_future.cancel(
                             f"Unhandled exception in connect call: {ex}"
                         )
-                    self._abandon_connect_attempt()
+                    settle_needed = self._abandon_connect_attempt()
+                    raise
+                except BaseException:
+                    settle_needed = self._abandon_connect_attempt()
                     raise
                 try:
                     await connected_future
@@ -490,41 +494,21 @@ class ESPHomeClient(BaseBleakClient):
                     # release the ESP-side connection so the proxy's slot is
                     # not leaked on a connection no client owns.
                     self._abandon_connect_attempt()
-                    # If the current task is not actually being cancelled,
-                    # treat a cancellation of connected_future as a normal
-                    # connection failure so bleak_retry_connector can retry
-                    # rather than letting CancelledError leak to the caller.
-                    if is_spurious_cancellation():
-                        raise BleakError(
-                            f"{self._description}: Connect attempt was cancelled"
-                        ) from None
-                    raise
-                except Exception:
-                    # The future can also fail after the link came up
-                    # (``connected=True`` with an error code); release the
-                    # ESP-side connection so the slot is not leaked, then
-                    # let the slot settle before the retry connector tries
-                    # again. A cancellation arriving during the settle
-                    # propagates naturally and outranks the original error.
-                    # The settle happens outside the ``connecting()``
-                    # pause in the outer handler, and only when a release
-                    # was actually sent; an attempt that never held a
-                    # slot has nothing to settle for.
-                    settle_needed = self._abandon_connect_attempt()
+                    self._raise_if_spurious_cancellation()
                     raise
                 except BaseException:
-                    # A real signal must not be stalled behind a slow proxy,
-                    # so no settle here.
-                    self._abandon_connect_attempt()
+                    # The future can also fail after the link came up
+                    # (``connected=True`` with an error code); release
+                    # the ESP-side connection so the slot is not leaked.
+                    settle_needed = self._abandon_connect_attempt()
                     raise
-        except BaseException:
+        except Exception:
+            # Outside the ``connecting()`` pause on purpose: the release
+            # is already sent, so nothing about the settle needs the
+            # scanner blanked for up to another DISCONNECT_TIMEOUT on a
+            # saturated proxy. Cancellations and signals are not caught
+            # here, so they can never be stalled behind it.
             if settle_needed:
-                # Outside the ``connecting()`` pause on purpose: the
-                # release is already sent, so nothing about the settle
-                # needs the scanner blanked for up to another
-                # DISCONNECT_TIMEOUT on a saturated proxy. Reached only
-                # from the Exception arm; cancellation paths re-raise
-                # with the flag unset and never await here.
                 await self._settle_slot_after_failure("failed connect")
             raise
 
@@ -534,13 +518,6 @@ class ESPHomeClient(BaseBleakClient):
             await self._get_services(
                 dangerous_use_bleak_cache=dangerous_use_bleak_cache
             )
-        except asyncio.CancelledError:
-            # On cancel we must still raise CancelledError to avoid
-            # blocking the cancellation even if the disconnect call
-            # fails, so release the ESP-side connection synchronously
-            # before re-raising.
-            self._abandon_connect_attempt()
-            raise
         except Exception:
             # Best-effort cleanup: release the BLE connection on the ESP
             # side, but never let a disconnect failure mask the original
@@ -549,8 +526,8 @@ class ESPHomeClient(BaseBleakClient):
                 await self._settle_slot_after_failure("failed connect setup")
             raise
         except BaseException:
-            # A real signal must not be stalled behind a slow proxy,
-            # so no settle here; the link is still released.
+            # Cancellations and real signals must not be stalled behind
+            # the settle; the link is still released synchronously.
             self._abandon_connect_attempt()
             raise
 
