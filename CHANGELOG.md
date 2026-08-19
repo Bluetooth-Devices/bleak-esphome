@@ -1,5 +1,13 @@
 # Changelog
 
+## v4.0.0 (2026-08-19)
+
+### Bug fixes
+
+
+- Fail pending slot waiters when the proxy becomes unavailable ([`4a773ee`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/4a773ee848a7814af5b40c46b72ca43cddae517a))
+
+
 ## v3.10.5 (2026-08-19)
 
 ### Bug fixes
