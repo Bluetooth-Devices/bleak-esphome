@@ -2137,7 +2137,9 @@ async def test_reconnect_at_lower_mtu_shrinks_max_write_without_response(
     client._mtu = 517
     client._cache.set_gatt_mtu_cache(client._address_as_int, 517)
     services = await fetch_services(client, esphome_bluetooth_gatt_services)
-    assert client._cache.get_gatt_services_cache(client._address_as_int) is services
+    cached_entry = client._cache.get_gatt_services_cache(client._address_as_int)
+    assert cached_entry is not None
+    assert cached_entry is services
 
     # The next link reports a smaller MTU on a non-cached connect.
     fut: asyncio.Future[bool] = client._loop.create_future()
