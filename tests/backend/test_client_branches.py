@@ -693,10 +693,14 @@ async def test_stop_notify_release_failure_keeps_newer_subscription(
     char = Mock()
     char.handle = 99
     char.uuid = "00002a05-0000-1000-8000-00805f9b34fb"
-    client._notify_cancels[99] = (_resubscribe, Mock())
+    abort = Mock()
+    client._notify_cancels[99] = (_resubscribe, abort)
     with pytest.raises(RuntimeError):
         await client.stop_notify(char)
     assert client._notify_cancels[99] is newer
+    # The popped entry lost the handle, so it is aborted rather than left
+    # dangling with nothing to retry its release.
+    abort.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -1045,3 +1049,65 @@ async def test_del_handles_loop_closed_race(
         side_effect=RuntimeError("loop closed"),
     ):
         client.__del__()  # must not raise
+
+
+@pytest.mark.asyncio
+async def test_stop_notify_retries_cccd_after_a_failed_clear(
+    client_data: ESPHomeClientData,
+    esphome_bluetooth_gatt_services: ESPHomeBluetoothGATTServices,
+) -> None:
+    """A later stop_notify re-attempts a CCCD clear that failed before."""
+    client = _make_client(client_data)
+    client._is_connected = True
+    with patch.object(
+        client._client,
+        "bluetooth_gatt_get_services",
+        return_value=esphome_bluetooth_gatt_services,
+    ):
+        services = await client._get_services()
+    char = services.get_characteristic("00002a05-0000-1000-8000-00805f9b34fb")
+    assert char is not None
+    cccd = char.get_descriptor(CCCD_UUID)
+    assert cccd is not None
+    stop = AsyncMock()
+    client._notify_cancels[char.handle] = (stop, Mock())
+    with (
+        patch.object(
+            client._client,
+            "bluetooth_gatt_write_descriptor",
+            side_effect=BluetoothGATTAPIError(BluetoothGATTError(address=1, handle=2)),
+        ),
+        pytest.raises(BleakError),
+    ):
+        await client.stop_notify(char)
+    assert char.handle not in client._notify_cancels
+    assert char.handle in client._cccd_dirty
+    # The proxy-side subscription is gone, but the peripheral is still
+    # notifying, so the retry must write the CCCD instead of returning.
+    with patch.object(
+        client._client, "bluetooth_gatt_write_descriptor"
+    ) as mock_write_desc:
+        await client.stop_notify(char)
+    mock_write_desc.assert_awaited_once_with(
+        client._address_as_int, cccd.handle, b"\x00\x00", GATT_NOTIFY_TIMEOUT
+    )
+    assert char.handle not in client._cccd_dirty
+    stop.assert_awaited_once()
+    # Once the CCCD is clear the handle is a plain no-op again.
+    with patch.object(
+        client._client, "bluetooth_gatt_write_descriptor"
+    ) as mock_write_desc:
+        await client.stop_notify(char)
+    mock_write_desc.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_disconnect_forgets_the_outstanding_cccd_clear(
+    client_data: ESPHomeClientData,
+) -> None:
+    """A disconnect drops the pending CCCD write with the link."""
+    client = _make_client(client_data)
+    client._is_connected = True
+    client._cccd_dirty.add(99)
+    client._async_disconnected_cleanup()
+    assert not client._cccd_dirty
