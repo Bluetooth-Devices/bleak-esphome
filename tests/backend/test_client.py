@@ -707,17 +707,36 @@ async def test_bleak_client_connect_error_after_link_up_disconnects_esp(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("release_error", "expected_level", "expected_text"),
+    [
+        (
+            RuntimeError("boom"),
+            logging.WARNING,
+            "Failed to release ESP-side connection",
+        ),
+        (
+            APIConnectionError("api gone"),
+            logging.DEBUG,
+            "API connection gone, ESP-side release skipped",
+        ),
+    ],
+)
 async def test_bleak_client_connect_cancel_after_link_up_disconnect_failure_logged(
     bleak_pair: tuple[BleakClient, ESPHomeClient],
     caplog: pytest.LogCaptureFixture,
+    release_error: Exception,
+    expected_level: int,
+    expected_text: str,
 ) -> None:
     """
     Test a failing release does not mask the cancellation.
 
-    If the ESP-side disconnect fails while cleaning up a cancelled
-    connect, the cancellation still propagates to the caller; the failure
-    is a leaked proxy slot, so it must surface as a warning rather than
-    be swallowed silently.
+    If the ESP-side release fails while cleaning up a cancelled connect,
+    the cancellation still propagates to the caller. A generic failure is
+    a leaked proxy slot and warns; a dead API connection is not a leak
+    (the proxy tears its links down once the subscriber is gone) and only
+    logs at debug so operators are not misdirected during a reconnect.
     """
     bleak_client, client = bleak_pair
     with (
@@ -729,9 +748,9 @@ async def test_bleak_client_connect_cancel_after_link_up_disconnect_failure_logg
         patch.object(
             client._client,
             "bluetooth_device_disconnect_no_wait",
-            side_effect=APIConnectionError("boom"),
+            side_effect=release_error,
         ) as mock_disconnect,
-        caplog.at_level(logging.WARNING),
+        caplog.at_level(logging.DEBUG),
     ):
         task, callback = await start_connect(bleak_client, mock_connect)
         callback(True, 23, 0)
@@ -742,70 +761,9 @@ async def test_bleak_client_connect_cancel_after_link_up_disconnect_failure_logg
 
     mock_disconnect.assert_called_once_with(BLE_ADDRESS_AS_INT)
     assert not client.is_connected
-    assert "Failed to release ESP-side connection" in caplog.text
-    assert "boom" in caplog.text
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("services_boom", "expected_error", "expected_log"),
-    [
-        (False, "while connecting", "failed connect"),
-        (True, "services boom", "failed connect setup"),
-    ],
-)
-async def test_bleak_client_connect_failure_logs_settle_timeout(
-    bleak_pair: tuple[BleakClient, ESPHomeClient],
-    caplog: pytest.LogCaptureFixture,
-    services_boom: bool,
-    expected_error: str,
-    expected_log: str,
-) -> None:
-    """
-    Test a slot that never settles after a failed attempt is logged.
-
-    Covers both failure shapes that settle before the retry: a connect
-    error after the link came up and a service discovery failure. The
-    settle timeout must not mask the original error, but it is the
-    direct cause of the next retry's entry gate failing, so it is
-    logged rather than dropped.
-    """
-    bleak_client, client = bleak_pair
-
-    async def _boom_get_services(*args: Any, **kwargs: Any) -> Any:
-        raise BleakError("services boom")
-
-    with contextlib.ExitStack() as stack:
-        mock_connect = stack.enter_context(
-            patch.object(
-                client._client,
-                "bluetooth_device_connect",
-                return_value=Mock(),
-            )
-        )
-        stack.enter_context(
-            patch.object(client._client, "bluetooth_device_disconnect_no_wait")
-        )
-        stack.enter_context(
-            patch.object(
-                client,
-                "_wait_for_free_connection_slot",
-                # First call is the connect entry gate; the second is the
-                # settle after the release, which times out.
-                side_effect=[None, TimeoutError("no slot")],
-            )
-        )
-        if services_boom:
-            stack.enter_context(
-                patch.object(client, "_get_services", side_effect=_boom_get_services)
-            )
-        stack.enter_context(caplog.at_level(logging.DEBUG))
-        task, callback = await start_connect(bleak_client, mock_connect)
-        callback(True, 23, 0 if services_boom else 1)
-        with pytest.raises(BleakError, match=expected_error):
-            await task
-
-    assert f"Slot did not settle after {expected_log}" in caplog.text
+    matching = [record for record in caplog.records if expected_text in record.message]
+    assert len(matching) == 1
+    assert matching[0].levelno == expected_level
 
 
 @pytest.mark.asyncio
@@ -1013,6 +971,110 @@ async def test_bleak_client_connect_outer_base_exception_cleans_up(
     assert not client.is_connected
     mock_cancel_connection_state.assert_called_once_with()
     assert client._cancel_connection_state is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("services_boom", "expected_error", "expected_log"),
+    [
+        (False, "while connecting", "failed connect"),
+        (True, "services boom", "failed connect setup"),
+    ],
+)
+async def test_bleak_client_connect_failure_logs_settle_timeout(
+    bleak_pair: tuple[BleakClient, ESPHomeClient],
+    caplog: pytest.LogCaptureFixture,
+    services_boom: bool,
+    expected_error: str,
+    expected_log: str,
+) -> None:
+    """
+    Test a slot that never settles after a failed attempt is logged.
+
+    Covers both failure shapes that settle before the retry: a connect
+    error after the link came up and a service discovery failure. The
+    settle timeout must not mask the original error, but it is the
+    direct cause of the next retry's entry gate failing, so it is
+    logged rather than dropped.
+    """
+    bleak_client, client = bleak_pair
+
+    async def _boom_get_services(*args: Any, **kwargs: Any) -> Any:
+        raise BleakError("services boom")
+
+    with contextlib.ExitStack() as stack:
+        mock_connect = stack.enter_context(
+            patch.object(
+                client._client,
+                "bluetooth_device_connect",
+                return_value=Mock(),
+            )
+        )
+        stack.enter_context(
+            patch.object(client._client, "bluetooth_device_disconnect_no_wait")
+        )
+        stack.enter_context(
+            patch.object(
+                client,
+                "_wait_for_free_connection_slot",
+                # First call is the connect entry gate; the second is the
+                # settle after the release, which times out.
+                side_effect=[None, TimeoutError("no slot")],
+            )
+        )
+        if services_boom:
+            stack.enter_context(
+                patch.object(client, "_get_services", side_effect=_boom_get_services)
+            )
+        stack.enter_context(caplog.at_level(logging.DEBUG))
+        task, callback = await start_connect(bleak_client, mock_connect)
+        callback(True, 23, 0 if services_boom else 1)
+        with pytest.raises(BleakError, match=expected_error):
+            await task
+
+    assert f"Slot did not settle after {expected_log}" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_bleak_client_connect_get_services_signal_releases_without_settle(
+    bleak_pair: tuple[BleakClient, ESPHomeClient],
+) -> None:
+    """
+    Test a signal during service discovery releases without settling.
+
+    A ``BaseException`` from the post-connect setup must not be stalled
+    behind the slot settle; the link is still released.
+    """
+
+    class _Signal(BaseException):
+        """Stand-in for KeyboardInterrupt that pytest does not intercept."""
+
+    bleak_client, client = bleak_pair
+
+    async def _boom_get_services(*args: Any, **kwargs: Any) -> Any:
+        raise _Signal
+
+    with (
+        patch.object(
+            client._client,
+            "bluetooth_device_connect",
+            return_value=Mock(),
+        ) as mock_connect,
+        patch.object(client, "_get_services", side_effect=_boom_get_services),
+        patch.object(
+            client._client,
+            "bluetooth_device_disconnect_no_wait",
+        ) as mock_disconnect,
+        patch.object(client, "_settle_slot_after_failure") as mock_settle,
+    ):
+        task, callback = await start_connect(bleak_client, mock_connect)
+        callback(True, 23, 0)
+        with pytest.raises(_Signal):
+            await task
+
+    mock_disconnect.assert_called_once_with(BLE_ADDRESS_AS_INT)
+    mock_settle.assert_not_awaited()
+    assert not client.is_connected
 
 
 @pytest.mark.asyncio

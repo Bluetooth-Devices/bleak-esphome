@@ -240,6 +240,14 @@ class ESPHomeClient(BaseBleakClient):
         """
         try:
             self._client.bluetooth_device_disconnect_no_wait(self._address_as_int)
+        except APIConnectionError as exc:
+            # The proxy tears down every BLE link it holds once its API
+            # subscriber is gone, so nothing is leaked here.
+            _LOGGER.debug(
+                "%s: API connection gone, ESP-side release skipped: %s",
+                self._description,
+                exc,
+            )
         except Exception as exc:  # pylint: disable=broad-except
             _LOGGER.warning(
                 "%s: Failed to release ESP-side connection, the proxy slot "
@@ -411,7 +419,10 @@ class ESPHomeClient(BaseBleakClient):
                     # Make the abandoned attempt terminal so a late
                     # connection-state callback cannot resurrect state.
                     connected_future.cancel()
-                self._async_disconnected_cleanup()
+                # aioesphomeapi already told the ESP to drop the link in
+                # its own failure handlers, but abandoning uniformly does
+                # not rely on that; a duplicate release is harmless.
+                self._abandon_connect_attempt()
                 # If the current task is not actually being cancelled,
                 # the cancellation came from inside (e.g. the
                 # connect_future being cancelled externally). Convert
@@ -431,7 +442,7 @@ class ESPHomeClient(BaseBleakClient):
                     connected_future.cancel(
                         f"Unhandled exception in connect call: {ex}"
                     )
-                self._async_disconnected_cleanup()
+                self._abandon_connect_attempt()
                 raise
             try:
                 await connected_future
@@ -460,6 +471,10 @@ class ESPHomeClient(BaseBleakClient):
                 # again. A cancellation arriving during the settle
                 # propagates naturally and outranks the original error.
                 self._abandon_connect_attempt()
+                # Deliberately inside the ``connecting()`` pause: the
+                # settle concludes this attempt before the scanner is
+                # considered scanning again, and it short-circuits when
+                # a slot is already free.
                 await self._settle_slot_after_failure("failed connect")
                 raise
             except BaseException:
@@ -487,6 +502,11 @@ class ESPHomeClient(BaseBleakClient):
             # connect error, then let the slot settle before the retry.
             self._release_connection_no_wait()
             await self._settle_slot_after_failure("failed connect setup")
+            raise
+        except BaseException:
+            # A real signal must not be stalled behind a slow proxy,
+            # so no settle here; the link is still released.
+            self._release_connection_no_wait()
             raise
 
     @api_error_as_bleak_error
