@@ -1,5 +1,7 @@
 import asyncio
+import contextlib
 import inspect
+import logging
 from typing import Any
 from unittest.mock import AsyncMock, Mock, patch
 from uuid import UUID
@@ -18,6 +20,7 @@ from bleak.exc import BleakError
 from habluetooth import BaseHaRemoteScanner, HaBluetoothConnector
 
 from bleak_esphome.backend.client import (
+    CONNECT_FREE_SLOT_TIMEOUT,
     GATT_HEADER_SIZE,
     ESPHomeClient,
     ESPHomeClientData,
@@ -29,13 +32,39 @@ from ._helpers import (
     ESP_NAME,
     fetch_services,
     make_bleak_client,
+    patch_connect_rpcs,
     patch_get_services,
+    start_connect,
 )
 
 PRIMARY_CHAR_UUID = "090b7847-e12b-09a8-b04b-8e0922a9abab"
 INDICATE_CHAR_UUID = "00002a05-0000-1000-8000-00805f9b34fb"
 CCCD_UUID = "00002902-0000-1000-8000-00805f9b34fb"
 BLE_ADDRESS_AS_INT = 225106397622015
+
+
+class _Signal(BaseException):
+    """Stand-in for KeyboardInterrupt that pytest does not intercept."""
+
+
+async def _boom_get_services(*args: Any, **kwargs: Any) -> Any:
+    """Fail service discovery with a retryable error."""
+    raise BleakError("services boom")
+
+
+def _capture_created_futures(
+    client: ESPHomeClient,
+) -> tuple[list["asyncio.Future[bool]"], Any]:
+    """Return a capture list and a create_future replacement to patch in."""
+    captured: list[asyncio.Future[bool]] = []
+    original_create_future = client._loop.create_future
+
+    def capturing_create_future() -> asyncio.Future[bool]:
+        fut = original_create_future()
+        captured.append(fut)
+        return fut
+
+    return captured, capturing_create_future
 
 
 def test_api_error_decorated_methods_preserve_metadata() -> None:
@@ -340,7 +369,9 @@ async def test_bleak_client_connect(
     ) as mock_disconnect:
         await client.disconnect()
 
-    mock_disconnect.assert_called_once()
+    # The public path awaits the confirmation with aioesphomeapi's
+    # default timeout; cleanup paths use the synchronous no-wait helper.
+    mock_disconnect.assert_called_once_with(BLE_ADDRESS_AS_INT)
 
 
 @pytest.mark.asyncio
@@ -403,13 +434,7 @@ async def test_bleak_client_connect_connected_future_cancelled_raises_bleak_erro
     letting CancelledError propagate to the caller.
     """
     bleak_client, client = bleak_pair
-    original_create_future = client._loop.create_future
-    captured: list[asyncio.Future[bool]] = []
-
-    def capturing_create_future() -> asyncio.Future[bool]:
-        fut = original_create_future()
-        captured.append(fut)
-        return fut
+    captured, capturing_create_future = _capture_created_futures(client)
 
     mock_cancel_connection_state = Mock()
     with (
@@ -508,23 +533,478 @@ async def test_bleak_client_connect_real_task_cancel_propagates_outer(
     """
     bleak_client, client = bleak_pair
     mock_cancel_connection_state = Mock()
-    with patch.object(
-        client._client,
-        "bluetooth_device_connect",
-        return_value=mock_cancel_connection_state,
-    ) as mock_connect:
-        task = asyncio.create_task(bleak_client.connect(dangerous_use_bleak_cache=True))
-        await asyncio.sleep(0)
-        await asyncio.sleep(0)
-        mock_connect.assert_called_once()
+    with (
+        patch.object(
+            client._client,
+            "bluetooth_device_connect",
+            return_value=mock_cancel_connection_state,
+        ) as mock_connect,
+        patch.object(
+            client._client,
+            "bluetooth_device_disconnect_no_wait",
+        ) as mock_disconnect,
+    ):
+        task, callback = await start_connect(bleak_client, mock_connect)
         assert task.cancel() is True
         with pytest.raises(asyncio.CancelledError):
             await task
         assert task.cancelled()
 
+        assert not client.is_connected
+        mock_cancel_connection_state.assert_called_once_with()
+        assert client._cancel_connection_state is None
+
+        # A late ``connected=True`` for the abandoned attempt must not
+        # resurrect state and must release the link the ESP just
+        # established.
+        callback(True, 23, 0)
+        assert not client.is_connected
+        assert client._async_esp_disconnected not in client._disconnect_callbacks
+
+    mock_disconnect.assert_called_once_with(BLE_ADDRESS_AS_INT)
+
+
+@pytest.mark.asyncio
+async def test_bleak_client_connect_cancel_racing_link_up_releases(
+    bleak_pair: tuple[BleakClient, ESPHomeClient],
+) -> None:
+    """
+    Test a link up racing a real cancel is released by the abandonment.
+
+    ``task.cancel()`` cancels ``connected_future`` synchronously; if the
+    ESP's ``connected=True`` then arrives before the task resumes, the
+    attempt's subscription is still installed, so the callback defers to
+    the unwinding attempt's abandonment, which must release the link
+    rather than treating the attempt as never having connected.
+    """
+    bleak_client, client = bleak_pair
+    with patch_connect_rpcs(client) as (mock_connect, mock_disconnect):
+        task, callback = await start_connect(bleak_client, mock_connect)
+        assert task.cancel() is True
+        # The future is already cancelled; the link comes up before the
+        # task resumes.
+        callback(True, 23, 0)
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert task.cancelled()
+    assert not client.is_connected
+    assert not client._pending_release
+    mock_disconnect.assert_called_once_with(BLE_ADDRESS_AS_INT)
+
+
+@pytest.mark.asyncio
+async def test_bleak_client_connect_cancel_racing_link_up_then_drop(
+    bleak_pair: tuple[BleakClient, ESPHomeClient],
+) -> None:
+    """
+    Test a deferred link up followed by a drop stays silent to the consumer.
+
+    The abandoned attempt never handed the connection to the caller, so
+    a ``connected=False`` racing in before the task resumes must not
+    fire (or null) the consumer's disconnected_callback, and the
+    abandonment has nothing left to release because the ESP already
+    dropped the link.
+    """
+    bleak_client, client = bleak_pair
+    disconnected_callback = Mock()
+    client._disconnected_callback = disconnected_callback
+    with patch_connect_rpcs(client) as (mock_connect, mock_disconnect):
+        task, callback = await start_connect(bleak_client, mock_connect)
+        assert task.cancel() is True
+        callback(True, 23, 0)
+        callback(False, 23, 0)
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert task.cancelled()
+    assert not client.is_connected
+    assert not client._pending_release
+    disconnected_callback.assert_not_called()
+    assert client._disconnected_callback is disconnected_callback
+    mock_disconnect.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_bleak_client_connect_settle_runs_with_scanning_resumed(
+    bleak_pair: tuple[BleakClient, ESPHomeClient],
+) -> None:
+    """
+    Test the settle runs outside the scanner's connecting pause.
+
+    The release is already sent by then, so a saturated proxy must not
+    have its scanner blanked for up to the settle timeout as well.
+    """
+    bleak_client, client = bleak_pair
+    scanning_during_settle: list[bool] = []
+
+    async def _record_scanning(context: str) -> None:
+        scanning_during_settle.append(client._scanner.scanning)
+
+    with (
+        patch_connect_rpcs(client) as (mock_connect, _mock_disconnect),
+        patch.object(
+            client, "_settle_slot_after_failure", side_effect=_record_scanning
+        ),
+    ):
+        task, callback = await start_connect(bleak_client, mock_connect)
+        callback(True, 23, 1)
+        with pytest.raises(BleakError, match="while connecting"):
+            await task
+
+    assert scanning_during_settle == [True]
+
+
+@pytest.mark.asyncio
+async def test_bleak_client_connect_failed_release_skips_settle(
+    bleak_pair: tuple[BleakClient, ESPHomeClient],
+) -> None:
+    """
+    Test a failed release send skips the settle.
+
+    If the disconnect request never went out (a dead API connection above
+    all), the free count can never update over that same connection;
+    settling would stall the full timeout with scanning paused.
+    """
+    bleak_client, client = bleak_pair
+    with (
+        patch_connect_rpcs(
+            client, disconnect_side_effect=APIConnectionError("api gone")
+        ) as (mock_connect, _mock_disconnect),
+        patch.object(client, "_settle_slot_after_failure") as mock_settle,
+    ):
+        task, callback = await start_connect(bleak_client, mock_connect)
+        callback(True, 23, 1)
+        with pytest.raises(BleakError, match="while connecting"):
+            await task
+
+    mock_settle.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_bleak_client_connect_settle_defect_logged_as_warning(
+    bleak_pair: tuple[BleakClient, ESPHomeClient],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """
+    Test an unexpected settle error surfaces as a warning.
+
+    A TimeoutError is the expected slow proxy shape and stays at debug;
+    anything else is a defect in the wait path and must not hide there.
+    """
+    bleak_client, client = bleak_pair
+    with (
+        patch_connect_rpcs(client) as (mock_connect, _mock_disconnect),
+        patch.object(
+            client,
+            "_wait_for_free_connection_slot",
+            side_effect=[None, RuntimeError("wait path defect")],
+        ),
+        caplog.at_level(logging.WARNING),
+    ):
+        task, callback = await start_connect(bleak_client, mock_connect)
+        callback(True, 23, 1)
+        with pytest.raises(BleakError, match="while connecting"):
+            await task
+
+    assert "Unexpected error while waiting for the slot to settle" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_bleak_client_connect_services_drop_skips_settle(
+    bleak_pair: tuple[BleakClient, ESPHomeClient],
+) -> None:
+    """
+    Test a link dropped during discovery releases nothing and skips settle.
+
+    When the device disconnects mid ``_get_services`` the local state is
+    already torn down; the attempt no longer holds a slot, so there is
+    nothing to release and nothing to settle for.
+    """
+    bleak_client, client = bleak_pair
+
+    async def _drop_then_boom(*args: Any, **kwargs: Any) -> Any:
+        client._async_ble_device_disconnected()
+        raise BleakError("dropped during discovery")
+
+    with (
+        patch.object(
+            client._client,
+            "bluetooth_device_connect",
+            return_value=Mock(),
+        ) as mock_connect,
+        patch.object(client, "_get_services", side_effect=_drop_then_boom),
+        patch.object(
+            client._client,
+            "bluetooth_device_disconnect_no_wait",
+        ) as mock_disconnect,
+        patch.object(client, "_settle_slot_after_failure") as mock_settle,
+    ):
+        task, callback = await start_connect(bleak_client, mock_connect)
+        callback(True, 23, 0)
+        with pytest.raises(BleakError, match="dropped during discovery"):
+            await task
+
+    mock_disconnect.assert_not_called()
+    mock_settle.assert_not_awaited()
+    assert not client.is_connected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure_shape", ["error_code", "pair", "services"])
+async def test_bleak_client_abandoned_attempt_preserves_disconnected_callback(
+    bleak_pair: tuple[BleakClient, ESPHomeClient],
+    esphome_bluetooth_gatt_services: ESPHomeBluetoothGATTServices,
+    failure_shape: str,
+) -> None:
+    """
+    Test abandonment is silent to the consumer and the callback survives.
+
+    An abandoned attempt never handed the consumer a connected client, so
+    it must not fire ``disconnected_callback`` and must not null it; the
+    retry connector reuses one client instance, and a later successful
+    connect still has to deliver the real disconnect notification. Pinned
+    for every abandonment shape: a connect error after link up, a failed
+    pairing, and a failed service discovery.
+    """
+    bleak_client, client = bleak_pair
+    disconnected_callback = Mock()
+    client._disconnected_callback = disconnected_callback
+
+    with (
+        patch_connect_rpcs(client) as (mock_connect, _mock_disconnect),
+        patch.object(
+            client._client,
+            "bluetooth_gatt_get_services",
+            return_value=esphome_bluetooth_gatt_services,
+        ),
+    ):
+        # The failure injections live in their own scope so attempt 2
+        # runs without them.
+        with contextlib.ExitStack() as failure_stack:
+            pair = False
+            if failure_shape == "pair":
+                pair = True
+                failure_stack.enter_context(
+                    patch.object(
+                        client._client,
+                        "bluetooth_device_pair",
+                        return_value=BluetoothDevicePairing(
+                            address=client._address_as_int, paired=False, error=1
+                        ),
+                    )
+                )
+            if failure_shape == "services":
+                failure_stack.enter_context(
+                    patch.object(
+                        client, "_get_services", side_effect=_boom_get_services
+                    )
+                )
+            # Attempt 1 fails; the consumer never saw a connected client.
+            task, callback = await start_connect(client, mock_connect, pair=pair)
+            callback(True, 23, 1 if failure_shape == "error_code" else 0)
+            with pytest.raises(BleakError):
+                await task
+            disconnected_callback.assert_not_called()
+            assert client._disconnected_callback is disconnected_callback
+
+        # Attempt 2 succeeds on the same instance.
+        task, callback = await start_connect(bleak_client, mock_connect)
+        callback(True, 23, 0)
+        await task
+        assert client.is_connected
+
+        # The real disconnect still notifies the consumer exactly once.
+        callback(False, 23, 0)
+        disconnected_callback.assert_called_once_with()
+
+
+@pytest.mark.asyncio
+async def test_bleak_client_connect_error_without_link_cleans_up_locally(
+    bleak_pair: tuple[BleakClient, ESPHomeClient],
+) -> None:
+    """
+    Test a connect error with no link up skips the release.
+
+    A ``connected=False`` error resolution means the ESP holds nothing;
+    only the local cleanup runs, no disconnect is sent, and the settle
+    is skipped since the attempt never held a slot.
+    """
+    bleak_client, client = bleak_pair
+    with patch_connect_rpcs(client) as (mock_connect, mock_disconnect):
+        task, callback = await start_connect(bleak_client, mock_connect)
+        callback(False, 23, 1)
+        with pytest.raises(BleakError, match="while connecting"):
+            await task
+
+    mock_disconnect.assert_not_called()
+    assert not client.is_connected
+    assert client._cancel_connection_state is None
+
+
+@pytest.mark.asyncio
+async def test_bleak_client_connect_base_exception_releases_without_settle(
+    bleak_pair: tuple[BleakClient, ESPHomeClient],
+) -> None:
+    """
+    Test a BaseException from the wait releases without settling.
+
+    A real signal (a ``BaseException`` such as ``KeyboardInterrupt``
+    delivered at the await) must not be stalled behind the slot settle;
+    the link is still released so the proxy slot is not leaked.
+    """
+    bleak_client, client = bleak_pair
+    captured, capturing_create_future = _capture_created_futures(client)
+
+    with (
+        patch.object(
+            client._client,
+            "bluetooth_device_connect",
+            return_value=Mock(),
+        ) as mock_connect,
+        patch.object(
+            client._client,
+            "bluetooth_device_disconnect_no_wait",
+        ) as mock_disconnect,
+        patch.object(client._loop, "create_future", capturing_create_future),
+        patch.object(client, "_wait_for_free_connection_slot") as mock_settle,
+    ):
+        task, _callback = await start_connect(bleak_client, mock_connect)
+        # Simulate the link coming up while a signal lands at the await.
+        client._is_connected = True
+        captured[0].set_exception(_Signal())
+        with pytest.raises(_Signal):
+            await task
+
+    mock_disconnect.assert_called_once_with(BLE_ADDRESS_AS_INT)
+    assert not client.is_connected
+    # No settle on the signal path; only the entry gate call happened.
+    assert mock_settle.await_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error", [0, 1])
+async def test_bleak_client_connect_cancel_after_link_up_disconnects_esp(
+    bleak_pair: tuple[BleakClient, ESPHomeClient],
+    error: int,
+) -> None:
+    """
+    Test cancellation delivered after the link already came up.
+
+    If the awaiting task is cancelled after the connection-state callback
+    reported ``connected=True`` (asyncio still delivers ``CancelledError``
+    at the ``await`` even though the future holds a result), the ESP side
+    holds a live connection that no client owns. ``connect()`` must release
+    it with the synchronous no-wait disconnect so the proxy's slot is not
+    leaked, clean up local state, and still propagate the cancellation.
+    The ``error=1`` case additionally pins that a stored future error is
+    retrieved rather than left to warn at garbage collection.
+    """
+    bleak_client, client = bleak_pair
+    mock_cancel_connection_state = Mock()
+    with (
+        patch.object(
+            client._client,
+            "bluetooth_device_connect",
+            return_value=mock_cancel_connection_state,
+        ) as mock_connect,
+        patch.object(
+            client._client,
+            "bluetooth_device_disconnect_no_wait",
+        ) as mock_disconnect,
+    ):
+        task, callback = await start_connect(bleak_client, mock_connect)
+        callback(True, 23, error)
+        assert client._is_connected
+        # Cancel before the awaiting task resumes: the future already has a
+        # result, but Task._must_cancel still raises CancelledError at the
+        # await point.
+        assert task.cancel() is True
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert task.cancelled()
+
+    mock_disconnect.assert_called_once_with(BLE_ADDRESS_AS_INT)
     assert not client.is_connected
     mock_cancel_connection_state.assert_called_once_with()
     assert client._cancel_connection_state is None
+    assert client._async_esp_disconnected not in client._disconnect_callbacks
+
+
+@pytest.mark.asyncio
+async def test_bleak_client_connect_error_after_link_up_disconnects_esp(
+    bleak_pair: tuple[BleakClient, ESPHomeClient],
+) -> None:
+    """
+    Test a ``connected=True`` state with an error code releases the link.
+
+    When the connection-state callback reports connected with an error,
+    the future fails while ``_is_connected`` is already set; the ESP side
+    may hold a live connection, so ``connect()`` must release it instead
+    of leaking the proxy's slot.
+    """
+    bleak_client, client = bleak_pair
+    with patch_connect_rpcs(client) as (mock_connect, mock_disconnect):
+        task, callback = await start_connect(bleak_client, mock_connect)
+        callback(True, 23, 1)
+        with pytest.raises(BleakError, match="while connecting"):
+            await task
+
+    mock_disconnect.assert_called_once_with(BLE_ADDRESS_AS_INT)
+    assert not client.is_connected
+    assert client._cancel_connection_state is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("release_error", "expected_level", "expected_text"),
+    [
+        (
+            RuntimeError("boom"),
+            logging.WARNING,
+            "Failed to release ESP-side connection",
+        ),
+        (
+            APIConnectionError("api gone"),
+            logging.DEBUG,
+            "API connection gone, ESP-side release skipped",
+        ),
+    ],
+)
+async def test_bleak_client_connect_cancel_after_link_up_disconnect_failure_logged(
+    bleak_pair: tuple[BleakClient, ESPHomeClient],
+    caplog: pytest.LogCaptureFixture,
+    release_error: Exception,
+    expected_level: int,
+    expected_text: str,
+) -> None:
+    """
+    Test a failing release does not mask the cancellation.
+
+    If the ESP-side release fails while cleaning up a cancelled connect,
+    the cancellation still propagates to the caller. A generic failure is
+    a leaked proxy slot and warns; a dead API connection is not a leak
+    (the proxy tears its links down once the subscriber is gone) and only
+    logs at debug so operators are not misdirected during a reconnect.
+    """
+    bleak_client, client = bleak_pair
+    with (
+        patch_connect_rpcs(client, disconnect_side_effect=release_error) as (
+            mock_connect,
+            mock_disconnect,
+        ),
+        caplog.at_level(logging.DEBUG),
+    ):
+        task, callback = await start_connect(bleak_client, mock_connect)
+        callback(True, 23, 0)
+        assert task.cancel() is True
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert task.cancelled()
+
+    mock_disconnect.assert_called_once_with(BLE_ADDRESS_AS_INT)
+    assert not client.is_connected
+    matching = [record for record in caplog.records if expected_text in record.message]
+    assert len(matching) == 1
+    assert matching[0].levelno == expected_level
 
 
 @pytest.mark.asyncio
@@ -560,12 +1040,12 @@ async def test_bleak_client_connect_raises_after_connected_future_resolved(
     """
     Test ``bluetooth_device_connect`` raising after the callback fires.
 
-    Exercises the ``if connected_future.done():`` branch inside the
+    Exercises the ``if connected_future.done():`` arm inside the
     ``except Exception`` handler around the ``bluetooth_device_connect``
     call. The callback reports a failed connection (which sets a
     ``BleakError`` on ``connected_future``), then ``bluetooth_device_connect``
-    itself raises. The already-resolved future must be drained (with the
-    BleakError suppressed) and the original exception must propagate.
+    itself raises. The stored error is retrieved via
+    ``_retrieve_future_error`` and the original exception propagates.
     """
     bleak_client, client = bleak_pair
 
@@ -591,19 +1071,16 @@ async def test_bleak_client_connect_raises_after_connected_future_resolved(
 
 
 @pytest.mark.asyncio
-async def test_bleak_client_connect_inner_cancelled_drains_resolved_future(
+async def test_bleak_client_connect_inner_cancelled_retrieves_resolved_future_error(
     bleak_pair: tuple[BleakClient, ESPHomeClient],
 ) -> None:
     """
-    Test inner CancelledError after the callback fires drains the future.
+    Test the inner cancel handler retrieves an already-stored error.
 
-    Exercises the ``if connected_future.done():`` branch inside the
-    ``except asyncio.CancelledError`` handler around the
-    ``bluetooth_device_connect`` call. The callback resolves
-    ``connected_future`` with a ``BleakError`` (failed connection), then
-    ``bluetooth_device_connect`` raises ``CancelledError``. The
-    already-resolved future must be drained (BleakError suppressed) before
-    the CancelledError is converted to a ``BleakError`` for the caller.
+    If ``bluetooth_device_connect`` raises ``CancelledError`` after the
+    connection-state callback already resolved ``connected_future`` with
+    an error, ``_retrieve_future_error`` marks it retrieved so asyncio
+    does not warn about it, and the cancellation handling proceeds.
     """
     bleak_client, client = bleak_pair
 
@@ -633,13 +1110,10 @@ async def test_bleak_client_connect_outer_cancel_without_subscription(
     bleak_pair: tuple[BleakClient, ESPHomeClient],
 ) -> None:
     """
-    Test outer cancel skips cleanup when no cancel handle was returned.
+    Test outer cancellation before the subscription handle was stored.
 
-    Exercises the ``if cancel_connection_state is not None`` guard inside
-    the outer ``await connected_future`` cancellation handler. When
-    ``bluetooth_device_connect`` returns ``None`` (no subscription handle),
-    ``self._cancel_connection_state`` stays ``None``; a real cancel of the
-    awaiting task must not attempt to call a missing cancel callable.
+    The cleanup path funnels through ``_async_disconnected_cleanup``,
+    which tolerates ``_cancel_connection_state`` still being ``None``.
     """
     bleak_client, client = bleak_pair
 
@@ -663,22 +1137,122 @@ async def test_bleak_client_connect_outer_cancel_without_subscription(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("resolved", [False, True])
+async def test_bleak_client_connect_rpc_signal_cleans_up(
+    bleak_pair: tuple[BleakClient, ESPHomeClient],
+    caplog: pytest.LogCaptureFixture,
+    resolved: bool,
+) -> None:
+    """
+    Test a signal raised by the connect RPC itself still tears down.
+
+    aioesphomeapi releases the ESP side in its own failure handlers; the
+    local abandonment must still run so the subscription and state do
+    not leak, and a future the state callback already failed must be
+    retrieved so asyncio does not warn at GC time.
+    """
+    bleak_client, client = bleak_pair
+
+    def _maybe_resolve_then_signal(*args: Any, **kwargs: Any) -> Any:
+        if resolved:
+            # Fail the connect future via the state callback first.
+            args[1](False, 23, 1)
+        raise _Signal
+
+    with (
+        patch.object(
+            client._client,
+            "bluetooth_device_connect",
+            side_effect=_maybe_resolve_then_signal,
+        ),
+        caplog.at_level(logging.DEBUG),
+        pytest.raises(_Signal),
+    ):
+        await bleak_client.connect(dangerous_use_bleak_cache=True)
+
+    assert not client.is_connected
+    assert client._cancel_connection_state is None
+    assert ("Discarding stored connect error" in caplog.text) is resolved
+
+
+@pytest.mark.asyncio
+async def test_bleak_client_connect_await_signal_makes_future_terminal(
+    bleak_pair: tuple[BleakClient, ESPHomeClient],
+) -> None:
+    """
+    Test a signal delivered at the future await cancels the future.
+
+    A pending future left behind would let a late ``connected=True``
+    take the success path and resurrect the abandoned client with no
+    release, leaking the proxy slot.
+    """
+    _bleak_client, client = bleak_pair
+    with patch_connect_rpcs(client) as (mock_connect, mock_disconnect):
+        coro = client.connect(pair=False, dangerous_use_bleak_cache=True)
+        # Drive manually so the signal lands at the await itself, with
+        # the future still pending. The RPC already returned, so the
+        # only live suspension is ``await connected_future``.
+        coro.send(None)
+        assert client._cancel_connection_state is not None
+        with pytest.raises(_Signal):
+            coro.throw(_Signal())
+        callback = mock_connect.call_args_list[-1][0][1]
+        callback(True, 23, 0)
+    assert not client.is_connected
+    assert client._async_esp_disconnected not in client._disconnect_callbacks
+    # The late link up is released as an orphan, not resurrected.
+    mock_disconnect.assert_called_once_with(BLE_ADDRESS_AS_INT)
+
+
+@pytest.mark.asyncio
+async def test_bleak_client_connect_await_signal_retrieves_stored_error(
+    bleak_pair: tuple[BleakClient, ESPHomeClient],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A signal racing a stored future error retrieves the error."""
+    _bleak_client, client = bleak_pair
+    with patch_connect_rpcs(client) as (mock_connect, _mock_disconnect):
+        coro = client.connect(pair=False, dangerous_use_bleak_cache=True)
+        coro.send(None)
+        # Pin the suspension point to ``await connected_future``.
+        assert client._cancel_connection_state is not None
+        callback = mock_connect.call_args_list[-1][0][1]
+        # Fail the future, then deliver the signal before the coroutine
+        # resumes.
+        callback(False, 23, 1)
+        with (
+            caplog.at_level(logging.DEBUG),
+            pytest.raises(_Signal),
+        ):
+            coro.throw(_Signal())
+    assert not client.is_connected
+    assert "Discarding stored connect error" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_normalize_connect_future_branches(
+    bleak_pair: tuple[BleakClient, ESPHomeClient],
+) -> None:
+    """The helper cancels a pending future and retrieves a done one."""
+    _bleak_client, client = bleak_pair
+    loop = asyncio.get_running_loop()
+    pending: asyncio.Future[bool] = loop.create_future()
+    client._normalize_connect_future(pending, "boom")
+    assert pending.cancelled()
+    done: asyncio.Future[bool] = loop.create_future()
+    done.set_exception(BleakError("stored"))
+    client._normalize_connect_future(done)
+    # Retrieved, so asyncio does not warn at GC time.
+    assert done.exception() is not None
+
+
+@pytest.mark.asyncio
 async def test_bleak_client_connect_outer_base_exception_cleans_up(
     bleak_pair: tuple[BleakClient, ESPHomeClient],
 ) -> None:
     """A BaseException from the connection future still cleans up."""
-
-    class ConnectBaseException(BaseException):
-        """Sentinel exception that bypasses ``except Exception``."""
-
     bleak_client, client = bleak_pair
-    original_create_future = client._loop.create_future
-    captured: list[asyncio.Future[bool]] = []
-
-    def capturing_create_future() -> asyncio.Future[bool]:
-        fut = original_create_future()
-        captured.append(fut)
-        return fut
+    captured, capturing_create_future = _capture_created_futures(client)
 
     mock_cancel_connection_state = Mock()
     with (
@@ -694,8 +1268,8 @@ async def test_bleak_client_connect_outer_base_exception_cleans_up(
         await asyncio.sleep(0)
         mock_connect.assert_called_once()
         assert len(captured) == 1
-        captured[0].set_exception(ConnectBaseException())
-        with pytest.raises(ConnectBaseException):
+        captured[0].set_exception(_Signal())
+        with pytest.raises(_Signal):
             await task
 
     assert not client.is_connected
@@ -704,41 +1278,112 @@ async def test_bleak_client_connect_outer_base_exception_cleans_up(
 
 
 @pytest.mark.asyncio
-async def test_bleak_client_connect_get_services_cleanup_shielded(
+@pytest.mark.parametrize(
+    ("services_boom", "expected_error", "expected_log"),
+    [
+        (False, "while connecting", "failed connect"),
+        (True, "services boom", "failed connect setup"),
+    ],
+)
+async def test_bleak_client_connect_failure_logs_settle_timeout(
+    bleak_pair: tuple[BleakClient, ESPHomeClient],
+    caplog: pytest.LogCaptureFixture,
+    services_boom: bool,
+    expected_error: str,
+    expected_log: str,
+) -> None:
+    """
+    Test a slot that never settles after a failed attempt is logged.
+
+    Covers both failure shapes that settle before the retry: a connect
+    error after the link came up and a service discovery failure. The
+    settle timeout must not mask the original error, but it is the
+    direct cause of the next retry's entry gate failing, so it is
+    logged rather than dropped.
+    """
+    bleak_client, client = bleak_pair
+
+    with (
+        patch_connect_rpcs(client) as (mock_connect, _mock_disconnect),
+        patch.object(
+            client,
+            "_wait_for_free_connection_slot",
+            # First call is the connect entry gate; the second is the
+            # settle after the release, which times out.
+            side_effect=[None, TimeoutError("no slot")],
+        ) as mock_wait,
+        contextlib.ExitStack() as failure_stack,
+        caplog.at_level(logging.DEBUG),
+    ):
+        if services_boom:
+            failure_stack.enter_context(
+                patch.object(client, "_get_services", side_effect=_boom_get_services)
+            )
+        task, callback = await start_connect(bleak_client, mock_connect)
+        callback(True, 23, 0 if services_boom else 1)
+        with pytest.raises(BleakError, match=expected_error):
+            await task
+
+    assert f"Slot did not settle after {expected_log}" in caplog.text
+    # The settle is capped to the same window as the next attempt's
+    # entry gate; a longer budget only delays surfacing the error.
+    assert mock_wait.call_args_list[-1][0] == (CONNECT_FREE_SLOT_TIMEOUT,)
+
+
+@pytest.mark.asyncio
+async def test_bleak_client_connect_get_services_signal_releases_without_settle(
     bleak_pair: tuple[BleakClient, ESPHomeClient],
 ) -> None:
     """
-    Test the disconnect cleanup is shielded against re-cancellation.
+    Test a signal during service discovery releases without settling.
 
-    When ``_get_services`` raises ``CancelledError`` the connect path
-    runs ``await self._disconnect()`` to release the BLE connection on
-    the ESP side. ``_disconnect`` is itself a cancellation point, so a
-    parent-task cancellation arriving while it is running would
-    interrupt it half-way and leave the device connected on the ESP
-    side. The fix wraps the disconnect in ``asyncio.shield`` and, on
-    re-cancellation, finishes awaiting the disconnect before re-raising
-    so the cleanup completes and the original cancellation still
-    propagates to the caller.
-
-    This test asserts both that ``CancelledError`` propagates and that
-    the slow ``_disconnect`` ran to completion (its
-    ``disconnect_finished`` event is set).
+    A ``BaseException`` from the post-connect setup must not be stalled
+    behind the slot settle; the link is still released.
     """
     bleak_client, client = bleak_pair
-    in_disconnect = asyncio.Event()
-    release_disconnect = asyncio.Event()
-    disconnect_finished = asyncio.Event()
+
+    async def _boom_signal_get_services(*args: Any, **kwargs: Any) -> Any:
+        raise _Signal
+
+    with (
+        patch.object(
+            client._client,
+            "bluetooth_device_connect",
+            return_value=Mock(),
+        ) as mock_connect,
+        patch.object(client, "_get_services", side_effect=_boom_signal_get_services),
+        patch.object(
+            client._client,
+            "bluetooth_device_disconnect_no_wait",
+        ) as mock_disconnect,
+        patch.object(client, "_settle_slot_after_failure") as mock_settle,
+    ):
+        task, callback = await start_connect(bleak_client, mock_connect)
+        callback(True, 23, 0)
+        with pytest.raises(_Signal):
+            await task
+
+    mock_disconnect.assert_called_once_with(BLE_ADDRESS_AS_INT)
+    mock_settle.assert_not_awaited()
+    assert not client.is_connected
+
+
+@pytest.mark.asyncio
+async def test_bleak_client_connect_get_services_cancel_releases_link(
+    bleak_pair: tuple[BleakClient, ESPHomeClient],
+) -> None:
+    """
+    Test a cancel during service discovery releases the ESP-side link.
+
+    The release is synchronous, so the cancellation is neither delayed
+    nor absorbed; it propagates immediately after the release is sent.
+    """
+    bleak_client, client = bleak_pair
     in_get_services = asyncio.Event()
 
     async def _hang_get_services(*args: Any, **kwargs: Any) -> Any:
         in_get_services.set()
         await asyncio.Event().wait()
-
-    async def _slow_disconnect() -> bool:
-        in_disconnect.set()
-        await release_disconnect.wait()
-        disconnect_finished.set()
-        return True
 
     with (
         patch.object(
@@ -747,25 +1392,21 @@ async def test_bleak_client_connect_get_services_cleanup_shielded(
             return_value=Mock(),
         ) as mock_connect,
         patch.object(client, "_get_services", side_effect=_hang_get_services),
-        patch.object(client, "_disconnect", side_effect=_slow_disconnect),
+        patch.object(
+            client._client,
+            "bluetooth_device_disconnect_no_wait",
+        ) as mock_disconnect,
     ):
-        task = asyncio.create_task(bleak_client.connect(dangerous_use_bleak_cache=True))
-        await asyncio.sleep(0)
-        await asyncio.sleep(0)
-        mock_connect.assert_called_once()
-        callback = mock_connect.call_args_list[0][0][1]
+        task, callback = await start_connect(bleak_client, mock_connect)
         callback(True, 23, 0)
         await in_get_services.wait()
         assert task.cancel() is True
-        await in_disconnect.wait()
-        task.cancel()
-        await asyncio.sleep(0)
-        await asyncio.sleep(0)
-        release_disconnect.set()
         with pytest.raises(asyncio.CancelledError):
             await task
         assert task.cancelled()
-        assert disconnect_finished.is_set()
+
+    mock_disconnect.assert_called_once_with(BLE_ADDRESS_AS_INT)
+    assert not client.is_connected
 
 
 @pytest.mark.asyncio
@@ -776,12 +1417,11 @@ async def test_bleak_client_connect_get_services_failure_preserves_error(
     A cleanup-disconnect failure must not mask the original connect error.
 
     When ``_get_services`` raises after the link is up, ``connect`` runs
-    ``await self._disconnect()`` to release the slot on the ESP side. If
-    that cleanup disconnect itself fails, the original ``_get_services``
-    error is the actionable one for the caller and retry logic — the
-    disconnect failure must be suppressed, mirroring the ``CancelledError``
-    cleanup branch. This asserts the surfaced ``BleakError`` carries the
-    original failure, not the disconnect error.
+    the synchronous release to free the slot on the ESP side. If that
+    release itself fails, the original ``_get_services`` error is the
+    actionable one for the caller and retry logic — the release failure
+    is logged, not raised. This asserts the release was attempted and the
+    surfaced ``BleakError`` carries the original failure.
     """
     _bleak_client, client = bleak_pair
 
@@ -797,19 +1437,16 @@ async def test_bleak_client_connect_get_services_failure_preserves_error(
         patch.object(client, "_get_services", side_effect=_boom_get_services),
         patch.object(
             client._client,
-            "bluetooth_device_disconnect",
-            side_effect=APIConnectionError("cleanup disconnect failed"),
-        ),
+            "bluetooth_device_disconnect_no_wait",
+            side_effect=RuntimeError("cleanup disconnect failed"),
+        ) as mock_disconnect,
     ):
-        task = asyncio.create_task(
-            client.connect(pair=False, dangerous_use_bleak_cache=True)
-        )
-        await asyncio.sleep(0)
-        callback = mock_connect.call_args_list[0][0][1]
+        task, callback = await start_connect(client, mock_connect, pair=False)
         callback(True, 23, 0)
         with pytest.raises(BleakError) as exc_info:
             await task
 
+    mock_disconnect.assert_called_once_with(BLE_ADDRESS_AS_INT)
     assert "original get_services failure" in str(exc_info.value)
     assert "cleanup disconnect failed" not in str(exc_info.value)
 
@@ -845,14 +1482,10 @@ async def test_bleak_client_connect_pair_failure_releases_slot(
         ),
         patch.object(
             client._client,
-            "bluetooth_device_disconnect",
+            "bluetooth_device_disconnect_no_wait",
         ) as mock_disconnect,
     ):
-        task = asyncio.create_task(
-            client.connect(pair=True, dangerous_use_bleak_cache=True)
-        )
-        await asyncio.sleep(0)
-        callback = mock_connect.call_args_list[0][0][1]
+        task, callback = await start_connect(client, mock_connect, pair=True)
         callback(True, 23, 0)
         with pytest.raises(BleakError, match="Pairing failed"):
             await task
@@ -868,11 +1501,11 @@ async def test_bleak_client_connect_pair_failure_preserves_error(
     """
     A cleanup-disconnect failure must not mask the original pairing error.
 
-    When pairing fails after the link is up, ``connect`` runs
-    ``await self._disconnect()`` to release the slot. If that cleanup
-    disconnect itself fails, the original pairing error is the actionable
-    one for the caller — the disconnect failure must be suppressed, mirroring
-    the ``_get_services`` cleanup branch.
+    When pairing fails after the link is up, ``connect`` runs the
+    synchronous release to free the slot. If that release itself fails,
+    the original pairing error is the actionable one for the caller — the
+    release failure is logged, not raised, mirroring the ``_get_services``
+    cleanup branch.
     """
     _bleak_client, client = bleak_pair
 
@@ -893,19 +1526,16 @@ async def test_bleak_client_connect_pair_failure_preserves_error(
         ),
         patch.object(
             client._client,
-            "bluetooth_device_disconnect",
-            side_effect=APIConnectionError("cleanup disconnect failed"),
-        ),
+            "bluetooth_device_disconnect_no_wait",
+            side_effect=RuntimeError("cleanup disconnect failed"),
+        ) as mock_disconnect,
     ):
-        task = asyncio.create_task(
-            client.connect(pair=True, dangerous_use_bleak_cache=True)
-        )
-        await asyncio.sleep(0)
-        callback = mock_connect.call_args_list[0][0][1]
+        task, callback = await start_connect(client, mock_connect, pair=True)
         callback(True, 23, 0)
         with pytest.raises(BleakError) as exc_info:
             await task
 
+    mock_disconnect.assert_called_once_with(BLE_ADDRESS_AS_INT)
     assert "Pairing failed" in str(exc_info.value)
     assert "cleanup disconnect failed" not in str(exc_info.value)
 

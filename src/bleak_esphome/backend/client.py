@@ -159,6 +159,7 @@ class ESPHomeClient(BaseBleakClient):
         self._bluetooth_device = client_data.bluetooth_device
         self._client = client_data.client
         self._is_connected = False
+        self._pending_release = False
         self._mtu: int | None = None
         self._cancel_connection_state: Callable[[], None] | None = None
         self._notify_cancels: dict[
@@ -186,6 +187,7 @@ class ESPHomeClient(BaseBleakClient):
         """Clean up on disconnect."""
         self.services = BleakGATTServiceCollection()
         self._is_connected = False
+        self._pending_release = False
         for _, notify_abort in self._notify_cancels.values():
             notify_abort()
         self._notify_cancels.clear()
@@ -219,6 +221,119 @@ class ESPHomeClient(BaseBleakClient):
             self._disconnected_callback()
             self._disconnected_callback = None
 
+    def _raise_if_spurious_cancellation(self) -> None:
+        """
+        Convert a spurious cancellation into a retryable error.
+
+        If the current task is not actually being cancelled, the
+        ``CancelledError`` came from inside (for example the connect
+        future being cancelled externally); convert it to a
+        ``BleakError`` so bleak_retry_connector's retry logic can handle
+        it instead of aborting the caller.
+        """
+        if is_spurious_cancellation():
+            raise BleakError(
+                f"{self._description}: Connect attempt was cancelled"
+            ) from None
+
+    def _normalize_connect_future(
+        self, fut: asyncio.Future[bool], msg: str | None = None
+    ) -> None:
+        """
+        Make an abandoned attempt's future terminal and retrieved.
+
+        A pending future left behind would let a late ``connected=True``
+        take the success path and resurrect the abandoned client.
+        """
+        if fut.done():
+            self._retrieve_future_error(fut)
+        else:
+            fut.cancel(msg)
+
+    def _retrieve_future_error(self, fut: asyncio.Future[bool]) -> None:
+        """Mark a stored error retrieved so asyncio does not warn about it."""
+        if fut.done() and not fut.cancelled() and (exc := fut.exception()):
+            # The caller is raising a more actionable error in its place;
+            # keep the discarded cause recoverable from the logs.
+            _LOGGER.debug(
+                "%s: Discarding stored connect error: %s", self._description, exc
+            )
+
+    def _release_connection_no_wait(self) -> bool:
+        """
+        Release the ESP-side connection without waiting for a response.
+
+        Synchronous so cancellation has no window to land mid release.
+        Local state is torn down either way; returns True when the
+        request was actually sent.
+        """
+        sent = False
+        try:
+            self._client.bluetooth_device_disconnect_no_wait(self._address_as_int)
+            sent = True
+        except APIConnectionError as exc:
+            # The proxy tears down every BLE link it holds once its API
+            # subscriber is gone, so nothing is leaked here.
+            _LOGGER.debug(
+                "%s: API connection gone, ESP-side release skipped: %s",
+                self._description,
+                exc,
+            )
+        except Exception as exc:  # pylint: disable=broad-except
+            _LOGGER.warning(
+                "%s: Failed to release ESP-side connection, the proxy slot "
+                "may stay allocated until it disconnects on its own: %s",
+                self._description,
+                exc,
+                exc_info=True,
+            )
+        # No consumer notification: an abandoned attempt must not fire
+        # (and null) ``disconnected_callback``.
+        self._async_disconnected_cleanup()
+        return sent
+
+    def _abandon_connect_attempt(self) -> bool:
+        """
+        Tear down an abandoned connect attempt.
+
+        Releases the ESP-side link when it came up (or was deferred via
+        ``_pending_release``); otherwise only the local cleanup runs.
+        Returns True when a release was sent.
+        """
+        if self._is_connected or self._pending_release:
+            return self._release_connection_no_wait()
+        self._async_disconnected_cleanup()
+        return False
+
+    async def _settle_slot_after_failure(self, context: str) -> None:
+        """
+        Wait for the freed slot to settle after a failed attempt.
+
+        Capped to the same window as the next attempt's entry gate in
+        ``connect()``; a settle failure is logged, never raised, so it
+        cannot mask the original error. Slot level, not link level: any
+        free slot on the proxy returns immediately.
+        """
+        try:
+            await self._wait_for_free_connection_slot(CONNECT_FREE_SLOT_TIMEOUT)
+        except TimeoutError as settle_error:
+            # The expected shape on a slow or saturated proxy.
+            _LOGGER.debug(
+                "%s: Slot did not settle after %s: %s",
+                self._description,
+                context,
+                settle_error,
+            )
+        except Exception:  # pylint: disable=broad-except
+            # Anything else is a defect in the wait path, not a slow
+            # proxy; it must not hide at debug.
+            _LOGGER.warning(
+                "%s: Unexpected error while waiting for the slot to settle after %s",
+                self._description,
+                context,
+                exc_info=True,
+            )
+
     def _on_bluetooth_connection_state(
         self,
         connected_future: asyncio.Future[bool],
@@ -234,16 +349,38 @@ class ESPHomeClient(BaseBleakClient):
             mtu,
             error,
         )
+        if not connected:
+            self._async_ble_device_disconnected()
+
+        if connected_future.done():
+            # The attempt already finished; a late ``connected=True`` must
+            # not mark an unowned client connected again.
+            if connected and not self._is_connected:
+                if self._cancel_connection_state is None:
+                    # No attempt owns this link; release it so it does not
+                    # pin a proxy slot.
+                    _LOGGER.debug(
+                        "%s: Releasing orphaned ESP-side connection",
+                        self._description,
+                    )
+                    self._release_connection_no_wait()
+                else:
+                    # The owning ``connect()`` is still unwinding; flag the
+                    # release for its abandonment. A dedicated flag so a
+                    # racing ``connected=False`` cannot look consumer owned.
+                    _LOGGER.debug(
+                        "%s: Link came up on an abandoned attempt; "
+                        "deferring the release to its abandonment",
+                        self._description,
+                    )
+                    self._pending_release = True
+            return
+
         if connected:
             self._is_connected = True
             if not self._mtu:
                 self._mtu = mtu
                 self._cache.set_gatt_mtu_cache(self._address_as_int, mtu)
-        else:
-            self._async_ble_device_disconnected()
-
-        if connected_future.done():
-            return
 
         if error:
             try:
@@ -309,77 +446,66 @@ class ESPHomeClient(BaseBleakClient):
         connected_future: asyncio.Future[bool] = self._loop.create_future()
 
         timeout = kwargs.get("timeout", self._timeout)
-        with self._scanner.connecting():
-            try:
-                self._cancel_connection_state = (
-                    await self._client.bluetooth_device_connect(
-                        self._address_as_int,
-                        partial(self._on_bluetooth_connection_state, connected_future),
-                        timeout=timeout,
-                        has_cache=has_cache,
-                        feature_flags=self._feature_flags,
-                        address_type=self._address_type,
+        settle_needed = False
+        try:
+            with self._scanner.connecting():
+                try:
+                    self._cancel_connection_state = (
+                        await self._client.bluetooth_device_connect(
+                            self._address_as_int,
+                            partial(
+                                self._on_bluetooth_connection_state, connected_future
+                            ),
+                            timeout=timeout,
+                            has_cache=has_cache,
+                            feature_flags=self._feature_flags,
+                            address_type=self._address_type,
+                        )
                     )
-                )
-            except asyncio.CancelledError:
-                if connected_future.done():
-                    with contextlib.suppress(BleakError):
-                        # If we are cancelled while connecting,
-                        # we need to make sure we await the future
-                        # to avoid a warning about an un-retrieved
-                        # exception.
-                        await connected_future
-                self._async_disconnected_cleanup()
-                # If the current task is not actually being cancelled,
-                # the cancellation came from inside (e.g. the
-                # connect_future being cancelled externally). Convert
-                # it to a BleakError so bleak_retry_connector's retry
-                # logic can handle it instead of aborting the caller.
-                if is_spurious_cancellation():
-                    raise BleakError(
-                        f"{self._description}: Connect attempt was cancelled"
-                    ) from None
-                raise
-            except Exception as ex:
-                if connected_future.done():
-                    with contextlib.suppress(BleakError):
-                        # If the connect call throws an exception,
-                        # we need to make sure we await the future
-                        # to avoid a warning about an un-retrieved
-                        # exception since we prefer to raise the
-                        # exception from the connect call as it
-                        # will be more descriptive.
-                        await connected_future
-                connected_future.cancel(f"Unhandled exception in connect call: {ex}")
-                self._async_disconnected_cleanup()
-                raise
-            try:
-                await connected_future
-            except asyncio.CancelledError:
-                # Clean up the connection-state subscription that was
-                # registered by bluetooth_device_connect above, since we
-                # are bailing out before the normal disconnect path runs.
-                # Done for both the spurious-cancel (BleakError conversion)
-                # and the real-cancel (bare raise) branches so the
-                # subscription does not leak and trigger the
-                # ``not properly disconnected before destruction`` warning
-                # from ``__del__``.
-                cancel_connection_state = self._cancel_connection_state
-                self._cancel_connection_state = None
-                if cancel_connection_state is not None:
-                    cancel_connection_state()
-                # If the current task is not actually being cancelled,
-                # treat a cancellation of connected_future as a normal
-                # connection failure so bleak_retry_connector can retry
-                # rather than letting CancelledError leak to the caller.
-                if is_spurious_cancellation():
-                    raise BleakError(
-                        f"{self._description}: Connect attempt was cancelled"
-                    ) from None
-                raise
-            except BaseException:
-                self._async_disconnected_cleanup()
-                raise
+                except asyncio.CancelledError:
+                    self._normalize_connect_future(connected_future)
+                    # A duplicate release is harmless. Cancel-shaped exits
+                    # never settle; the next entry gate waits anyway.
+                    self._abandon_connect_attempt()
+                    self._raise_if_spurious_cancellation()
+                    raise
+                except Exception as ex:
+                    # The connect call's error is preferred over a stored
+                    # future error as it is more descriptive.
+                    self._normalize_connect_future(
+                        connected_future,
+                        f"Unhandled exception in connect call: {ex}",
+                    )
+                    settle_needed = self._abandon_connect_attempt()
+                    raise
+                except BaseException:
+                    # True BaseExceptions bypass the outer settle; still
+                    # release the link and normalize the future.
+                    self._normalize_connect_future(connected_future)
+                    self._abandon_connect_attempt()
+                    raise
+                try:
+                    await connected_future
+                except asyncio.CancelledError:
+                    self._normalize_connect_future(connected_future)
+                    # The cancel can land after the link came up; release
+                    # so the slot is not leaked. Cancel-shaped exits never
+                    # settle; the next entry gate waits anyway.
+                    self._abandon_connect_attempt()
+                    self._raise_if_spurious_cancellation()
+                    raise
+                except BaseException:
+                    # The future can fail after the link came up; release
+                    # so the slot is not leaked.
+                    self._normalize_connect_future(connected_future)
+                    settle_needed = self._abandon_connect_attempt()
+                    raise
+        except Exception:
+            # Settle outside the ``connecting()`` pause; cancels and
+            # signals bypass this handler and are never stalled behind it.
+            if settle_needed:
+                await self._settle_slot_after_failure("failed connect")
+            raise
 
         try:
             if pair:
@@ -387,36 +513,15 @@ class ESPHomeClient(BaseBleakClient):
             await self._get_services(
                 dangerous_use_bleak_cache=dangerous_use_bleak_cache
             )
-        except asyncio.CancelledError:
-            # On cancel we must still raise CancelledError to avoid
-            # blocking the cancellation even if the disconnect call
-            # fails. Shield the disconnect so a re-cancellation arriving
-            # while it is running cannot interrupt it half-way and leave
-            # the device connected on the ESP side. If a re-cancel does
-            # arrive, finish awaiting the disconnect before re-raising
-            # so the cancellation still propagates to the caller.
-            disconnect_task = asyncio.create_task(self._disconnect())
-            with contextlib.suppress(Exception):
-                try:
-                    await asyncio.shield(disconnect_task)
-                except asyncio.CancelledError:
-                    # Re-cancelled while the shielded disconnect was in
-                    # flight. Drain disconnect_task best-effort so it
-                    # does not leak before the original CancelledError
-                    # is re-raised below.
-                    with contextlib.suppress(Exception):
-                        await disconnect_task
-            raise
         except Exception:
-            # Best-effort cleanup: release the BLE connection on the ESP
-            # side, but never let a disconnect failure mask the original
-            # connect error. The original exception is the actionable one
-            # for the caller and bleak_retry_connector's retry logic; a
-            # failing cleanup disconnect would otherwise replace it. This
-            # mirrors the CancelledError branch above, which also
-            # suppresses disconnect errors during cleanup.
-            with contextlib.suppress(Exception):
-                await self._disconnect()
+            # Release, then settle before the retry; never mask the
+            # original error.
+            if self._abandon_connect_attempt():
+                await self._settle_slot_after_failure("failed connect setup")
+            raise
+        except BaseException:
+            # No settle on cancels and signals; still release.
+            self._abandon_connect_attempt()
             raise
 
     @api_error_as_bleak_error
@@ -424,13 +529,12 @@ class ESPHomeClient(BaseBleakClient):
         """Disconnect from the peripheral device."""
         await self._disconnect()
 
-    async def _disconnect(self) -> bool:
+    async def _disconnect(self) -> None:
         try:
             await self._client.bluetooth_device_disconnect(self._address_as_int)
         finally:
             self._async_ble_device_disconnected()
         await self._wait_for_free_connection_slot(DISCONNECT_TIMEOUT)
-        return True
 
     async def _wait_for_free_connection_slot(self, timeout: float) -> None:
         """Wait for a free connection slot."""

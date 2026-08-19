@@ -172,6 +172,24 @@ they always match when the list is reported at all. Firmware that predates
 the allocated list reports used slots with an empty list; that mismatch
 skips reconciliation, so it cannot tear down a healthy client.
 
+## `Failed to release ESP-side connection` warnings
+
+When a connect attempt is abandoned after the proxy already reported the
+link up (a cancellation, an error after link up, a failed pairing or
+service discovery), the library sends a fire and forget disconnect so the
+proxy's connection slot is freed. If that send fails for a reason other
+than the API connection being gone, this warning names the device:
+
+```
+<name> [<source>]: <device>: Failed to release ESP-side connection, the proxy slot may stay allocated until it disconnects on its own: ...
+```
+
+The slot recovers when the proxy notices the dead link on its own or when
+its API connection drops, but until then it counts against the proxy's
+limit. A dead API connection is logged at DEBUG instead, because the
+firmware tears down every link it holds once its subscriber is gone —
+nothing leaks in that case.
+
 ## Connect attempts are rejected by `bleak` before the proxy is ever called
 
 The scanner is registered as non-connectable. This happens when the

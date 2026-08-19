@@ -193,6 +193,46 @@ async def test_on_bluetooth_connection_state_idempotent_when_future_done(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("in_flight", [False, True])
+async def test_on_bluetooth_connection_state_late_connect_does_not_resurrect(
+    client_data: ESPHomeClientData,
+    in_flight: bool,
+) -> None:
+    """
+    A ``connected=True`` callback with a completed future is not resurrected.
+
+    The future being done means the connect attempt already finished
+    (failed, timed out, or was cancelled); a late connected notification
+    must not cache the reported MTU or resolve anything. With the
+    subscription already gone the orphaned link is released directly.
+    With the subscription still installed the owning ``connect()`` has
+    not unwound yet, so the callback defers: it flags the release as
+    pending and sends nothing, leaving the release to that attempt's
+    abandonment (covered end to end by
+    ``test_bleak_client_connect_cancel_racing_link_up_releases``). The
+    dedicated flag keeps ``_is_connected`` false so the abandoned
+    attempt can never look consumer-owned.
+    """
+    client = _make_client(client_data)
+    if in_flight:
+        client._cancel_connection_state = Mock()
+    fut: asyncio.Future[bool] = client._loop.create_future()
+    fut.cancel()
+    with patch.object(
+        client._client,
+        "bluetooth_device_disconnect_no_wait",
+    ) as mock_disconnect:
+        client._on_bluetooth_connection_state(fut, True, 23, 0)
+        assert not client._is_connected
+        assert client._pending_release is in_flight
+        assert client._mtu is None
+    if in_flight:
+        mock_disconnect.assert_not_called()
+    else:
+        mock_disconnect.assert_called_once_with(client._address_as_int)
+
+
+@pytest.mark.asyncio
 async def test_on_bluetooth_connection_state_preserves_cached_mtu(
     client_data: ESPHomeClientData,
 ) -> None:
@@ -455,7 +495,7 @@ async def test_stop_notify_missing_handle_is_noop(
 async def test_connect_get_services_failure_disconnects(
     bleak_pair: tuple[BleakClient, ESPHomeClient],
 ) -> None:
-    """A non-cancel failure in ``_get_services`` runs ``_disconnect``."""
+    """A non-cancel failure in ``_get_services`` releases the ESP link."""
     bleak_client, client = bleak_pair
 
     async def _boom(*args: Any, **kwargs: Any) -> Any:
@@ -468,9 +508,7 @@ async def test_connect_get_services_failure_disconnects(
             return_value=Mock(),
         ) as mock_connect,
         patch.object(client, "_get_services", side_effect=_boom),
-        patch.object(
-            client, "_disconnect", new=AsyncMock(return_value=True)
-        ) as mock_disc,
+        patch.object(client, "_release_connection_no_wait", new=Mock()) as mock_disc,
     ):
         task = asyncio.create_task(bleak_client.connect(dangerous_use_bleak_cache=True))
         await asyncio.sleep(0)
@@ -480,7 +518,7 @@ async def test_connect_get_services_failure_disconnects(
         callback(True, 23, 0)
         with pytest.raises(RuntimeError, match="services boom"):
             await task
-    mock_disc.assert_awaited_once()
+    mock_disc.assert_called_once_with()
 
 
 @pytest.fixture
