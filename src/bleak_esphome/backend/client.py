@@ -960,10 +960,12 @@ class ESPHomeClient(BaseBleakClient):
 
         The CCCD write is a round trip to the peripheral, so this method
         can block for up to the proxy GATT timeout and can raise
-        ``BleakError`` where it previously always returned. When it raises,
-        the subscription entry is kept unless the proxy-side release
-        succeeded, so calling ``stop_notify`` again retries the part that
-        failed rather than silently returning.
+        ``BleakError`` where it previously always returned. Only a failed
+        proxy-side release is retryable: the subscription entry is kept so a
+        later ``stop_notify`` retries it. A failed CCCD write is terminal for
+        that subscription -- the proxy-side release still happens and the
+        entry is dropped, so a retry returns silently without re-attempting
+        the descriptor write.
 
         Args:
         ----
@@ -1034,12 +1036,16 @@ class ESPHomeClient(BaseBleakClient):
                     exc_info=True,
                 )
             else:
-                del self._notify_cancels[characteristic.handle]
+                # pop() rather than del: a disconnect can clear the dict
+                # while notify_stop() is awaited, and a bare KeyError here
+                # would replace the actionable CCCD failure.
+                self._notify_cancels.pop(characteristic.handle, None)
             raise
         await notify_stop()
         # Popped only once the release succeeded: a failing release leaves the
-        # entry in place so the caller can retry it.
-        del self._notify_cancels[characteristic.handle]
+        # entry in place so the caller can retry it. pop() rather than del
+        # because a disconnect can clear the dict during the await above.
+        self._notify_cancels.pop(characteristic.handle, None)
 
     def _raise_if_not_connected(self) -> None:
         """Raise a BleakError if not connected."""
