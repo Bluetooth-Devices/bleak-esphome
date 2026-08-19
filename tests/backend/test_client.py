@@ -1126,12 +1126,11 @@ async def test_bleak_client_connect_get_services_failure_preserves_error(
     A cleanup-disconnect failure must not mask the original connect error.
 
     When ``_get_services`` raises after the link is up, ``connect`` runs
-    ``await self._disconnect()`` to release the slot on the ESP side. If
-    that cleanup disconnect itself fails, the original ``_get_services``
-    error is the actionable one for the caller and retry logic — the
-    disconnect failure must be suppressed, mirroring the ``CancelledError``
-    cleanup branch. This asserts the surfaced ``BleakError`` carries the
-    original failure, not the disconnect error.
+    the synchronous release to free the slot on the ESP side. If that
+    release itself fails, the original ``_get_services`` error is the
+    actionable one for the caller and retry logic — the release failure
+    is logged, not raised. This asserts the release was attempted and the
+    surfaced ``BleakError`` carries the original failure.
     """
     _bleak_client, client = bleak_pair
 
@@ -1147,9 +1146,9 @@ async def test_bleak_client_connect_get_services_failure_preserves_error(
         patch.object(client, "_get_services", side_effect=_boom_get_services),
         patch.object(
             client._client,
-            "bluetooth_device_disconnect",
-            side_effect=APIConnectionError("cleanup disconnect failed"),
-        ),
+            "bluetooth_device_disconnect_no_wait",
+            side_effect=RuntimeError("cleanup disconnect failed"),
+        ) as mock_disconnect,
     ):
         task = asyncio.create_task(
             client.connect(pair=False, dangerous_use_bleak_cache=True)
@@ -1160,6 +1159,7 @@ async def test_bleak_client_connect_get_services_failure_preserves_error(
         with pytest.raises(BleakError) as exc_info:
             await task
 
+    mock_disconnect.assert_called_once_with(BLE_ADDRESS_AS_INT)
     assert "original get_services failure" in str(exc_info.value)
     assert "cleanup disconnect failed" not in str(exc_info.value)
 
@@ -1218,11 +1218,11 @@ async def test_bleak_client_connect_pair_failure_preserves_error(
     """
     A cleanup-disconnect failure must not mask the original pairing error.
 
-    When pairing fails after the link is up, ``connect`` runs
-    ``await self._disconnect()`` to release the slot. If that cleanup
-    disconnect itself fails, the original pairing error is the actionable
-    one for the caller — the disconnect failure must be suppressed, mirroring
-    the ``_get_services`` cleanup branch.
+    When pairing fails after the link is up, ``connect`` runs the
+    synchronous release to free the slot. If that release itself fails,
+    the original pairing error is the actionable one for the caller — the
+    release failure is logged, not raised, mirroring the ``_get_services``
+    cleanup branch.
     """
     _bleak_client, client = bleak_pair
 
@@ -1243,9 +1243,9 @@ async def test_bleak_client_connect_pair_failure_preserves_error(
         ),
         patch.object(
             client._client,
-            "bluetooth_device_disconnect",
-            side_effect=APIConnectionError("cleanup disconnect failed"),
-        ),
+            "bluetooth_device_disconnect_no_wait",
+            side_effect=RuntimeError("cleanup disconnect failed"),
+        ) as mock_disconnect,
     ):
         task = asyncio.create_task(
             client.connect(pair=True, dangerous_use_bleak_cache=True)
@@ -1256,6 +1256,7 @@ async def test_bleak_client_connect_pair_failure_preserves_error(
         with pytest.raises(BleakError) as exc_info:
             await task
 
+    mock_disconnect.assert_called_once_with(BLE_ADDRESS_AS_INT)
     assert "Pairing failed" in str(exc_info.value)
     assert "cleanup disconnect failed" not in str(exc_info.value)
 

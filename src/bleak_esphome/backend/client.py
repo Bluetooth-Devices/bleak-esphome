@@ -321,8 +321,11 @@ class ESPHomeClient(BaseBleakClient):
             ):
                 # The ESP did just establish the link though (this is not
                 # a duplicate callback on a live connection, and no newer
-                # attempt is in flight on this instance); release it so
-                # the abandoned attempt does not pin a proxy slot.
+                # attempt on this instance has its connection-state
+                # subscription installed; during the brief RPC window
+                # before that, aioesphomeapi's own failure handlers
+                # release the link). Release it so the abandoned attempt
+                # does not pin a proxy slot.
                 _LOGGER.debug(
                     "%s: Releasing orphaned ESP-side connection",
                     self._description,
@@ -494,19 +497,19 @@ class ESPHomeClient(BaseBleakClient):
             # blocking the cancellation even if the disconnect call
             # fails, so release the ESP-side connection synchronously
             # before re-raising.
-            self._release_connection_no_wait()
+            self._abandon_connect_attempt()
             raise
         except Exception:
             # Best-effort cleanup: release the BLE connection on the ESP
             # side, but never let a disconnect failure mask the original
             # connect error, then let the slot settle before the retry.
-            self._release_connection_no_wait()
+            self._abandon_connect_attempt()
             await self._settle_slot_after_failure("failed connect setup")
             raise
         except BaseException:
             # A real signal must not be stalled behind a slow proxy,
             # so no settle here; the link is still released.
-            self._release_connection_no_wait()
+            self._abandon_connect_attempt()
             raise
 
     @api_error_as_bleak_error
