@@ -91,45 +91,33 @@ class ESPHomeBluetoothDevice:
         """
         Mark the proxy unavailable and fail pending slot waiters.
 
-        A caller parked in ``wait_for_ble_connections_free`` would
-        otherwise sit out its full timeout on a proxy already known to be
-        gone; failing fast lets it retry against another proxy. The latch
-        clears when the proxy reports slot state again via
-        ``async_update_ble_connection_limits``; ``available`` is not
-        restored by that, so a caller reusing this device must set it
-        back to ``True`` on reconnect, which also disarms the fail fast
-        immediately; the free count stays zero until the proxy's first
-        slot report, so the new session never trusts the dead session's
-        count. This method never raises, so teardown paths can call it
-        without guards.
+        Failing fast lets a parked waiter retry against another proxy
+        instead of sitting out its full timeout. The latch clears on the
+        next slot report; ``available`` is not restored by that, so a
+        reusing caller must set it back to ``True`` on reconnect, which
+        disarms the fail fast immediately. The free count stays zero
+        until the first slot report. This method never raises, so
+        teardown paths can call it without guards.
         """
         self.available = False
-        # Distinct from ``available``, which defaults to False before the
-        # first connect; only an explicit unavailability marks the proxy
-        # dead for the wait entry guard below.
+        # Distinct from ``available``: only an explicit unavailability
+        # arms the wait entry guard.
         self._unavailable = True
-        # The dead session's allocated list must not survive into a
-        # reused device; stale addresses feeding scanner.get_allocations
-        # are the cross proxy duplicate symptom this work exists to kill.
-        # ``free`` is zeroed with it: a proxy whose API connection is
-        # gone provably has no usable slots, and a reusing caller that
-        # restores ``available`` must not have connects gated (or slot
-        # waits satisfied) by the dead session's count. ``limit`` keeps
-        # the last reported capacity for allocation consumers.
+        # Clear the dead session's allocated list and free count so a
+        # reused device cannot serve stale state; ``limit`` keeps the
+        # last reported capacity.
         had_state = bool(self.ble_allocations) or bool(self.ble_connections_free)
         self.ble_allocations = []
         self.ble_connections_free = 0
         message = self._unavailable_message()
         for fut in self._ble_connection_free_futures:
-            # Skip futures already done (a cancelled waiter leaves its
-            # future in the set until its finally runs).
+            # A cancelled waiter can leave a done future in the set.
             if not fut.done():
                 fut.set_exception(TimeoutError(message))
         self._ble_connection_free_futures.clear()
         if had_state and (connection_slots_callback := self._connection_slots_callback):
-            # Push the cleared snapshot after the primary contract is
-            # done so a raising subscriber cannot strand the waiters;
-            # guarded because it ends in consumer supplied code.
+            # Push after the waiters are failed; guarded since it ends
+            # in consumer supplied code.
             try:
                 connection_slots_callback(
                     Allocations(
@@ -312,10 +300,8 @@ class ESPHomeBluetoothDevice:
 
         """
         if self._unavailable and not self.available:
-            # Fail fast for waiters arriving after the proxy went away;
-            # they would otherwise park the full timeout on a proxy that
-            # is provably dead. A caller that restored ``available`` on
-            # reconnect disarms this even before the first slot report.
+            # Fail fast instead of parking the full timeout on a proxy
+            # that is provably dead.
             raise TimeoutError(self._unavailable_message())
         if self.ble_connections_free > 0:
             return self.ble_connections_free

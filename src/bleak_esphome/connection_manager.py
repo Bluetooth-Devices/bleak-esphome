@@ -84,11 +84,8 @@ class APIConnectionManager:
     def _teardown_session(self) -> None:
         """Tear down the per-session client state and the scanner."""
         try:
-            # async_set_unavailable never raises by contract; the guard
-            # keeps a future regression from skipping the rest anyway,
-            # and the log keeps the root cause visible if a later step
-            # in the finally chain also raises and replaces it as the
-            # propagating error.
+            # Never raises by contract; guard and log anyway so a later
+            # finally step cannot hide a regression here.
             self._mark_unavailable()
         except Exception:
             _LOGGER.exception("%s: Error marking device unavailable", self._address)
@@ -197,12 +194,9 @@ class APIConnectionManager:
     async def stop(self) -> None:
         """Stop the API connection."""
         try:
-            # Close the connect gate first so no new connection attempts
-            # are offered this proxy while its API connection is being
-            # torn down. async_set_unavailable never raises by contract;
-            # the guard keeps a future regression from skipping the
-            # shutdown chain below, which would leave the reconnect task
-            # running and a pending start() blocked forever.
+            # Close the connect gate first. Never raises by contract;
+            # the guard keeps a regression from skipping the shutdown
+            # chain below.
             self._mark_unavailable()
         except Exception:
             _LOGGER.exception("%s: Error marking device unavailable", self._address)
