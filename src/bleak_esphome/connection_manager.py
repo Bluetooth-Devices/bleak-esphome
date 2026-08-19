@@ -68,9 +68,15 @@ class APIConnectionManager:
                 unregister()
 
     def _mark_unavailable(self) -> None:
-        """Close the connector's can_connect gate for this session's proxy."""
+        """
+        Close the connector's can_connect gate for this session's proxy.
+
+        Also fails any caller parked waiting for a free connection slot,
+        so connect attempts stop burning their timeout on a proxy whose
+        API connection is gone.
+        """
         if self._bluetooth_device is not None:
-            self._bluetooth_device.available = False
+            self._bluetooth_device.async_set_unavailable()
             self._bluetooth_device = None
 
     def _teardown_session(self) -> None:

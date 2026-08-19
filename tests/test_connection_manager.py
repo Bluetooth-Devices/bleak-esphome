@@ -314,7 +314,7 @@ async def test_on_disconnect_marks_bluetooth_device_unavailable(
 
     await conn_manager._on_disconnect(expected_disconnect=False)
 
-    assert bluetooth_device.available is False
+    bluetooth_device.async_set_unavailable.assert_called_once_with()
     assert conn_manager._bluetooth_device is None
 
 
@@ -386,7 +386,7 @@ async def test_stop_tears_down_session_state(
     # ``cast`` re-widens the attribute type mypy narrowed after the direct
     # assignment above so the assert is not flagged unreachable.
     assert cast("set[Callable[[], None]] | None", manager._disconnect_callbacks) is None
-    assert bluetooth_device.available is False
+    bluetooth_device.async_set_unavailable.assert_called_once_with()
     assert manager._bluetooth_device is None
 
 
@@ -447,10 +447,10 @@ async def test_stop_marks_unavailable_first_and_tears_down_on_error(
     manager._bluetooth_device = bluetooth_device
     unregister = Mock()
     manager._unregister_scanner = unregister
-    seen_available: list[bool] = []
+    gate_closed_first: list[bool] = []
 
     async def _stop_and_raise() -> None:
-        seen_available.append(bluetooth_device.available)
+        gate_closed_first.append(bluetooth_device.async_set_unavailable.called)
         raise RuntimeError("stop boom")
 
     mock_reconnect_logic.stop = AsyncMock(side_effect=_stop_and_raise)
@@ -465,7 +465,7 @@ async def test_stop_marks_unavailable_first_and_tears_down_on_error(
     assert "Error stopping reconnect logic" in caplog.text
 
     # The gate was already closed when the first shutdown await ran.
-    assert seen_available == [False]
+    assert gate_closed_first == [True]
     unregister.assert_called_once_with()
     # ``cast`` re-widens the attribute type mypy narrowed after the direct
     # assignment above so the following statements are not unreachable.
@@ -513,10 +513,11 @@ async def test_stop_after_disconnect_does_not_refire_callbacks(
 
     await manager._on_disconnect(expected_disconnect=True)
     callback.assert_called_once_with()
-    assert bluetooth_device.available is False
+    bluetooth_device.async_set_unavailable.assert_called_once_with()
 
     await manager.stop()
     callback.assert_called_once_with()
+    bluetooth_device.async_set_unavailable.assert_called_once_with()
 
 
 @pytest.mark.asyncio
