@@ -965,7 +965,10 @@ class ESPHomeClient(BaseBleakClient):
         later ``stop_notify`` retries it. A failed CCCD write is terminal for
         that subscription -- the proxy-side release still happens and the
         entry is dropped, so a retry returns silently without re-attempting
-        the descriptor write.
+        the descriptor write. While a failed release is retained it also
+        blocks ``start_notify`` on that handle, which shares the same
+        bookkeeping as its duplicate-subscription guard; a disconnect clears
+        the entry.
 
         Args:
         ----
@@ -1013,6 +1016,7 @@ class ESPHomeClient(BaseBleakClient):
                         self._address_as_int,
                         cccd_descriptor.handle,
                         CCCD_DISABLE_BYTES,
+                        GATT_NOTIFY_TIMEOUT,
                     )
         except BaseException:
             # Use BaseException to handle CancelledError as well as Exception.

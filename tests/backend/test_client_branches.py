@@ -38,6 +38,7 @@ from pytest_asyncio import fixture as aio_fixture
 
 from bleak_esphome.backend.client import (
     CCCD_UUID,
+    GATT_NOTIFY_TIMEOUT,
     ESPHomeClient,
     ESPHomeClientData,
 )
@@ -510,7 +511,7 @@ async def test_stop_notify_disables_cccd(
     ) as mock_write_desc:
         await client.stop_notify(char)
     mock_write_desc.assert_awaited_once_with(
-        client._address_as_int, cccd.handle, b"\x00\x00"
+        client._address_as_int, cccd.handle, b"\x00\x00", GATT_NOTIFY_TIMEOUT
     )
     stop.assert_awaited_once()
     assert char.handle not in client._notify_cancels
@@ -682,6 +683,72 @@ async def test_stop_notify_keeps_entry_when_release_fails(
         await client.stop_notify(char)
     stop.assert_awaited_once()
     assert 99 in client._notify_cancels
+
+
+@pytest.mark.asyncio
+async def test_stop_notify_survives_concurrent_cancel_clear(
+    client_data: ESPHomeClientData,
+    esphome_bluetooth_gatt_services: ESPHomeBluetoothGATTServices,
+) -> None:
+    """A disconnect clearing the dict during the CCCD write is not a KeyError."""
+    client = _make_client(client_data)
+    client._is_connected = True
+    with patch.object(
+        client._client,
+        "bluetooth_gatt_get_services",
+        return_value=esphome_bluetooth_gatt_services,
+    ):
+        services = await client._get_services()
+    char = services.get_characteristic("00002a05-0000-1000-8000-00805f9b34fb")
+    assert char is not None
+    stop = AsyncMock()
+    client._notify_cancels[char.handle] = (stop, Mock())
+
+    async def _clear(*args: Any, **kwargs: Any) -> None:
+        client._notify_cancels.clear()
+
+    with patch.object(
+        client._client, "bluetooth_gatt_write_descriptor", side_effect=_clear
+    ):
+        await client.stop_notify(char)
+    stop.assert_awaited_once()
+    assert char.handle not in client._notify_cancels
+
+
+@pytest.mark.asyncio
+async def test_stop_notify_cccd_failure_survives_concurrent_cancel_clear(
+    client_data: ESPHomeClientData,
+    esphome_bluetooth_gatt_services: ESPHomeBluetoothGATTServices,
+) -> None:
+    """The error path pops defensively when a disconnect cleared the dict."""
+    client = _make_client(client_data)
+    client._is_connected = True
+    with patch.object(
+        client._client,
+        "bluetooth_gatt_get_services",
+        return_value=esphome_bluetooth_gatt_services,
+    ):
+        services = await client._get_services()
+    char = services.get_characteristic("00002a05-0000-1000-8000-00805f9b34fb")
+    assert char is not None
+
+    async def _clear_and_raise(*args: Any, **kwargs: Any) -> None:
+        client._notify_cancels.clear()
+        raise BluetoothGATTAPIError(BluetoothGATTError(address=1, handle=2))
+
+    stop = AsyncMock()
+    client._notify_cancels[char.handle] = (stop, Mock())
+    with (
+        patch.object(
+            client._client,
+            "bluetooth_gatt_write_descriptor",
+            side_effect=_clear_and_raise,
+        ),
+        pytest.raises(BleakError),
+    ):
+        await client.stop_notify(char)
+    stop.assert_awaited_once()
+    assert char.handle not in client._notify_cancels
 
 
 @pytest.mark.asyncio
