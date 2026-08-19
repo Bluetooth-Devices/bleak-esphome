@@ -98,7 +98,8 @@ class ESPHomeBluetoothDevice:
         ``async_update_ble_connection_limits``; ``available`` is not
         restored by that, so a caller reusing this device must set it
         back to ``True`` on reconnect, which also disarms the fail fast
-        immediately.
+        immediately. This method never raises, so teardown paths can
+        call it without guards.
         """
         self.available = False
         # Distinct from ``available``, which defaults to False before the
@@ -108,24 +109,12 @@ class ESPHomeBluetoothDevice:
         # The dead session's allocated list must not survive into a
         # reused device; stale addresses feeding scanner.get_allocations
         # are the cross proxy duplicate symptom this work exists to kill.
-        # The free and limit counters stay, zeroing free would turn the
-        # public disconnect() slot wait into an immediate TimeoutError.
+        # The free and limit counters keep the last reported state:
+        # inventing counter values would lie to allocation consumers, and
+        # waits on an unavailable device are governed by the entry guard,
+        # not the free count.
         had_allocations = bool(self.ble_allocations)
         self.ble_allocations = []
-        if had_allocations and (
-            connection_slots_callback := self._connection_slots_callback
-        ):
-            # Push the cleared snapshot so the subscriber's stored copy
-            # (habluetooth's allocations map) does not keep rendering the
-            # dead session's addresses either.
-            connection_slots_callback(
-                Allocations(
-                    self.mac_address,
-                    self.ble_connections_limit,
-                    self.ble_connections_free,
-                    [],
-                )
-            )
         message = self._unavailable_message()
         for fut in self._ble_connection_free_futures:
             # Skip futures already done (a cancelled waiter leaves its
@@ -133,6 +122,27 @@ class ESPHomeBluetoothDevice:
             if not fut.done():
                 fut.set_exception(TimeoutError(message))
         self._ble_connection_free_futures.clear()
+        if had_allocations and (
+            connection_slots_callback := self._connection_slots_callback
+        ):
+            # Push the cleared snapshot after the primary contract is
+            # done so a raising subscriber cannot strand the waiters;
+            # guarded because it ends in consumer supplied code.
+            try:
+                connection_slots_callback(
+                    Allocations(
+                        self.mac_address,
+                        self.ble_connections_limit,
+                        self.ble_connections_free,
+                        [],
+                    )
+                )
+            except Exception:  # pylint: disable=broad-except
+                _LOGGER.exception(
+                    "%s [%s]: Error pushing cleared allocations",
+                    self.name,
+                    self.mac_address,
+                )
 
     def async_update_ble_connection_limits(
         self, free: int, limit: int, allocated: list[int]

@@ -226,6 +226,36 @@ async def test_set_unavailable_fails_pending_slot_waiters(
 
 
 @pytest.mark.asyncio
+async def test_set_unavailable_raising_subscriber_does_not_strand_waiters(
+    bluetooth_device: ESPHomeBluetoothDevice,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """
+    A raising slot subscriber cannot strand the parked waiters.
+
+    The waiters are failed before the cleared snapshot push runs, and
+    the push itself is guarded because it ends in consumer supplied
+    code, so ``async_set_unavailable`` never raises.
+    """
+    bluetooth_device.available = True
+    bluetooth_device.async_update_ble_connection_limits(0, 2, [42, 43])
+    bluetooth_device.async_subscribe_connection_slots(
+        Mock(side_effect=ValueError("subscriber boom"))
+    )
+    task = asyncio.create_task(bluetooth_device.wait_for_ble_connections_free(60.0))
+    await asyncio.sleep(0)
+    assert not task.done()
+
+    with caplog.at_level(logging.ERROR):
+        bluetooth_device.async_set_unavailable()
+
+    with pytest.raises(TimeoutError, match="Proxy became unavailable"):
+        await task
+    assert bluetooth_device.ble_allocations == []
+    assert "Error pushing cleared allocations" in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_wait_after_unavailable_fails_fast(
     bluetooth_device: ESPHomeBluetoothDevice,
 ) -> None:

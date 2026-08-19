@@ -81,30 +81,35 @@ class APIConnectionManager:
 
     def _teardown_session(self) -> None:
         """Tear down the per-session client state and the scanner."""
-        self._mark_unavailable()
         try:
-            if (disconnect_callbacks := self._disconnect_callbacks) is not None:
-                self._disconnect_callbacks = None
-                try:
-                    # Each callback discards itself from the set, so iterate
-                    # a snapshot to avoid "set changed size during
-                    # iteration". A callback ends in consumer supplied code;
-                    # one raising must not skip the other clients.
-                    for callback in list(disconnect_callbacks):
-                        try:
-                            callback()
-                        except Exception:  # pylint: disable=broad-except
-                            _LOGGER.exception(
-                                "%s: Error in disconnect callback", self._address
-                            )
-                finally:
-                    # Clear in place: clients hold a reference to this set
-                    # object.
-                    disconnect_callbacks.clear()
+            # async_set_unavailable never raises by contract; the guard
+            # keeps a future regression from skipping the rest anyway.
+            self._mark_unavailable()
         finally:
-            # The scanner unregister must run regardless; skipping it would
-            # leak the registration in habluetooth's manager.
-            self._teardown_scanner()
+            try:
+                if (disconnect_callbacks := self._disconnect_callbacks) is not None:
+                    self._disconnect_callbacks = None
+                    try:
+                        # Each callback discards itself from the set, so
+                        # iterate a snapshot to avoid "set changed size
+                        # during iteration". A callback ends in consumer
+                        # supplied code; one raising must not skip the
+                        # other clients.
+                        for callback in list(disconnect_callbacks):
+                            try:
+                                callback()
+                            except Exception:  # pylint: disable=broad-except
+                                _LOGGER.exception(
+                                    "%s: Error in disconnect callback", self._address
+                                )
+                    finally:
+                        # Clear in place: clients hold a reference to this
+                        # set object.
+                        disconnect_callbacks.clear()
+            finally:
+                # The scanner unregister must run regardless; skipping it
+                # would leak the registration in habluetooth's manager.
+                self._teardown_scanner()
 
     async def _on_disconnect(self, expected_disconnect: bool) -> None:
         """Handle the disconnection of the API client."""
