@@ -100,6 +100,7 @@ async def run() -> None:
         # before firing callbacks, so the dead proxy is not offered for
         # new connection attempts.
         if client_data is not None:
+            # Never raises, so no guard is needed here.
             client_data.bluetooth_device.async_set_unavailable()
         # Responsibility 4: fire the disconnect callbacks (snapshot the set —
         # each callback removes itself). Guard each one so a single bad
