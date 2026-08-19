@@ -20,6 +20,7 @@ from bleak.exc import BleakError
 from habluetooth import BaseHaRemoteScanner, HaBluetoothConnector
 
 from bleak_esphome.backend.client import (
+    CONNECT_FREE_SLOT_TIMEOUT,
     GATT_HEADER_SIZE,
     ESPHomeClient,
     ESPHomeClientData,
@@ -560,6 +561,33 @@ async def test_bleak_client_connect_real_task_cancel_propagates_outer(
         assert not client.is_connected
         assert client._async_esp_disconnected not in client._disconnect_callbacks
 
+    mock_disconnect.assert_called_once_with(BLE_ADDRESS_AS_INT)
+
+
+@pytest.mark.asyncio
+async def test_bleak_client_connect_cancel_racing_link_up_releases(
+    bleak_pair: tuple[BleakClient, ESPHomeClient],
+) -> None:
+    """
+    Test a link up racing a real cancel is released by the abandonment.
+
+    ``task.cancel()`` cancels ``connected_future`` synchronously; if the
+    ESP's ``connected=True`` then arrives before the task resumes, the
+    attempt's subscription is still installed, so the callback defers to
+    the unwinding attempt's abandonment, which must release the link
+    rather than treating the attempt as never having connected.
+    """
+    bleak_client, client = bleak_pair
+    with patch_connect_rpcs(client) as (mock_connect, mock_disconnect):
+        task, callback = await start_connect(bleak_client, mock_connect)
+        assert task.cancel() is True
+        # The future is already cancelled; the link comes up before the
+        # task resumes.
+        callback(True, 23, 0)
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert task.cancelled()
+    assert not client.is_connected
     mock_disconnect.assert_called_once_with(BLE_ADDRESS_AS_INT)
 
 
@@ -1167,7 +1195,7 @@ async def test_bleak_client_connect_failure_logs_settle_timeout(
             # First call is the connect entry gate; the second is the
             # settle after the release, which times out.
             side_effect=[None, TimeoutError("no slot")],
-        ),
+        ) as mock_wait,
         contextlib.ExitStack() as failure_stack,
         caplog.at_level(logging.DEBUG),
     ):
@@ -1181,6 +1209,9 @@ async def test_bleak_client_connect_failure_logs_settle_timeout(
             await task
 
     assert f"Slot did not settle after {expected_log}" in caplog.text
+    # The settle is capped to the same window as the next attempt's
+    # entry gate; a longer budget only delays surfacing the error.
+    assert mock_wait.call_args_list[-1][0] == (CONNECT_FREE_SLOT_TIMEOUT,)
 
 
 @pytest.mark.asyncio

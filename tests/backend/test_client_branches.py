@@ -199,15 +199,17 @@ async def test_on_bluetooth_connection_state_late_connect_does_not_resurrect(
     in_flight: bool,
 ) -> None:
     """
-    A ``connected=True`` callback with a completed future is ignored.
+    A ``connected=True`` callback with a completed future is not resurrected.
 
     The future being done means the connect attempt already finished
-    (failed, timed out, or was cancelled) and the owning ``connect()``
-    has bailed; a late connected notification must not flip
-    ``_is_connected`` back on or cache the reported MTU. The orphaned
-    link is released unless a newer attempt is in flight on this
-    instance (marked by a live connection-state subscription), in which
-    case releasing by address would tear that attempt down.
+    (failed, timed out, or was cancelled); a late connected notification
+    must not cache the reported MTU or resolve anything. With the
+    subscription already gone the orphaned link is released directly.
+    With the subscription still installed the owning ``connect()`` has
+    not unwound yet, so the callback defers: it marks the link up and
+    sends nothing, leaving the release to that attempt's abandonment
+    (covered end to end by
+    ``test_bleak_client_connect_cancel_racing_link_up_releases``).
     """
     client = _make_client(client_data)
     if in_flight:
@@ -219,7 +221,7 @@ async def test_on_bluetooth_connection_state_late_connect_does_not_resurrect(
         "bluetooth_device_disconnect_no_wait",
     ) as mock_disconnect:
         client._on_bluetooth_connection_state(fut, True, 23, 0)
-        assert not client.is_connected
+        assert client._is_connected is in_flight
         assert client._mtu is None
     if in_flight:
         mock_disconnect.assert_not_called()
@@ -490,7 +492,7 @@ async def test_stop_notify_missing_handle_is_noop(
 async def test_connect_get_services_failure_disconnects(
     bleak_pair: tuple[BleakClient, ESPHomeClient],
 ) -> None:
-    """A non-cancel failure in ``_get_services`` runs ``_disconnect``."""
+    """A non-cancel failure in ``_get_services`` releases the ESP link."""
     bleak_client, client = bleak_pair
 
     async def _boom(*args: Any, **kwargs: Any) -> Any:

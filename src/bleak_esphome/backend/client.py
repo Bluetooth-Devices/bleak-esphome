@@ -302,14 +302,16 @@ class ESPHomeClient(BaseBleakClient):
         """
         Wait for the freed slot to settle after a failed attempt.
 
-        The retry connector's entry gate only waits
+        The next attempt's entry gate in ``connect()`` only waits
         ``CONNECT_FREE_SLOT_TIMEOUT`` and would raise on a slow proxy
-        otherwise. A settle failure must not mask the original error,
-        but it is the direct cause of that next gate failing, so it is
-        logged rather than dropped.
+        otherwise, so the settle is capped to that same window; waiting
+        longer cannot help a gate that has already given up and only
+        delays surfacing the original error. A settle failure must not
+        mask that error, but it is the direct cause of the next gate
+        failing, so it is logged rather than dropped.
         """
         try:
-            await self._wait_for_free_connection_slot(DISCONNECT_TIMEOUT)
+            await self._wait_for_free_connection_slot(CONNECT_FREE_SLOT_TIMEOUT)
         except TimeoutError as settle_error:
             # The expected shape on a slow or saturated proxy.
             _LOGGER.debug(
@@ -352,23 +354,33 @@ class ESPHomeClient(BaseBleakClient):
             # cleanup may already have run. A late ``connected=True`` must
             # not mark the client connected again: nobody owns it anymore
             # and the state would never be corrected.
-            if (
-                connected
-                and not self._is_connected
-                and self._cancel_connection_state is None
-            ):
-                # The ESP did just establish the link though (this is not
-                # a duplicate callback on a live connection, and no newer
-                # attempt on this instance has its connection-state
-                # subscription installed; during the brief RPC window
-                # before that, aioesphomeapi's own failure handlers
-                # release the link). Release it so the abandoned attempt
-                # does not pin a proxy slot.
-                _LOGGER.debug(
-                    "%s: Releasing orphaned ESP-side connection",
-                    self._description,
-                )
-                self._release_connection_no_wait()
+            if connected and not self._is_connected:
+                if self._cancel_connection_state is None:
+                    # The ESP did just establish the link though (this is
+                    # not a duplicate callback on a live connection, and
+                    # no newer attempt on this instance has its
+                    # connection-state subscription installed; during the
+                    # brief RPC window before that, aioesphomeapi's own
+                    # failure handlers release the link). Release it so
+                    # the abandoned attempt does not pin a proxy slot.
+                    _LOGGER.debug(
+                        "%s: Releasing orphaned ESP-side connection",
+                        self._description,
+                    )
+                    self._release_connection_no_wait()
+                else:
+                    # The subscription that delivered this callback is
+                    # still installed, so the owning ``connect()`` has not
+                    # unwound yet and its abandonment runs next. Mark the
+                    # link up so that abandonment releases it; skipping
+                    # silently here would leak the slot, since the
+                    # abandonment only releases when the link came up.
+                    _LOGGER.debug(
+                        "%s: Link came up on an abandoned attempt; "
+                        "deferring the release to its abandonment",
+                        self._description,
+                    )
+                    self._is_connected = True
             return
 
         if connected:
