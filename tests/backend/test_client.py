@@ -782,24 +782,29 @@ async def test_bleak_client_disconnected_callback_fires_every_cycle(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "failure_shape", ["error_code", "pair", "services", "drop", "drop_cache_return"]
+    ("failure_shape", "drop_notifies"),
+    [
+        ("error_code", False),
+        ("pair", False),
+        ("services", False),
+        ("drop", True),
+        ("drop_cache_return", True),
+    ],
 )
 async def test_bleak_client_abandoned_attempt_preserves_disconnected_callback(
     bleak_pair: tuple[BleakClient, ESPHomeClient],
     esphome_bluetooth_gatt_services: ESPHomeBluetoothGATTServices,
     failure_shape: str,
+    drop_notifies: bool,
 ) -> None:
     """
-    Test abandonment is silent to the consumer and the callback survives.
+    Test the callback survives every failed attempt shape.
 
-    An abandoned attempt never handed the consumer a connected client, so
-    it must not fire ``disconnected_callback`` and must not null it; the
-    retry connector reuses one client instance, and a later successful
-    connect still has to deliver the real disconnect notification. Pinned
-    for every abandonment shape: a connect error after link up, a failed
-    pairing, a failed service discovery, and a device initiated drop
-    during discovery, whether or not the services still resolve from
-    cache afterwards.
+    Library side abandonment (a connect error, a failed pairing, a
+    failed service discovery) is silent; a device initiated drop
+    notifies exactly like the bluez backend. Either way the callback is
+    never cleared, so the retry connector reusing one client instance
+    still delivers the later real disconnect notification.
     """
     bleak_client, client = bleak_pair
     disconnected_callback = Mock()
@@ -852,7 +857,7 @@ async def test_bleak_client_abandoned_attempt_preserves_disconnected_callback(
             callback(True, 23, 1 if failure_shape == "error_code" else 0)
             with pytest.raises(BleakError):
                 await task
-            disconnected_callback.assert_not_called()
+            assert disconnected_callback.call_count == (1 if drop_notifies else 0)
             assert client._disconnected_callback is disconnected_callback
 
         # Attempt 2 succeeds on the same instance.
@@ -861,9 +866,9 @@ async def test_bleak_client_abandoned_attempt_preserves_disconnected_callback(
         await task
         assert client.is_connected
 
-        # The real disconnect still notifies the consumer exactly once.
+        # The real disconnect still notifies the consumer.
         callback(False, 23, 0)
-        disconnected_callback.assert_called_once_with()
+        assert disconnected_callback.call_count == (2 if drop_notifies else 1)
 
 
 @pytest.mark.asyncio

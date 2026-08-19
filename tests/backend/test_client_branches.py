@@ -263,7 +263,6 @@ async def test_esp_disconnected_invokes_bleak_callback(
     """The ESP-side disconnect callback fires the bleak disconnect callback once."""
     client = _make_client(client_data)
     client._is_connected = True
-    client._connect_completed = True
     callback = Mock()
     client._disconnected_callback = callback
     client._async_esp_disconnected()
@@ -279,14 +278,13 @@ async def test_esp_disconnected_does_not_refire_callback(
     """A second ESP disconnect after the callback cleared is a no-op."""
     client = _make_client(client_data)
     client._is_connected = True
-    client._connect_completed = True
     callback = Mock()
     client._disconnected_callback = callback
     client._async_esp_disconnected()
     callback.assert_called_once()
-    # A stale re-entry of the old gate variable must not reopen the
-    # gate; only connect() handing over sets _connect_completed again.
-    client._is_connected = True
+    # A stale second disconnect is silent: cleanup cleared the link
+    # state, so there is no transition to report. A genuine second link
+    # up then down fires again, as in bluez.
     client._async_esp_disconnected()
     callback.assert_called_once()
 

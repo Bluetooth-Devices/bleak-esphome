@@ -150,13 +150,13 @@ RSSI competing for the same peripheral.
 
 ## When does `disconnected_callback` fire?
 
-Once per connection that `connect()` actually handed over: it fires on a
-real disconnect of that connection (device initiated, ESP initiated, or
-requested via `disconnect()`), persists across connect and disconnect
-cycles on a reused client, and never fires for a connect attempt that
-raised. A link that drops while pairing or service discovery is still
-running surfaces as the failing `connect()` instead; if the last setup
-step still resolves from cache after such a drop, `connect()` raises
+Whenever the proxy reports the link down for a connection that had come
+up, including a drop while pairing or service discovery is still
+running, matching bleak's bluez backend; the callback persists across
+connect and disconnect cycles on a reused client. Library side
+abandonment of a failed attempt is silent and surfaces through the
+raising `connect()` alone. If the link drops during setup but service
+discovery still resolves from cache, `connect()` raises
 `BleakError("<device>: Disconnected during connect setup")` rather than
 returning a client on a dead link.
 
