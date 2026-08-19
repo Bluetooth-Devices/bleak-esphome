@@ -19,6 +19,7 @@ from aioesphomeapi import (
 )
 from bleak import BleakClient
 from bleak.backends.characteristic import BleakGATTCharacteristic
+from bleak.backends.service import BleakGATTServiceCollection
 from bleak.exc import BleakError
 from habluetooth import BaseHaRemoteScanner, HaBluetoothConnector
 
@@ -2274,3 +2275,30 @@ async def test_cached_services_do_not_leak_the_cache(
 
     assert cache_ref() is None
     assert services_ref() is None
+
+
+@pytest.mark.asyncio
+async def test_cached_connect_binds_has_cache_and_keeps_cached_mtu(
+    bleak_pair: tuple[BleakClient, ESPHomeClient],
+) -> None:
+    """
+    A cached connect keeps the cached MTU end to end.
+
+    Pins ``connect()``'s ``has_cache`` computation and its propagation
+    into the connection-state callback: on the cached path the proxy
+    reports before MTU exchange completes, so the reported 23 is a
+    placeholder that must not clobber the cached value.
+    """
+    bleak_client, client = bleak_pair
+    cached_mtu = 517
+    client._cache.set_gatt_services_cache(
+        BLE_ADDRESS_AS_INT, BleakGATTServiceCollection()
+    )
+    client._cache.set_gatt_mtu_cache(BLE_ADDRESS_AS_INT, cached_mtu)
+    with patch_connect_rpcs(client) as (mock_connect, _mock_disconnect):
+        task, callback = await start_connect(bleak_client, mock_connect)
+        assert mock_connect.call_args_list[-1][1]["has_cache"] is True
+        callback(True, 23, 0)
+        await task
+    assert client.mtu_size == cached_mtu
+    assert client._cache.get_gatt_mtu_cache(BLE_ADDRESS_AS_INT) == cached_mtu

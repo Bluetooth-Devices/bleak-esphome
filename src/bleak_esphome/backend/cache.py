@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 from lru import LRU  # pylint: disable=no-name-in-module
 
 if TYPE_CHECKING:
-    from collections.abc import MutableMapping
+    from collections.abc import Mapping, MutableMapping
 
     from bleak.backends.service import BleakGATTServiceCollection
 
@@ -54,7 +54,7 @@ class ESPHomeBluetoothCache:
         """Clear the mtu cache for the given address."""
         self._gatt_mtu_cache.pop(address, None)
 
-    def get_gatt_mtu_cache_map(self) -> MutableMapping[int, int]:
+    def get_gatt_mtu_cache_map(self) -> Mapping[int, int]:
         """
         Return the live address-to-MTU mapping backing the MTU cache.
 
@@ -66,5 +66,10 @@ class ESPHomeBluetoothCache:
         LRU does not participate in garbage collection, so the resulting
         cycle would never be collected. This mapping references nothing
         back, so the cycle does not form.
+
+        Read-only by contract: writes must go through
+        ``set_gatt_mtu_cache`` so the cache stays the one place the MTU
+        is written. The returned view is live, so later writes through
+        that method are visible here.
         """
         return self._gatt_mtu_cache
