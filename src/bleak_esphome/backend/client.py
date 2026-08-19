@@ -433,9 +433,7 @@ class ESPHomeClient(BaseBleakClient):
 
     def _async_note_connect_timeout(self) -> None:
         """Warn when connect requests keep going unanswered for a device."""
-        count = self._bluetooth_device.async_note_connect_timeout(
-            self._address_as_int
-        )
+        count = self._bluetooth_device.async_note_connect_timeout(self._address_as_int)
         if (
             count != CONNECT_TIMEOUT_WARN_THRESHOLD
             and count % CONNECT_TIMEOUT_WARN_INTERVAL

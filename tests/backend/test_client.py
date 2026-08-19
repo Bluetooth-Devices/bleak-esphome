@@ -2149,10 +2149,7 @@ async def test_connect_timeout_warns_once_streak_is_long_enough(
         with pytest.raises(TimeoutError):
             await bleak_client.connect(dangerous_use_bleak_cache=True)
 
-    assert (
-        f"last {CONNECT_TIMEOUT_WARN_THRESHOLD} connect requests"
-        in caplog.text
-    )
+    assert f"last {CONNECT_TIMEOUT_WARN_THRESHOLD} connect requests" in caplog.text
 
 
 @pytest.mark.asyncio
