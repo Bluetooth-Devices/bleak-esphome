@@ -641,7 +641,7 @@ async def test_bleak_client_connect_error_without_link_cleans_up_locally(
 
     A ``connected=False`` error resolution means the ESP holds nothing;
     only the local cleanup runs, no disconnect is sent, and the settle
-    still runs before the retry.
+    is skipped since the attempt never held a slot.
     """
     bleak_client, client = bleak_pair
     with (
