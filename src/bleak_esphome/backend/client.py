@@ -366,7 +366,7 @@ class ESPHomeClient(BaseBleakClient):
         # Reaching here means the proxy answered. aioesphomeapi unsubscribes
         # this callback before it sends the disconnect that follows a connect
         # timeout, so a timed-out attempt can never clear its own streak.
-        self._bluetooth_device.async_note_connect_response(self._ble_device.address)
+        self._bluetooth_device.async_note_connect_response(self._address_as_int)
         if not connected:
             self._async_ble_device_disconnected()
 
@@ -432,20 +432,23 @@ class ESPHomeClient(BaseBleakClient):
         connected_future.set_result(connected)
 
     def _async_note_connect_timeout(self) -> None:
-        """Warn when the proxy keeps ignoring connect requests for a device."""
+        """Warn when connect requests keep going unanswered for a device."""
         count = self._bluetooth_device.async_note_connect_timeout(
-            self._ble_device.address
+            self._address_as_int
         )
         if (
             count != CONNECT_TIMEOUT_WARN_THRESHOLD
             and count % CONNECT_TIMEOUT_WARN_INTERVAL
         ):
             return
+        # Only the absence of a reply is observable. The connect request is
+        # sent without an ack, so the host cannot tell an accepted request
+        # from one the proxy never processed, and naming a cause would point
+        # a wedged proxy or a half-open API session at the wrong fix.
         _LOGGER.warning(
-            "%s: The proxy has not answered the last %s connect requests; "
-            "it accepted each one but never reported the connection state, "
-            "so this device cannot be reached through this proxy. Upgrade the "
-            "ESPHome version on device %s and check its logs",
+            "%s: No connection state reported for the last %s connect "
+            "requests, so this device cannot be reached through this proxy. "
+            "Check device %s and its logs",
             self._description,
             count,
             self._device_info.name,

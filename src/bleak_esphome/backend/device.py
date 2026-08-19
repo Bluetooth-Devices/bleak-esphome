@@ -47,11 +47,11 @@ class ESPHomeBluetoothDevice:
     _tracked_clients: dict[int, Callable[[], None]] = field(default_factory=dict)
     _seen_allocated: bool = False
     _warned_untrusted: bool = False
-    _unanswered_connects: MutableMapping[str, int] = field(
+    _unanswered_connects: MutableMapping[int, int] = field(
         default_factory=lambda: LRU(MAX_TRACKED_UNANSWERED_CONNECTS)
     )
 
-    def async_note_connect_response(self, address: str) -> None:
+    def async_note_connect_response(self, address: int) -> None:
         """
         Record that the proxy reported a connection state for ``address``.
 
@@ -61,7 +61,7 @@ class ESPHomeBluetoothDevice:
         """
         self._unanswered_connects.pop(address, None)
 
-    def async_note_connect_timeout(self, address: str) -> int:
+    def async_note_connect_timeout(self, address: int) -> int:
         """
         Record a connect request the proxy never answered for ``address``.
 

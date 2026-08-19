@@ -140,18 +140,23 @@ the retry logic can move to another proxy. The fail fast disarms as soon
 as the proxy reports slot state again, or when a caller reusing the
 device marks it available on reconnect.
 
-## `The proxy has not answered the last N connect requests`
+## `No connection state reported for the last N connect requests`
 
 Symptoms: every connect attempt to one device fails after the full connect
 timeout, and this library logs
 
 ```
-The proxy has not answered the last 5 connect requests; it accepted each one
-but never reported the connection state, so this device cannot be reached
-through this proxy.
+No connection state reported for the last 5 connect requests, so this device
+cannot be reached through this proxy.
 ```
 
-Meanwhile the proxy's own log shows the link being established normally:
+Only the absence of a reply is observable from the host. The connect request
+is sent without an acknowledgement, so a proxy that never processed it and a
+proxy that processed it but never reported the result look identical here. A
+wedged proxy or a half-open API session produces this same symptom, so check
+that the proxy is responsive before assuming the cause below.
+
+One cause is a proxy whose own log shows the link being established normally:
 
 ```
 [bluetooth_proxy] [0] [AA:BB:CC:DD:EE:FF] Connecting v3 without cache

@@ -22,6 +22,7 @@ from habluetooth import BaseHaRemoteScanner, HaBluetoothConnector
 
 from bleak_esphome.backend.client import (
     CONNECT_FREE_SLOT_TIMEOUT,
+    CONNECT_TIMEOUT_WARN_INTERVAL,
     CONNECT_TIMEOUT_WARN_THRESHOLD,
     GATT_HEADER_SIZE,
     ESPHomeClient,
@@ -2143,13 +2144,13 @@ async def test_connect_timeout_warns_once_streak_is_long_enough(
         for _ in range(CONNECT_TIMEOUT_WARN_THRESHOLD - 1):
             with pytest.raises(TimeoutError):
                 await bleak_client.connect(dangerous_use_bleak_cache=True)
-        assert "never reported the connection state" not in caplog.text
+        assert "No connection state reported" not in caplog.text
 
         with pytest.raises(TimeoutError):
             await bleak_client.connect(dangerous_use_bleak_cache=True)
 
     assert (
-        f"has not answered the last {CONNECT_TIMEOUT_WARN_THRESHOLD} connect requests"
+        f"last {CONNECT_TIMEOUT_WARN_THRESHOLD} connect requests"
         in caplog.text
     )
 
@@ -2171,7 +2172,7 @@ async def test_connect_timeout_warns_only_on_the_leading_edge(
             with pytest.raises(TimeoutError):
                 await bleak_client.connect(dangerous_use_bleak_cache=True)
 
-    assert caplog.text.count("never reported the connection state") == 1
+    assert caplog.text.count("No connection state reported") == 1
 
 
 @pytest.mark.asyncio
@@ -2218,4 +2219,31 @@ async def test_connect_response_clears_the_timeout_streak(
             with pytest.raises(TimeoutError):
                 await bleak_client.connect(dangerous_use_bleak_cache=True)
 
-    assert "never reported the connection state" not in caplog.text
+    assert "No connection state reported" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_connect_timeout_warns_again_on_the_sparse_interval(
+    bleak_pair: tuple[BleakClient, ESPHomeClient],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """
+    A condition that never recovers must stay visible.
+
+    The leading edge alone would scroll away, so the warning repeats on the
+    sparse interval. Without this the second arm of the cadence never runs.
+    """
+    bleak_client, client = bleak_pair
+    caplog.set_level(logging.WARNING)
+    with patch.object(
+        client._client,
+        "bluetooth_device_connect",
+        side_effect=TimeoutAPIError("Timeout waiting for connect response"),
+    ):
+        for _ in range(CONNECT_TIMEOUT_WARN_INTERVAL):
+            with pytest.raises(TimeoutError):
+                await bleak_client.connect(dangerous_use_bleak_cache=True)
+
+    # The leading edge, then the interval multiple: two warnings, not one.
+    assert caplog.text.count("No connection state reported") == 2
+    assert f"last {CONNECT_TIMEOUT_WARN_INTERVAL} connect requests" in caplog.text

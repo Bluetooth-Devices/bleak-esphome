@@ -14,7 +14,10 @@ from bleak_esphome.backend.device import (
     ESPHomeBluetoothDevice,
 )
 
-from ._helpers import BLE_ADDRESS, ESP_MAC_ADDRESS
+from ._helpers import ESP_MAC_ADDRESS
+
+# The streak map is keyed on the int address, as the sibling maps are.
+ADDRESS = 0xCCBBAADDEEFF
 
 
 @pytest.mark.asyncio
@@ -523,9 +526,9 @@ async def test_note_connect_timeout_counts_consecutive_attempts(
     bluetooth_device: ESPHomeBluetoothDevice,
 ) -> None:
     """Each unanswered connect request advances that address's streak."""
-    assert bluetooth_device.async_note_connect_timeout(BLE_ADDRESS) == 1
-    assert bluetooth_device.async_note_connect_timeout(BLE_ADDRESS) == 2
-    assert bluetooth_device.async_note_connect_timeout(BLE_ADDRESS) == 3
+    assert bluetooth_device.async_note_connect_timeout(ADDRESS) == 1
+    assert bluetooth_device.async_note_connect_timeout(ADDRESS) == 2
+    assert bluetooth_device.async_note_connect_timeout(ADDRESS) == 3
 
 
 @pytest.mark.asyncio
@@ -533,10 +536,10 @@ async def test_note_connect_response_clears_streak(
     bluetooth_device: ESPHomeBluetoothDevice,
 ) -> None:
     """A reported connection state resets the streak for that address."""
-    bluetooth_device.async_note_connect_timeout(BLE_ADDRESS)
-    bluetooth_device.async_note_connect_timeout(BLE_ADDRESS)
-    bluetooth_device.async_note_connect_response(BLE_ADDRESS)
-    assert bluetooth_device.async_note_connect_timeout(BLE_ADDRESS) == 1
+    bluetooth_device.async_note_connect_timeout(ADDRESS)
+    bluetooth_device.async_note_connect_timeout(ADDRESS)
+    bluetooth_device.async_note_connect_response(ADDRESS)
+    assert bluetooth_device.async_note_connect_timeout(ADDRESS) == 1
 
 
 @pytest.mark.asyncio
@@ -544,8 +547,8 @@ async def test_note_connect_response_without_streak_is_a_noop(
     bluetooth_device: ESPHomeBluetoothDevice,
 ) -> None:
     """Clearing an address that never timed out must not raise."""
-    bluetooth_device.async_note_connect_response(BLE_ADDRESS)
-    assert bluetooth_device.async_note_connect_timeout(BLE_ADDRESS) == 1
+    bluetooth_device.async_note_connect_response(ADDRESS)
+    assert bluetooth_device.async_note_connect_timeout(ADDRESS) == 1
 
 
 @pytest.mark.asyncio
@@ -553,13 +556,13 @@ async def test_connect_streaks_are_tracked_per_address(
     bluetooth_device: ESPHomeBluetoothDevice,
 ) -> None:
     """One unreachable device must not mask another on the same proxy."""
-    other = "11:22:33:44:55:66"
-    assert bluetooth_device.async_note_connect_timeout(BLE_ADDRESS) == 1
+    other = ADDRESS + 1
+    assert bluetooth_device.async_note_connect_timeout(ADDRESS) == 1
     assert bluetooth_device.async_note_connect_timeout(other) == 1
-    assert bluetooth_device.async_note_connect_timeout(BLE_ADDRESS) == 2
-    bluetooth_device.async_note_connect_response(BLE_ADDRESS)
+    assert bluetooth_device.async_note_connect_timeout(ADDRESS) == 2
+    bluetooth_device.async_note_connect_response(ADDRESS)
     assert bluetooth_device.async_note_connect_timeout(other) == 2
-    assert bluetooth_device.async_note_connect_timeout(BLE_ADDRESS) == 1
+    assert bluetooth_device.async_note_connect_timeout(ADDRESS) == 1
 
 
 @pytest.mark.asyncio
@@ -575,7 +578,7 @@ async def test_connect_timeout_streaks_are_bounded(
     """
     overflow = 50
     for index in range(MAX_TRACKED_UNANSWERED_CONNECTS + overflow):
-        bluetooth_device.async_note_connect_timeout(f"AA:BB:CC:DD:{index:04X}")
+        bluetooth_device.async_note_connect_timeout(ADDRESS + 1 + index)
 
     assert len(bluetooth_device._unanswered_connects) == (
         MAX_TRACKED_UNANSWERED_CONNECTS
@@ -587,13 +590,15 @@ async def test_connect_timeout_streaks_evict_the_least_recently_used(
     bluetooth_device: ESPHomeBluetoothDevice,
 ) -> None:
     """Eviction must drop the stalest address, never the one still failing."""
-    still_failing = "AA:BB:CC:DD:EE:01"
+    still_failing = ADDRESS
     bluetooth_device.async_note_connect_timeout(still_failing)
 
     # Keep it the most recently used while pushing the rest past the bound.
     for index in range(MAX_TRACKED_UNANSWERED_CONNECTS * 2):
-        bluetooth_device.async_note_connect_timeout(f"AA:BB:CC:DD:{index:04X}")
+        bluetooth_device.async_note_connect_timeout(ADDRESS + 1 + index)
         bluetooth_device.async_note_connect_timeout(still_failing)
 
-    # Its streak survived, so a long run of other addresses cannot reset it.
-    assert bluetooth_device.async_note_connect_timeout(still_failing) > 2
+    # One initial note, one per loop iteration, then the call below: an exact
+    # count, so an eviction that silently reset it could not slip through.
+    expected = 1 + MAX_TRACKED_UNANSWERED_CONNECTS * 2 + 1
+    assert bluetooth_device.async_note_connect_timeout(still_failing) == expected
