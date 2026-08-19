@@ -598,6 +598,15 @@ async def test_stop_notify_raises_when_cccd_missing(
     mock_write_desc.assert_not_called()
     stop.assert_awaited_once()
     assert 99 not in client._notify_cancels
+    # There is no descriptor to write, so nothing is retryable: the handle
+    # must not be latched as dirty or every later stop_notify would raise
+    # instead of returning the BlueZ-compatible no-op.
+    assert 99 not in client._cccd_dirty
+    with patch.object(
+        client._client, "bluetooth_gatt_write_descriptor"
+    ) as mock_write_desc:
+        await client.stop_notify(char)
+    mock_write_desc.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -674,6 +683,45 @@ async def test_stop_notify_drops_entry_when_release_fails_after_disconnect(
     stop.assert_awaited_once()
     abort.assert_called_once()
     assert char.handle not in client._notify_cancels
+    # The cleanup ran inside the write, so recording the handle afterwards
+    # would leave it dirty for the life of the next connection.
+    assert not client._cccd_dirty
+
+
+@pytest.mark.asyncio
+async def test_stop_notify_forgets_cccd_when_disconnected_mid_write(
+    client_data: ESPHomeClientData,
+    esphome_bluetooth_gatt_services: ESPHomeBluetoothGATTServices,
+) -> None:
+    """A timeout after a disconnect must not latch the handle as dirty."""
+    client = _make_client(client_data)
+    client._is_connected = True
+    with patch.object(
+        client._client,
+        "bluetooth_gatt_get_services",
+        return_value=esphome_bluetooth_gatt_services,
+    ):
+        services = await client._get_services()
+    char = services.get_characteristic("00002a05-0000-1000-8000-00805f9b34fb")
+    assert char is not None
+    client._notify_cancels[char.handle] = (AsyncMock(), Mock())
+
+    async def _disconnect_and_time_out(*args: Any, **kwargs: Any) -> None:
+        client._async_disconnected_cleanup()
+        raise TimeoutAPIError("timed out")
+
+    # A TimeoutAPIError does not trigger a second disconnected cleanup, so an
+    # unguarded add would survive the disconnect.
+    with (
+        patch.object(
+            client._client,
+            "bluetooth_gatt_write_descriptor",
+            side_effect=_disconnect_and_time_out,
+        ),
+        pytest.raises(TimeoutError),
+    ):
+        await client.stop_notify(char)
+    assert not client._cccd_dirty
 
 
 @pytest.mark.asyncio

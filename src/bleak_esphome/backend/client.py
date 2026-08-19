@@ -1092,20 +1092,24 @@ class ESPHomeClient(BaseBleakClient):
         outstanding and forgotten again once it lands, so a ``stop_notify``
         that runs after the proxy-side subscription was already released can
         tell a peripheral left notifying apart from a handle that was never
-        subscribed.
+        subscribed. Only a failure that is actually retryable is recorded: a
+        characteristic with no CCCD at all, and a failure once the link is
+        already gone, leave the set untouched.
         """
         if not self._feature_flags & BluetoothProxyFeature.REMOTE_CACHING.value:
             return
+        cccd_descriptor = characteristic.get_descriptor(CCCD_UUID)
+        if not cccd_descriptor:
+            # Same error start_notify raises for this condition: returning
+            # successfully here would hide a peripheral that keeps notifying
+            # for the life of the connection. Raised before the try below so
+            # the handle is not marked dirty: there is no descriptor to write,
+            # so there is nothing a later stop_notify could retry.
+            raise BleakError(
+                f"{self._description}: Characteristic {characteristic.uuid} "
+                "does not have a characteristic client config descriptor."
+            )
         try:
-            cccd_descriptor = characteristic.get_descriptor(CCCD_UUID)
-            if not cccd_descriptor:
-                # Same error start_notify raises for this condition:
-                # returning successfully here would hide a peripheral that
-                # keeps notifying for the life of the connection.
-                raise BleakError(
-                    f"{self._description}: Characteristic {characteristic.uuid} "
-                    "does not have a characteristic client config descriptor."
-                )
             _LOGGER.debug(
                 "%s: Writing to CCD descriptor %s to stop notifications",
                 self._description,
@@ -1119,7 +1123,16 @@ class ESPHomeClient(BaseBleakClient):
             )
         except BaseException:
             # Use BaseException to handle CancelledError as well as Exception.
-            self._cccd_dirty.add(characteristic.handle)
+            # Only record the handle while the link is up, mirroring the guard
+            # _restore_notify_cancel applies to the notify entry: the
+            # disconnect cleanup may have run inside the await and already
+            # cleared the set, and a TimeoutAPIError or CancelledError does not
+            # trigger a second cleanup, so an unguarded add would survive the
+            # disconnect and turn the next connection's no-op stop_notify into
+            # a real CCCD round trip. A disconnect stops the notifications
+            # anyway, so there is nothing left to retry.
+            if self._is_connected:
+                self._cccd_dirty.add(characteristic.handle)
             raise
         self._cccd_dirty.discard(characteristic.handle)
 
