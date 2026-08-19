@@ -32,6 +32,7 @@ from aioesphomeapi.core import (
 )
 from bleak import BleakClient
 from bleak.backends.characteristic import BleakGATTCharacteristic
+from bleak.backends.service import BleakGATTServiceCollection
 from bleak.exc import BleakError
 from pytest_asyncio import fixture as aio_fixture
 
@@ -142,7 +143,9 @@ async def test_on_bluetooth_connection_state_error_sets_exception(
     client = _make_client(client_data)
     fut: asyncio.Future[bool] = client._loop.create_future()
     # Unknown error code falls through to ESPHOME_GATT_ERRORS lookup
-    client._on_bluetooth_connection_state(fut, False, 23, 99999)
+    client._on_bluetooth_connection_state(
+        fut, has_cache=False, connected=False, mtu=23, error=99999
+    )
     assert fut.done()
     with pytest.raises(BleakError, match="while connecting"):
         fut.result()
@@ -156,7 +159,11 @@ async def test_on_bluetooth_connection_state_known_error_uses_name(
     client = _make_client(client_data)
     fut: asyncio.Future[bool] = client._loop.create_future()
     client._on_bluetooth_connection_state(
-        fut, False, 23, BLEConnectionError.ESP_GATT_CONN_TIMEOUT.value
+        fut,
+        has_cache=False,
+        connected=False,
+        mtu=23,
+        error=BLEConnectionError.ESP_GATT_CONN_TIMEOUT.value,
     )
     assert fut.done()
     with pytest.raises(BleakError, match="ESP_GATT_CONN_TIMEOUT"):
@@ -170,7 +177,9 @@ async def test_on_bluetooth_connection_state_disconnect_fails_future(
     """connected=False with no error code fails the future as ``Disconnected``."""
     client = _make_client(client_data)
     fut: asyncio.Future[bool] = client._loop.create_future()
-    client._on_bluetooth_connection_state(fut, False, 23, 0)
+    client._on_bluetooth_connection_state(
+        fut, has_cache=False, connected=False, mtu=23, error=0
+    )
     assert fut.done()
     with pytest.raises(BleakError, match="Disconnected"):
         fut.result()
@@ -184,11 +193,15 @@ async def test_on_bluetooth_connection_state_idempotent_when_future_done(
     client = _make_client(client_data)
     fut: asyncio.Future[bool] = client._loop.create_future()
     # First call resolves the future.
-    client._on_bluetooth_connection_state(fut, True, 23, 0)
+    client._on_bluetooth_connection_state(
+        fut, has_cache=False, connected=True, mtu=23, error=0
+    )
     assert fut.result() is True
     # Second call (disconnect after success) must not raise even though the
     # future is already done.
-    client._on_bluetooth_connection_state(fut, False, 23, 0)
+    client._on_bluetooth_connection_state(
+        fut, has_cache=False, connected=False, mtu=23, error=0
+    )
     assert not client.is_connected
 
 
@@ -222,7 +235,9 @@ async def test_on_bluetooth_connection_state_late_connect_does_not_resurrect(
         client._client,
         "bluetooth_device_disconnect_no_wait",
     ) as mock_disconnect:
-        client._on_bluetooth_connection_state(fut, True, 23, 0)
+        client._on_bluetooth_connection_state(
+            fut, has_cache=False, connected=True, mtu=23, error=0
+        )
         assert not client._is_connected
         assert client._pending_release is in_flight
         assert client._mtu is None
@@ -237,12 +252,12 @@ async def test_on_bluetooth_connection_state_preserves_cached_mtu(
     client_data: ESPHomeClientData,
 ) -> None:
     """
-    A cached MTU is preserved when the connection-state callback fires.
+    A cached connect preserves the cached MTU.
 
-    ``connect()`` seeds ``self._mtu`` from the cache before issuing the
-    proxy ``bluetooth_device_connect`` call, so the connection-state
-    callback must not clobber that value (and must not write the
-    just-reported ``mtu`` back into the cache).
+    The proxy reports a cached connection before MTU exchange completes,
+    so the reported value is a placeholder. ``connect()`` seeds
+    ``self._mtu`` from the cache beforehand, and that value must survive
+    (and must not be overwritten in the cache).
     """
     client = _make_client(client_data)
     cached_mtu = 100
@@ -250,10 +265,61 @@ async def test_on_bluetooth_connection_state_preserves_cached_mtu(
     client._mtu = cached_mtu
     client._cache.clear_gatt_mtu_cache(client._address_as_int)
     fut: asyncio.Future[bool] = client._loop.create_future()
-    client._on_bluetooth_connection_state(fut, True, reported_mtu, 0)
+    client._on_bluetooth_connection_state(
+        fut, has_cache=True, connected=True, mtu=reported_mtu, error=0
+    )
     assert fut.result() is True
     assert client._mtu == cached_mtu
     assert client._cache.get_gatt_mtu_cache(client._address_as_int) is None
+
+
+@pytest.mark.asyncio
+async def test_on_bluetooth_connection_state_adopts_current_link_mtu(
+    client_data: ESPHomeClientData,
+) -> None:
+    """
+    A non-cached connect adopts the MTU of the current link.
+
+    The cache outlives the link it was learned on, so a later link that
+    negotiates a smaller MTU (or fails the exchange, leaving the firmware
+    placeholder) must win — otherwise ``max_write_without_response`` is
+    derived from an MTU this link cannot carry.
+    """
+    client = _make_client(client_data)
+    # Seeded by connect() from the cache, negotiated on an earlier link.
+    client._mtu = 517
+    reported_mtu = 23
+    fut: asyncio.Future[bool] = client._loop.create_future()
+    client._on_bluetooth_connection_state(
+        fut, has_cache=False, connected=True, mtu=reported_mtu, error=0
+    )
+    assert fut.result() is True
+    assert client.mtu_size == reported_mtu
+    assert client._cache.get_gatt_mtu_cache(client._address_as_int) == reported_mtu
+
+
+@pytest.mark.asyncio
+async def test_adopting_a_different_mtu_keeps_cached_services(
+    client_data: ESPHomeClientData,
+) -> None:
+    """
+    A changed MTU leaves the cached service collection in place.
+
+    The services themselves stay valid across an MTU change; only the
+    derived ``max_write_without_response`` moves, and that is read from
+    the shared MTU cache at call time rather than baked into the
+    collection.
+    """
+    client = _make_client(client_data)
+    client._mtu = 517
+    services = BleakGATTServiceCollection()
+    client._cache.set_gatt_services_cache(client._address_as_int, services)
+    fut: asyncio.Future[bool] = client._loop.create_future()
+    client._on_bluetooth_connection_state(
+        fut, has_cache=False, connected=True, mtu=23, error=0
+    )
+    assert fut.result() is True
+    assert client._cache.get_gatt_services_cache(client._address_as_int) is services
 
 
 @pytest.mark.asyncio

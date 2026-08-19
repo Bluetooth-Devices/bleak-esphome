@@ -57,6 +57,35 @@ cache eviction is enough for many "characteristics moved after a firmware
 update" scenarios, but it cannot recover from a stale cache on the proxy
 itself.
 
+## Writes are oversized after reconnecting with a cached connection
+
+Symptoms: after a peripheral reconnects — typically through a different
+proxy, or after a link that failed the MTU exchange — writes without
+response are sent at a size the link cannot carry, and either fail or are
+silently truncated by the peripheral.
+
+The ATT MTU is negotiated per link, but the host-side MTU cache is keyed by
+the peripheral address alone and outlives the link it was learned on. On a
+non-cached connect the library adopts whatever MTU the proxy reports for the
+current link, so this resolves itself. On a **cached** connect it cannot:
+the firmware reports the connection at `ESP_GATTC_OPEN_EVT`, before the MTU
+exchange completes, so the value it sends is the firmware's 23-byte
+placeholder rather than a negotiated one. The cached MTU is kept instead —
+not because it is known to match this link, but because it is the only value
+on offer.
+
+This is a firmware-side limitation: closing it needs the proxy to report the
+MTU after `ESP_GATTC_CFG_MTU_EVT` rather than at `ESP_GATTC_OPEN_EVT`. Until
+then, force the negotiated MTU to be adopted by taking the non-cached path:
+
+- call `clear_cache()` on the client, or
+- pass `dangerous_use_bleak_cache=False` when connecting.
+
+`max_write_without_response_size` is read from the MTU cache on every access
+rather than frozen in when services are discovered, so once the current
+link's MTU is adopted every characteristic — including ones served from a
+cached service collection — reports the size that link can carry.
+
 ## `set_connection_params()` silently does nothing
 
 The `CONNECTION_PARAMS_SETTING` flag is missing. Unlike most other extension

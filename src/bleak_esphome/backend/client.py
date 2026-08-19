@@ -343,6 +343,7 @@ class ESPHomeClient(BaseBleakClient):
     def _on_bluetooth_connection_state(
         self,
         connected_future: asyncio.Future[bool],
+        has_cache: bool,
         connected: bool,
         mtu: int,
         error: int,
@@ -384,7 +385,21 @@ class ESPHomeClient(BaseBleakClient):
 
         if connected:
             self._is_connected = True
-            if not self._mtu:
+            # The MTU is negotiated per link, but the cache outlives the
+            # link it was learned on, so a later link may negotiate a
+            # lower value or fail the exchange entirely. Adopt what this
+            # link reports rather than what an earlier one negotiated.
+            #
+            # The one exception is a cached connect: the proxy reports at
+            # ESP_GATTC_OPEN_EVT, before the MTU exchange completes, so the
+            # value is the firmware's placeholder rather than a negotiated
+            # one. ``has_cache`` already requires a cached MTU, so that is
+            # what is kept -- not because it is known to match this link,
+            # but because it is the only value on offer. The cached path
+            # therefore keeps the same class of staleness this fixes;
+            # closing it needs the firmware to report the MTU after
+            # ESP_GATTC_CFG_MTU_EVT rather than at ESP_GATTC_OPEN_EVT.
+            if not has_cache:
                 self._mtu = mtu
                 self._cache.set_gatt_mtu_cache(self._address_as_int, mtu)
 
@@ -460,7 +475,9 @@ class ESPHomeClient(BaseBleakClient):
                         await self._client.bluetooth_device_connect(
                             self._address_as_int,
                             partial(
-                                self._on_bluetooth_connection_state, connected_future
+                                self._on_bluetooth_connection_state,
+                                connected_future,
+                                has_cache,
                             ),
                             timeout=timeout,
                             has_cache=has_cache,
@@ -641,10 +658,35 @@ class ESPHomeClient(BaseBleakClient):
             address_as_int
         )
         _LOGGER.debug("%s: Got services: %s", self._description, esphome_services)
-        max_write_without_response = self.mtu_size - GATT_HEADER_SIZE
+
+        # The collection is cached and shared between links (and proxies),
+        # but the ATT MTU is negotiated per link. Read it from the shared
+        # cache at call time instead of freezing the size in at build time,
+        # so a cache hit on a later link reports what *that* link can carry.
+        # If the MTU entry is missing (the two LRUs evict independently, and
+        # ``clear_cache()`` drops the MTU entry without touching
+        # ``self._mtu``) fall back to the MTU of the link this collection was
+        # built on -- the same value ``main`` froze in.
+        #
+        # The cache key is the peripheral address alone, so the invariant
+        # this reads is "the most recently connected link wins", not "this
+        # client's link". Two clients on different proxies holding the same
+        # peripheral therefore share one answer, and it can disagree with a
+        # given client's own ``mtu_size``. ``mtu_size`` deliberately stays
+        # per-client -- it is public Bleak API and must describe the link
+        # that client holds -- so the two are not unified here. Making them
+        # agree needs a per-link key, which is a cache-shape change.
+        #
+        # The closure holds the MTU mapping rather than the cache itself:
+        # the cache owns the collection built here, so capturing the cache
+        # would close a reference cycle through the services LRU, which
+        # does not participate in garbage collection.
+        mtu_cache = cache.get_gatt_mtu_cache_map()
+        built_mtu = self.mtu_size
 
         def get_max_write_without_response() -> int:
-            return max_write_without_response
+            mtu = mtu_cache.get(address_as_int) or built_mtu
+            return mtu - GATT_HEADER_SIZE
 
         services = BleakGATTServiceCollection()
         for service in esphome_services.services:
