@@ -1190,8 +1190,10 @@ async def test_bleak_client_connect_await_signal_makes_future_terminal(
     with patch_connect_rpcs(client) as (mock_connect, mock_disconnect):
         coro = client.connect(pair=False, dangerous_use_bleak_cache=True)
         # Drive manually so the signal lands at the await itself, with
-        # the future still pending.
+        # the future still pending. The RPC already returned, so the
+        # only live suspension is ``await connected_future``.
         coro.send(None)
+        assert client._cancel_connection_state is not None
         with pytest.raises(_Signal):
             coro.throw(_Signal())
         callback = mock_connect.call_args_list[-1][0][1]
@@ -1212,6 +1214,8 @@ async def test_bleak_client_connect_await_signal_retrieves_stored_error(
     with patch_connect_rpcs(client) as (mock_connect, _mock_disconnect):
         coro = client.connect(pair=False, dangerous_use_bleak_cache=True)
         coro.send(None)
+        # Pin the suspension point to ``await connected_future``.
+        assert client._cancel_connection_state is not None
         callback = mock_connect.call_args_list[-1][0][1]
         # Fail the future, then deliver the signal before the coroutine
         # resumes.
