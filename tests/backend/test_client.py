@@ -2265,6 +2265,11 @@ async def test_cached_services_do_not_leak_the_cache(
     services_ref = weakref.ref(services)
 
     del client, cache, services
+    # ``ESPHomeClient.__del__`` schedules ``_async_disconnected_cleanup`` on
+    # the loop, and that pending handle holds a bound method -- so the client,
+    # and through it the cache -- until the loop runs it. Let the tick land
+    # before deciding whether anything is stranded.
+    await asyncio.sleep(0)
     gc.collect()
 
     assert cache_ref() is None
