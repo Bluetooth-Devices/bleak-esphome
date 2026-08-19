@@ -545,6 +545,41 @@ async def test_bleak_client_connect_real_task_cancel_propagates_outer(
 
 
 @pytest.mark.asyncio
+async def test_bleak_client_connect_settle_runs_with_scanning_resumed(
+    bleak_pair: tuple[BleakClient, ESPHomeClient],
+) -> None:
+    """
+    Test the settle runs outside the scanner's connecting pause.
+
+    The release is already sent by then, so a saturated proxy must not
+    have its scanner blanked for up to the settle timeout as well.
+    """
+    bleak_client, client = bleak_pair
+    scanning_during_settle: list[bool] = []
+
+    async def _record_scanning(context: str) -> None:
+        scanning_during_settle.append(client._scanner.scanning)
+
+    with (
+        patch.object(
+            client._client,
+            "bluetooth_device_connect",
+            return_value=Mock(),
+        ) as mock_connect,
+        patch.object(client._client, "bluetooth_device_disconnect_no_wait"),
+        patch.object(
+            client, "_settle_slot_after_failure", side_effect=_record_scanning
+        ),
+    ):
+        task, callback = await start_connect(bleak_client, mock_connect)
+        callback(True, 23, 1)
+        with pytest.raises(BleakError, match="while connecting"):
+            await task
+
+    assert scanning_during_settle == [True]
+
+
+@pytest.mark.asyncio
 async def test_bleak_client_connect_failed_release_skips_settle(
     bleak_pair: tuple[BleakClient, ESPHomeClient],
     caplog: pytest.LogCaptureFixture,
@@ -655,9 +690,11 @@ async def test_bleak_client_connect_services_drop_skips_settle(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("failure_shape", ["error_code", "pair", "services"])
 async def test_bleak_client_abandoned_attempt_preserves_disconnected_callback(
     bleak_pair: tuple[BleakClient, ESPHomeClient],
     esphome_bluetooth_gatt_services: ESPHomeBluetoothGATTServices,
+    failure_shape: str,
 ) -> None:
     """
     Test abandonment is silent to the consumer and the callback survives.
@@ -665,31 +702,68 @@ async def test_bleak_client_abandoned_attempt_preserves_disconnected_callback(
     An abandoned attempt never handed the consumer a connected client, so
     it must not fire ``disconnected_callback`` and must not null it; the
     retry connector reuses one client instance, and a later successful
-    connect still has to deliver the real disconnect notification.
+    connect still has to deliver the real disconnect notification. Pinned
+    for every abandonment shape: a connect error after link up, a failed
+    pairing, and a failed service discovery.
     """
     bleak_client, client = bleak_pair
     disconnected_callback = Mock()
     client._disconnected_callback = disconnected_callback
-    with (
-        patch.object(
-            client._client,
-            "bluetooth_device_connect",
-            return_value=Mock(),
-        ) as mock_connect,
-        patch.object(client._client, "bluetooth_device_disconnect_no_wait"),
-        patch.object(
-            client._client,
-            "bluetooth_gatt_get_services",
-            return_value=esphome_bluetooth_gatt_services,
-        ),
-    ):
-        # Attempt 1 fails after the link came up.
-        task, callback = await start_connect(bleak_client, mock_connect)
-        callback(True, 23, 1)
-        with pytest.raises(BleakError, match="while connecting"):
-            await task
-        disconnected_callback.assert_not_called()
-        assert client._disconnected_callback is disconnected_callback
+
+    async def _boom_get_services(*args: Any, **kwargs: Any) -> Any:
+        raise BleakError("services boom")
+
+    with contextlib.ExitStack() as stack:
+        mock_connect = stack.enter_context(
+            patch.object(
+                client._client,
+                "bluetooth_device_connect",
+                return_value=Mock(),
+            )
+        )
+        stack.enter_context(
+            patch.object(client._client, "bluetooth_device_disconnect_no_wait")
+        )
+        stack.enter_context(
+            patch.object(
+                client._client,
+                "bluetooth_gatt_get_services",
+                return_value=esphome_bluetooth_gatt_services,
+            )
+        )
+        # The failure injections live in their own scope so attempt 2
+        # runs without them.
+        with contextlib.ExitStack() as failure_stack:
+            pair = False
+            if failure_shape == "pair":
+                pair = True
+                failure_stack.enter_context(
+                    patch.object(
+                        client._client,
+                        "bluetooth_device_pair",
+                        return_value=BluetoothDevicePairing(
+                            address=client._address_as_int, paired=False, error=1
+                        ),
+                    )
+                )
+            if failure_shape == "services":
+                failure_stack.enter_context(
+                    patch.object(
+                        client, "_get_services", side_effect=_boom_get_services
+                    )
+                )
+            # Attempt 1 fails; the consumer never saw a connected client.
+            task = asyncio.create_task(
+                client.connect(pair=pair, dangerous_use_bleak_cache=True)
+            )
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+            callback = mock_connect.call_args_list[-1][0][1]
+            callback(True, 23, 1 if failure_shape == "error_code" else 0)
+            with pytest.raises(BleakError):
+                await task
+            disconnected_callback.assert_not_called()
+            assert client._disconnected_callback is disconnected_callback
 
         # Attempt 2 succeeds on the same instance.
         task, callback = await start_connect(bleak_client, mock_connect)

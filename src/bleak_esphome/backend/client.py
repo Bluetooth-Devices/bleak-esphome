@@ -234,11 +234,12 @@ class ESPHomeClient(BaseBleakClient):
         Sends the disconnect synchronously so cleanup and cancellation
         paths have nothing to await and no uncancellable window; the ESP
         frees the slot when it processes the request and reports the
-        state change through the usual subscriptions. A failed send is a
-        leaked proxy slot, so it is logged as a warning rather than
-        swallowed silently. Local state is torn down either way. Returns
-        True when the request was actually sent, so callers can skip
-        settling for a slot that cannot free.
+        state change through the usual subscriptions. A failed send means
+        a leaked proxy slot and warns; a dead API connection is the
+        exception and logs at debug, since the proxy releases every link
+        it holds once its subscriber is gone. Local state is torn down
+        either way. Returns True when the request was actually sent, so
+        callers can skip settling for a slot that cannot free.
         """
         sent = False
         try:
@@ -258,6 +259,7 @@ class ESPHomeClient(BaseBleakClient):
                 "may stay allocated until it disconnects on its own: %s",
                 self._description,
                 exc,
+                exc_info=True,
             )
         # Local teardown without consumer notification: an abandoned
         # attempt never handed the consumer a connected client, so it
@@ -430,89 +432,101 @@ class ESPHomeClient(BaseBleakClient):
         connected_future: asyncio.Future[bool] = self._loop.create_future()
 
         timeout = kwargs.get("timeout", self._timeout)
-        with self._scanner.connecting():
-            try:
-                self._cancel_connection_state = (
-                    await self._client.bluetooth_device_connect(
-                        self._address_as_int,
-                        partial(self._on_bluetooth_connection_state, connected_future),
-                        timeout=timeout,
-                        has_cache=has_cache,
-                        feature_flags=self._feature_flags,
-                        address_type=self._address_type,
+        settle_needed = False
+        try:
+            with self._scanner.connecting():
+                try:
+                    self._cancel_connection_state = (
+                        await self._client.bluetooth_device_connect(
+                            self._address_as_int,
+                            partial(
+                                self._on_bluetooth_connection_state, connected_future
+                            ),
+                            timeout=timeout,
+                            has_cache=has_cache,
+                            feature_flags=self._feature_flags,
+                            address_type=self._address_type,
+                        )
                     )
-                )
-            except asyncio.CancelledError:
-                if connected_future.done():
+                except asyncio.CancelledError:
+                    if connected_future.done():
+                        self._retrieve_future_error(connected_future)
+                    else:
+                        # Make the abandoned attempt terminal so a late
+                        # connection-state callback cannot resurrect state.
+                        connected_future.cancel()
+                    # aioesphomeapi already told the ESP to drop the link in
+                    # its own failure handlers, but abandoning uniformly does
+                    # not rely on that; a duplicate release is harmless.
+                    self._abandon_connect_attempt()
+                    # If the current task is not actually being cancelled,
+                    # the cancellation came from inside (e.g. the
+                    # connect_future being cancelled externally). Convert
+                    # it to a BleakError so bleak_retry_connector's retry
+                    # logic can handle it instead of aborting the caller.
+                    if is_spurious_cancellation():
+                        raise BleakError(
+                            f"{self._description}: Connect attempt was cancelled"
+                        ) from None
+                    raise
+                except Exception as ex:
+                    if connected_future.done():
+                        # Prefer to raise the exception from the connect call
+                        # as it is more descriptive than a stored future error.
+                        self._retrieve_future_error(connected_future)
+                    else:
+                        connected_future.cancel(
+                            f"Unhandled exception in connect call: {ex}"
+                        )
+                    self._abandon_connect_attempt()
+                    raise
+                try:
+                    await connected_future
+                except asyncio.CancelledError:
                     self._retrieve_future_error(connected_future)
-                else:
-                    # Make the abandoned attempt terminal so a late
-                    # connection-state callback cannot resurrect state.
-                    connected_future.cancel()
-                # aioesphomeapi already told the ESP to drop the link in
-                # its own failure handlers, but abandoning uniformly does
-                # not rely on that; a duplicate release is harmless.
-                self._abandon_connect_attempt()
-                # If the current task is not actually being cancelled,
-                # the cancellation came from inside (e.g. the
-                # connect_future being cancelled externally). Convert
-                # it to a BleakError so bleak_retry_connector's retry
-                # logic can handle it instead of aborting the caller.
-                if is_spurious_cancellation():
-                    raise BleakError(
-                        f"{self._description}: Connect attempt was cancelled"
-                    ) from None
-                raise
-            except Exception as ex:
-                if connected_future.done():
-                    # Prefer to raise the exception from the connect call
-                    # as it is more descriptive than a stored future error.
-                    self._retrieve_future_error(connected_future)
-                else:
-                    connected_future.cancel(
-                        f"Unhandled exception in connect call: {ex}"
-                    )
-                self._abandon_connect_attempt()
-                raise
-            try:
-                await connected_future
-            except asyncio.CancelledError:
-                self._retrieve_future_error(connected_future)
-                # The cancellation may have been delivered after the link
-                # already came up (``connected_future`` can hold a result
-                # while the awaiting task was cancelled before resuming);
-                # release the ESP-side connection so the proxy's slot is
-                # not leaked on a connection no client owns.
-                self._abandon_connect_attempt()
-                # If the current task is not actually being cancelled,
-                # treat a cancellation of connected_future as a normal
-                # connection failure so bleak_retry_connector can retry
-                # rather than letting CancelledError leak to the caller.
-                if is_spurious_cancellation():
-                    raise BleakError(
-                        f"{self._description}: Connect attempt was cancelled"
-                    ) from None
-                raise
-            except Exception:
-                # The future can also fail after the link came up
-                # (``connected=True`` with an error code); release the
-                # ESP-side connection so the slot is not leaked, then
-                # let the slot settle before the retry connector tries
-                # again. A cancellation arriving during the settle
-                # propagates naturally and outranks the original error.
-                # Deliberately inside the ``connecting()`` pause: the
-                # settle concludes this attempt before the scanner is
-                # considered scanning again. It only runs when a release
-                # was actually sent; an attempt that never held a slot
-                # has nothing to settle and must not pause scanning.
-                if self._abandon_connect_attempt():
-                    await self._settle_slot_after_failure("failed connect")
-                raise
-            except BaseException:
-                # A real signal must not be stalled behind a slow proxy,
-                # so no settle here.
-                self._abandon_connect_attempt()
-                raise
+                    # The cancellation may have been delivered after the link
+                    # already came up (``connected_future`` can hold a result
+                    # while the awaiting task was cancelled before resuming);
+                    # release the ESP-side connection so the proxy's slot is
+                    # not leaked on a connection no client owns.
+                    self._abandon_connect_attempt()
+                    # If the current task is not actually being cancelled,
+                    # treat a cancellation of connected_future as a normal
+                    # connection failure so bleak_retry_connector can retry
+                    # rather than letting CancelledError leak to the caller.
+                    if is_spurious_cancellation():
+                        raise BleakError(
+                            f"{self._description}: Connect attempt was cancelled"
+                        ) from None
+                    raise
+                except Exception:
+                    # The future can also fail after the link came up
+                    # (``connected=True`` with an error code); release the
+                    # ESP-side connection so the slot is not leaked, then
+                    # let the slot settle before the retry connector tries
+                    # again. A cancellation arriving during the settle
+                    # propagates naturally and outranks the original error.
+                    # The settle happens outside the ``connecting()``
+                    # pause in the outer handler, and only when a release
+                    # was actually sent; an attempt that never held a
+                    # slot has nothing to settle for.
+                    settle_needed = self._abandon_connect_attempt()
+                    raise
+                except BaseException:
+                    # A real signal must not be stalled behind a slow proxy,
+                    # so no settle here.
+                    self._abandon_connect_attempt()
+                    raise
+        except BaseException:
+            if settle_needed:
+                # Outside the ``connecting()`` pause on purpose: the
+                # release is already sent, so nothing about the settle
+                # needs the scanner blanked for up to another
+                # DISCONNECT_TIMEOUT on a saturated proxy. Reached only
+                # from the Exception arm; cancellation paths re-raise
+                # with the flag unset and never await here.
+                await self._settle_slot_after_failure("failed connect")
+            raise
 
         try:
             if pair:
