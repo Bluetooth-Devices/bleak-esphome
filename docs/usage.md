@@ -152,7 +152,9 @@ caller:
 3. Fire every callback in `client_data.disconnect_callbacks` when the ESP
    disconnects, so `ESPHomeClient` instances drop their subscriptions.
    Iterate a snapshot of the set — each callback removes itself during
-   cleanup.
+   cleanup. Also set `client_data.bluetooth_device.available = False`
+   first, so the connector's `can_connect` gate stops offering the dead
+   proxy for new connection attempts.
 
 ```python
 import habluetooth
@@ -172,6 +174,7 @@ unregister_scanner = habluetooth.get_manager().async_register_scanner(
 )
 
 # Later, when the ESP disconnects:
+client_data.bluetooth_device.available = False
 for callback in list(client_data.disconnect_callbacks):
     callback()
 unregister_scanner()

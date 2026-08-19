@@ -6,7 +6,7 @@ point — it owns the ``APIClient``, drives ``ReconnectLogic``, registers the
 scanner, and tears everything down for you. Reach for ``connect_scanner``
 only when you already manage the ``APIClient`` lifecycle yourself.
 
-``connect_scanner`` leaves three jobs to the caller, all of which this
+``connect_scanner`` leaves four jobs to the caller, all of which this
 example performs explicitly:
 
 1. Call ``client_data.scanner.async_setup()`` to attach the scanner to the
@@ -16,6 +16,8 @@ example performs explicitly:
 3. Fire every callback in ``client_data.disconnect_callbacks`` when the ESP
    disconnects. Iterate a snapshot of the set — each callback removes
    itself during cleanup.
+4. Set ``client_data.bluetooth_device.available = False`` first, so the
+   connector's ``can_connect`` gate stops offering the dead proxy.
 
 Replace ``DEVICE_ADDRESS`` / ``NOISE_PSK`` with your proxy's details before
 running. This talks to real hardware, so it cannot run in CI.
@@ -93,6 +95,10 @@ async def run() -> None:
         for device, adv in devices.values():
             print(f"{device} (rssi={adv.rssi})")
     finally:
+        # Responsibility 4: close the connect gate before firing callbacks
+        # so the dead proxy is not offered for new connection attempts.
+        if client_data is not None:
+            client_data.bluetooth_device.available = False
         # Responsibility 3: fire the disconnect callbacks (snapshot the set —
         # each callback removes itself). Guard each one so a single bad
         # callback cannot abort the rest of teardown, and keep un-register and
