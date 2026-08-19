@@ -255,20 +255,29 @@ class ESPHomeClient(BaseBleakClient):
                 self._description,
                 exc,
             )
-        self._async_ble_device_disconnected()
+        # Local teardown without consumer notification: an abandoned
+        # attempt never handed the consumer a connected client, so it
+        # must not fire (and permanently null) ``disconnected_callback``,
+        # which has to survive for a later successful connect on this
+        # instance. Real disconnects go through
+        # ``_async_ble_device_disconnected`` instead.
+        self._async_disconnected_cleanup()
 
-    def _abandon_connect_attempt(self) -> None:
+    def _abandon_connect_attempt(self) -> bool:
         """
         Tear down an abandoned connect attempt.
 
         Releases the ESP-side link when it came up (the release tears
         down local state itself); otherwise only the local cleanup runs
-        so the connection-state subscription does not leak.
+        so the connection-state subscription does not leak. Returns True
+        when an ESP-side release was sent, so callers can skip the slot
+        settle for attempts that never held a slot.
         """
         if self._is_connected:
             self._release_connection_no_wait()
-        else:
-            self._async_disconnected_cleanup()
+            return True
+        self._async_disconnected_cleanup()
+        return False
 
     async def _settle_slot_after_failure(self, context: str) -> None:
         """
@@ -473,12 +482,13 @@ class ESPHomeClient(BaseBleakClient):
                 # let the slot settle before the retry connector tries
                 # again. A cancellation arriving during the settle
                 # propagates naturally and outranks the original error.
-                self._abandon_connect_attempt()
                 # Deliberately inside the ``connecting()`` pause: the
                 # settle concludes this attempt before the scanner is
-                # considered scanning again, and it short-circuits when
-                # a slot is already free.
-                await self._settle_slot_after_failure("failed connect")
+                # considered scanning again. It only runs when a release
+                # was actually sent; an attempt that never held a slot
+                # has nothing to settle and must not pause scanning.
+                if self._abandon_connect_attempt():
+                    await self._settle_slot_after_failure("failed connect")
                 raise
             except BaseException:
                 # A real signal must not be stalled behind a slow proxy,
@@ -503,8 +513,8 @@ class ESPHomeClient(BaseBleakClient):
             # Best-effort cleanup: release the BLE connection on the ESP
             # side, but never let a disconnect failure mask the original
             # connect error, then let the slot settle before the retry.
-            self._abandon_connect_attempt()
-            await self._settle_slot_after_failure("failed connect setup")
+            if self._abandon_connect_attempt():
+                await self._settle_slot_after_failure("failed connect setup")
             raise
         except BaseException:
             # A real signal must not be stalled behind a slow proxy,

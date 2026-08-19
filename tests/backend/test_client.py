@@ -545,6 +545,94 @@ async def test_bleak_client_connect_real_task_cancel_propagates_outer(
 
 
 @pytest.mark.asyncio
+async def test_bleak_client_connect_services_drop_skips_settle(
+    bleak_pair: tuple[BleakClient, ESPHomeClient],
+) -> None:
+    """
+    Test a link dropped during discovery releases nothing and skips settle.
+
+    When the device disconnects mid ``_get_services`` the local state is
+    already torn down; the attempt no longer holds a slot, so there is
+    nothing to release and nothing to settle for.
+    """
+    bleak_client, client = bleak_pair
+
+    async def _drop_then_boom(*args: Any, **kwargs: Any) -> Any:
+        client._async_ble_device_disconnected()
+        raise BleakError("dropped during discovery")
+
+    with (
+        patch.object(
+            client._client,
+            "bluetooth_device_connect",
+            return_value=Mock(),
+        ) as mock_connect,
+        patch.object(client, "_get_services", side_effect=_drop_then_boom),
+        patch.object(
+            client._client,
+            "bluetooth_device_disconnect_no_wait",
+        ) as mock_disconnect,
+        patch.object(client, "_settle_slot_after_failure") as mock_settle,
+    ):
+        task, callback = await start_connect(bleak_client, mock_connect)
+        callback(True, 23, 0)
+        with pytest.raises(BleakError, match="dropped during discovery"):
+            await task
+
+    mock_disconnect.assert_not_called()
+    mock_settle.assert_not_awaited()
+    assert not client.is_connected
+
+
+@pytest.mark.asyncio
+async def test_bleak_client_abandoned_attempt_preserves_disconnected_callback(
+    bleak_pair: tuple[BleakClient, ESPHomeClient],
+    esphome_bluetooth_gatt_services: ESPHomeBluetoothGATTServices,
+) -> None:
+    """
+    Test abandonment is silent to the consumer and the callback survives.
+
+    An abandoned attempt never handed the consumer a connected client, so
+    it must not fire ``disconnected_callback`` and must not null it; the
+    retry connector reuses one client instance, and a later successful
+    connect still has to deliver the real disconnect notification.
+    """
+    bleak_client, client = bleak_pair
+    disconnected_callback = Mock()
+    client._disconnected_callback = disconnected_callback
+    with (
+        patch.object(
+            client._client,
+            "bluetooth_device_connect",
+            return_value=Mock(),
+        ) as mock_connect,
+        patch.object(client._client, "bluetooth_device_disconnect_no_wait"),
+        patch.object(
+            client._client,
+            "bluetooth_gatt_get_services",
+            return_value=esphome_bluetooth_gatt_services,
+        ),
+    ):
+        # Attempt 1 fails after the link came up.
+        task, callback = await start_connect(bleak_client, mock_connect)
+        callback(True, 23, 1)
+        with pytest.raises(BleakError, match="while connecting"):
+            await task
+        disconnected_callback.assert_not_called()
+        assert client._disconnected_callback is disconnected_callback
+
+        # Attempt 2 succeeds on the same instance.
+        task, callback = await start_connect(bleak_client, mock_connect)
+        callback(True, 23, 0)
+        await task
+        assert client.is_connected
+
+        # The real disconnect still notifies the consumer exactly once.
+        callback(False, 23, 0)
+        disconnected_callback.assert_called_once_with()
+
+
+@pytest.mark.asyncio
 async def test_bleak_client_connect_error_without_link_cleans_up_locally(
     bleak_pair: tuple[BleakClient, ESPHomeClient],
 ) -> None:

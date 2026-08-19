@@ -96,7 +96,8 @@ async def start_connect(
     task = asyncio.create_task(bleak_client.connect(dangerous_use_bleak_cache=True))
     await asyncio.sleep(0)
     await asyncio.sleep(0)
-    callback = mock_connect.call_args_list[0][0][1]
+    assert mock_connect.call_args_list, "bluetooth_device_connect was not called"
+    callback = mock_connect.call_args_list[-1][0][1]
     return task, callback
 
 
