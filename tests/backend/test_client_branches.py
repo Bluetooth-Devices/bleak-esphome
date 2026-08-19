@@ -321,6 +321,30 @@ async def test_adopting_a_different_mtu_drops_cached_services(
 
 
 @pytest.mark.asyncio
+async def test_adopting_an_mtu_with_none_cached_drops_cached_services(
+    client_data: ESPHomeClientData,
+) -> None:
+    """
+    A services entry with no known MTU is dropped, not served.
+
+    The two LRUs in ``ESPHomeBluetoothCache`` evict independently, so a
+    services entry can outlive its MTU entry. Nothing then vouches for
+    the size that collection was built with, so drop it.
+    """
+    client = _make_client(client_data)
+    assert client._mtu is None
+    client._cache.set_gatt_services_cache(
+        client._address_as_int, BleakGATTServiceCollection()
+    )
+    fut: asyncio.Future[bool] = client._loop.create_future()
+    client._on_bluetooth_connection_state(
+        fut, has_cache=False, connected=True, mtu=23, error=0
+    )
+    assert fut.result() is True
+    assert client._cache.get_gatt_services_cache(client._address_as_int) is None
+
+
+@pytest.mark.asyncio
 async def test_adopting_the_same_mtu_keeps_cached_services(
     client_data: ESPHomeClientData,
 ) -> None:

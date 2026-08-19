@@ -400,10 +400,13 @@ class ESPHomeClient(BaseBleakClient):
             # closing it needs the firmware to report the MTU after
             # ESP_GATTC_CFG_MTU_EVT rather than at ESP_GATTC_OPEN_EVT.
             if not has_cache:
-                if self._mtu is not None and self._mtu != mtu:
+                if self._mtu != mtu:
                     # A cached service collection closed over the old MTU
                     # in ``get_max_write_without_response``; drop it so the
                     # next ``_get_services()`` rebuilds against this link.
+                    # Also drop it when no MTU is known (the two LRUs evict
+                    # independently), since nothing then vouches for the
+                    # size that collection was built with.
                     self._cache.clear_gatt_services_cache(self._address_as_int)
                 self._mtu = mtu
                 self._cache.set_gatt_mtu_cache(self._address_as_int, mtu)
