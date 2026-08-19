@@ -216,10 +216,15 @@ class ESPHomeClient(BaseBleakClient):
         self._async_ble_device_disconnected()
 
     def _async_call_bleak_disconnected_callback(self) -> None:
-        """Call the disconnected callback to inform the bleak consumer."""
+        """
+        Call the disconnected callback to inform the bleak consumer.
+
+        The callback persists for the client's next connection and fires
+        on every link down of a connection that came up, matching the
+        bluez backend.
+        """
         if self._disconnected_callback:
             self._disconnected_callback()
-            self._disconnected_callback = None
 
     def _raise_if_spurious_cancellation(self) -> None:
         """
@@ -288,7 +293,7 @@ class ESPHomeClient(BaseBleakClient):
                 exc_info=True,
             )
         # No consumer notification: an abandoned attempt must not fire
-        # (and null) ``disconnected_callback``.
+        # ``disconnected_callback`` for a client the consumer never got.
         self._async_disconnected_cleanup()
         return sent
 
@@ -523,6 +528,12 @@ class ESPHomeClient(BaseBleakClient):
             # No settle on cancels and signals; still release.
             self._abandon_connect_attempt()
             raise
+        if not self._is_connected:
+            # The link dropped during setup but service discovery still
+            # resolved; hand over nothing. No settle: the drop already
+            # ran cleanup, so nothing was released.
+            self._abandon_connect_attempt()
+            raise BleakError(f"{self._description}: Disconnected during connect setup")
 
     @api_error_as_bleak_error
     async def disconnect(self) -> None:
