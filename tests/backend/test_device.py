@@ -241,6 +241,12 @@ async def test_update_isolates_raising_subscriber(
     # The report itself still landed.
     assert bluetooth_device.ble_connections_free == 1
     assert "Error pushing allocations" in caplog.text
+    # The failed push keeps the first snapshot forced push armed: an
+    # identical update retries once the subscriber heals.
+    pushed: list[Allocations] = []
+    bluetooth_device._connection_slots_callback = pushed.append
+    bluetooth_device.async_update_ble_connection_limits(1, 3, [42])
+    assert len(pushed) == 1
 
 
 @pytest.mark.asyncio

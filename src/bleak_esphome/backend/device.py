@@ -122,10 +122,10 @@ class ESPHomeBluetoothDevice:
 
     def _async_publish_allocations(
         self, limit: int, free: int, allocated: list[str]
-    ) -> None:
-        """Push an allocation snapshot to the subscriber, guarded."""
+    ) -> bool:
+        """Push an allocation snapshot to the subscriber; True if it landed."""
         if (connection_slots_callback := self._connection_slots_callback) is None:
-            return
+            return False
         try:
             connection_slots_callback(
                 Allocations(self.mac_address, limit, free, allocated)
@@ -138,6 +138,8 @@ class ESPHomeBluetoothDevice:
                 self.name,
                 self.mac_address,
             )
+            return False
+        return True
 
     def async_update_ble_connection_limits(
         self, free: int, limit: int, allocated: list[int]
@@ -176,13 +178,14 @@ class ESPHomeBluetoothDevice:
         # published allocation snapshot and the clients' connected state
         # are always consistent with each other.
         self._async_reconcile_connections()
-        if (changed or not self._called_callback) and self._connection_slots_callback:
+        if (changed or not self._called_callback) and self._async_publish_allocations(
+            limit,
+            free,
+            [int_to_bluetooth_address(address) for address in allocated],
+        ):
+            # Committed only when the push landed, so a raising
+            # subscriber keeps the first snapshot forced-push armed.
             self._called_callback = True
-            self._async_publish_allocations(
-                limit,
-                free,
-                [int_to_bluetooth_address(address) for address in allocated],
-            )
 
     def _async_reconcile_connections(self) -> None:
         """

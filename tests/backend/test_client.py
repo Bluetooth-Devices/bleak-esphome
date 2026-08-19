@@ -658,7 +658,7 @@ async def test_bleak_client_connect_settle_runs_with_scanning_resumed(
     bleak_client, client = bleak_pair
     scanning_during_settle: list[bool] = []
 
-    async def _record_scanning(context: str) -> None:
+    async def _record_scanning(*args: Any, **kwargs: Any) -> None:
         scanning_during_settle.append(client._scanner.scanning)
 
     with (
