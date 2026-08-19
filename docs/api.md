@@ -5,8 +5,10 @@ names exported from the top-level package. For how these pieces fit together,
 see [the architecture overview](architecture.md); for task-oriented examples,
 see [usage](usage.md).
 
-Everything documented here is re-exported from `bleak_esphome` directly, so the
-import you write in application code is, for example:
+Everything documented here is re-exported from `bleak_esphome` directly (the
+one exception, `async_set_unavailable`, is reached through
+`client_data.bluetooth_device`), so the import you write in application code
+is, for example:
 
 ```python
 from bleak_esphome import APIConnectionManager, ESPHomeDeviceConfig
@@ -40,9 +42,12 @@ on disconnect, disconnect callbacks, manager registration) up to you — read
 the docstring carefully before reaching for it.
 
 ```{eval-rst}
-.. automethod:: bleak_esphome.backend.device.ESPHomeBluetoothDevice.async_set_unavailable
+.. autofunction:: bleak_esphome.connect_scanner
 ```
 
+`async_set_unavailable` lives on the `ESPHomeBluetoothDevice` returned in
+`client_data.bluetooth_device`; it is not a top-level export.
+
 ```{eval-rst}
-.. autofunction:: bleak_esphome.connect_scanner
+.. automethod:: bleak_esphome.backend.device.ESPHomeBluetoothDevice.async_set_unavailable
 ```
