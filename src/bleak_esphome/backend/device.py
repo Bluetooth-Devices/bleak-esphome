@@ -97,7 +97,8 @@ class ESPHomeBluetoothDevice:
         clears when the proxy reports slot state again via
         ``async_update_ble_connection_limits``; ``available`` is not
         restored by that, so a caller reusing this device must set it
-        back to ``True`` on reconnect.
+        back to ``True`` on reconnect, which also disarms the fail fast
+        immediately.
         """
         self.available = False
         # Distinct from ``available``, which defaults to False before the
@@ -277,10 +278,11 @@ class ESPHomeBluetoothDevice:
                 while waiting (see ``async_set_unavailable``).
 
         """
-        if self._unavailable:
+        if self._unavailable and not self.available:
             # Fail fast for waiters arriving after the proxy went away;
             # they would otherwise park the full timeout on a proxy that
-            # is provably dead.
+            # is provably dead. A caller that restored ``available`` on
+            # reconnect disarms this even before the first slot report.
             raise TimeoutError(self._unavailable_message())
         if self.ble_connections_free > 0:
             return self.ble_connections_free

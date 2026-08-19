@@ -238,6 +238,26 @@ async def test_slot_update_clears_the_unavailability_latch(
 
 
 @pytest.mark.asyncio
+async def test_restoring_available_disarms_the_fail_fast(
+    bluetooth_device: ESPHomeBluetoothDevice,
+) -> None:
+    """
+    A reuser restoring ``available`` disarms the fail fast immediately.
+
+    The latch itself only clears on the next slot report, but a caller
+    that marked the device available again must not have its waiters
+    failed by the stale latch in the meantime.
+    """
+    bluetooth_device.async_set_unavailable()
+    bluetooth_device.available = True
+    task = asyncio.create_task(bluetooth_device.wait_for_ble_connections_free(60.0))
+    await asyncio.sleep(0)
+    assert not task.done()
+    bluetooth_device.async_update_ble_connection_limits(1, 3, [42])
+    assert await task == 1
+
+
+@pytest.mark.asyncio
 async def test_saturated_slot_update_clears_the_unavailability_latch(
     bluetooth_device: ESPHomeBluetoothDevice,
 ) -> None:

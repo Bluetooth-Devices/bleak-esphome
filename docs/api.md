@@ -35,8 +35,9 @@ Bluetooth proxy: hand it a device config, `await start()`, and it owns the
 `connect_scanner` is for advanced callers that manage their own `APIClient`
 lifecycle. It wires an `aioesphomeapi.APIClient` to an `ESPHomeScanner` +
 `ESPHomeClient` and returns the assembled `ESPHomeClientData`, but leaves the
-three caller responsibilities (scanner setup, disconnect callbacks, manager
-registration) up to you — read the docstring carefully before reaching for it.
+four caller responsibilities (scanner setup, marking the device unavailable
+on disconnect, disconnect callbacks, manager registration) up to you — read
+the docstring carefully before reaching for it.
 
 ```{eval-rst}
 .. autofunction:: bleak_esphome.connect_scanner
