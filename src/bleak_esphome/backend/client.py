@@ -396,18 +396,10 @@ class ESPHomeClient(BaseBleakClient):
             # one. ``has_cache`` already requires a cached MTU, so that is
             # what is kept -- not because it is known to match this link,
             # but because it is the only value on offer. The cached path
-            # therefore retains the same class of staleness fixed below;
+            # therefore keeps the same class of staleness this fixes;
             # closing it needs the firmware to report the MTU after
             # ESP_GATTC_CFG_MTU_EVT rather than at ESP_GATTC_OPEN_EVT.
             if not has_cache:
-                if self._mtu != mtu:
-                    # A cached service collection closed over the old MTU
-                    # in ``get_max_write_without_response``; drop it so the
-                    # next ``_get_services()`` rebuilds against this link.
-                    # Also drop it when no MTU is known (the two LRUs evict
-                    # independently), since nothing then vouches for the
-                    # size that collection was built with.
-                    self._cache.clear_gatt_services_cache(self._address_as_int)
                 self._mtu = mtu
                 self._cache.set_gatt_mtu_cache(self._address_as_int, mtu)
 
@@ -666,10 +658,17 @@ class ESPHomeClient(BaseBleakClient):
             address_as_int
         )
         _LOGGER.debug("%s: Got services: %s", self._description, esphome_services)
-        max_write_without_response = self.mtu_size - GATT_HEADER_SIZE
 
+        # The collection is cached and shared between links (and proxies),
+        # but the ATT MTU is negotiated per link. Read it from the shared
+        # cache at call time instead of freezing the size in at build time,
+        # so a cache hit on a later link reports what *that* link can carry.
+        # If the MTU entry has been evicted (the two LRUs evict
+        # independently) nothing vouches for a larger size, so fall back to
+        # the conservative default.
         def get_max_write_without_response() -> int:
-            return max_write_without_response
+            mtu = cache.get_gatt_mtu_cache(address_as_int) or DEFAULT_MTU
+            return mtu - GATT_HEADER_SIZE
 
         services = BleakGATTServiceCollection()
         for service in esphome_services.services:

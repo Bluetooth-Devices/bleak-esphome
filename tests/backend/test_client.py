@@ -21,6 +21,7 @@ from habluetooth import BaseHaRemoteScanner, HaBluetoothConnector
 
 from bleak_esphome.backend.client import (
     CONNECT_FREE_SLOT_TIMEOUT,
+    DEFAULT_MTU,
     GATT_HEADER_SIZE,
     ESPHomeClient,
     ESPHomeClientData,
@@ -2129,11 +2130,12 @@ async def test_reconnect_at_lower_mtu_shrinks_max_write_without_response(
 
     Walks the whole chain the fix exists for: services are discovered and
     cached on a link that negotiated 517, the next link reports 23, and
-    the rebuilt collection must hand out ``23 - GATT_HEADER_SIZE`` rather
+    the cached collection must hand out ``23 - GATT_HEADER_SIZE`` rather
     than a size the new link cannot carry.
     """
     client = connected_client
     client._mtu = 517
+    client._cache.set_gatt_mtu_cache(client._address_as_int, 517)
     services = await fetch_services(client, esphome_bluetooth_gatt_services)
     assert client._cache.get_gatt_services_cache(client._address_as_int) is services
 
@@ -2144,11 +2146,35 @@ async def test_reconnect_at_lower_mtu_shrinks_max_write_without_response(
     )
     assert fut.result() is True
 
-    # ``dangerous_use_bleak_cache`` would serve the stale collection if the
-    # adoption had not invalidated it.
-    services = await fetch_services(
+    # The cached collection is still served, and reports the new size.
+    cached = await fetch_services(
         client, esphome_bluetooth_gatt_services, dangerous_use_bleak_cache=True
     )
+    assert cached is services
+    chars = [
+        char for service in cached.services.values() for char in service.characteristics
+    ]
+    assert chars, "fixture must expose at least one characteristic"
+    for char in chars:
+        assert char.max_write_without_response_size == 23 - GATT_HEADER_SIZE
+
+
+@pytest.mark.asyncio
+async def test_max_write_without_response_falls_back_when_mtu_evicted(
+    connected_client: ESPHomeClient,
+    esphome_bluetooth_gatt_services: ESPHomeBluetoothGATTServices,
+) -> None:
+    """
+    An evicted MTU entry falls back to the conservative default.
+
+    The services and MTU LRUs evict independently, so a cached collection
+    can outlive the MTU it was built against.
+    """
+    client = connected_client
+    client._mtu = 517
+    client._cache.set_gatt_mtu_cache(client._address_as_int, 517)
+    services = await fetch_services(client, esphome_bluetooth_gatt_services)
+    client._cache.clear_gatt_mtu_cache(client._address_as_int)
     chars = [
         char
         for service in services.services.values()
@@ -2156,4 +2182,4 @@ async def test_reconnect_at_lower_mtu_shrinks_max_write_without_response(
     ]
     assert chars, "fixture must expose at least one characteristic"
     for char in chars:
-        assert char.max_write_without_response_size == 23 - GATT_HEADER_SIZE
+        assert char.max_write_without_response_size == DEFAULT_MTU - GATT_HEADER_SIZE

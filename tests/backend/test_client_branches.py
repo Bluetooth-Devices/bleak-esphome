@@ -297,65 +297,24 @@ async def test_on_bluetooth_connection_state_adopts_current_link_mtu(
 
 
 @pytest.mark.asyncio
-async def test_adopting_a_different_mtu_drops_cached_services(
+async def test_adopting_a_different_mtu_keeps_cached_services(
     client_data: ESPHomeClientData,
 ) -> None:
     """
-    A changed MTU invalidates the cached service collection.
+    A changed MTU leaves the cached service collection in place.
 
-    ``_get_services()`` bakes ``max_write_without_response`` into a
-    closure at build time and caches the whole collection, so a cache hit
-    on a link with a different MTU would keep handing out the old value.
+    The services themselves stay valid across an MTU change; only the
+    derived ``max_write_without_response`` moves, and that is read from
+    the shared MTU cache at call time rather than baked into the
+    collection.
     """
-    client = _make_client(client_data)
-    client._mtu = 517
-    client._cache.set_gatt_services_cache(
-        client._address_as_int, BleakGATTServiceCollection()
-    )
-    fut: asyncio.Future[bool] = client._loop.create_future()
-    client._on_bluetooth_connection_state(
-        fut, has_cache=False, connected=True, mtu=23, error=0
-    )
-    assert fut.result() is True
-    assert client._cache.get_gatt_services_cache(client._address_as_int) is None
-
-
-@pytest.mark.asyncio
-async def test_adopting_an_mtu_with_none_cached_drops_cached_services(
-    client_data: ESPHomeClientData,
-) -> None:
-    """
-    A services entry with no known MTU is dropped, not served.
-
-    The two LRUs in ``ESPHomeBluetoothCache`` evict independently, so a
-    services entry can outlive its MTU entry. Nothing then vouches for
-    the size that collection was built with, so drop it.
-    """
-    client = _make_client(client_data)
-    assert client._mtu is None
-    client._cache.set_gatt_services_cache(
-        client._address_as_int, BleakGATTServiceCollection()
-    )
-    fut: asyncio.Future[bool] = client._loop.create_future()
-    client._on_bluetooth_connection_state(
-        fut, has_cache=False, connected=True, mtu=23, error=0
-    )
-    assert fut.result() is True
-    assert client._cache.get_gatt_services_cache(client._address_as_int) is None
-
-
-@pytest.mark.asyncio
-async def test_adopting_the_same_mtu_keeps_cached_services(
-    client_data: ESPHomeClientData,
-) -> None:
-    """An unchanged MTU leaves the cached service collection in place."""
     client = _make_client(client_data)
     client._mtu = 517
     services = BleakGATTServiceCollection()
     client._cache.set_gatt_services_cache(client._address_as_int, services)
     fut: asyncio.Future[bool] = client._loop.create_future()
     client._on_bluetooth_connection_state(
-        fut, has_cache=False, connected=True, mtu=517, error=0
+        fut, has_cache=False, connected=True, mtu=23, error=0
     )
     assert fut.result() is True
     assert client._cache.get_gatt_services_cache(client._address_as_int) is services
