@@ -116,7 +116,7 @@ class ESPHomeBluetoothDevice:
         # restores ``available`` must not have connects gated (or slot
         # waits satisfied) by the dead session's count. ``limit`` keeps
         # the last reported capacity for allocation consumers.
-        had_allocations = bool(self.ble_allocations)
+        had_state = bool(self.ble_allocations) or bool(self.ble_connections_free)
         self.ble_allocations = []
         self.ble_connections_free = 0
         message = self._unavailable_message()
@@ -126,9 +126,7 @@ class ESPHomeBluetoothDevice:
             if not fut.done():
                 fut.set_exception(TimeoutError(message))
         self._ble_connection_free_futures.clear()
-        if had_allocations and (
-            connection_slots_callback := self._connection_slots_callback
-        ):
+        if had_state and (connection_slots_callback := self._connection_slots_callback):
             # Push the cleared snapshot after the primary contract is
             # done so a raising subscriber cannot strand the waiters;
             # guarded because it ends in consumer supplied code.

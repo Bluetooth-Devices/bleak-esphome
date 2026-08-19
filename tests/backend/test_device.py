@@ -228,6 +228,26 @@ async def test_set_unavailable_fails_pending_slot_waiters(
 
 
 @pytest.mark.asyncio
+async def test_set_unavailable_publishes_zeroed_free_for_idle_proxy(
+    bluetooth_device: ESPHomeBluetoothDevice,
+) -> None:
+    """
+    An idle proxy dying still publishes its zeroed free count.
+
+    With no allocations to clear, the free count is the only cleared
+    fact; the push must still fire so the subscriber's cached snapshot
+    does not keep advertising free slots on a dead proxy.
+    """
+    bluetooth_device.available = True
+    bluetooth_device.async_update_ble_connection_limits(3, 3, [])
+    pushed: list[Allocations] = []
+    bluetooth_device.async_subscribe_connection_slots(pushed.append)
+    bluetooth_device.async_set_unavailable()
+    assert pushed[-1].free == 0
+    assert pushed[-1].allocated == []
+
+
+@pytest.mark.asyncio
 async def test_set_unavailable_raising_subscriber_does_not_strand_waiters(
     bluetooth_device: ESPHomeBluetoothDevice,
     caplog: pytest.LogCaptureFixture,
