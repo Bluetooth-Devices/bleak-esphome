@@ -204,6 +204,12 @@ async def test_set_unavailable_fails_pending_slot_waiters(
 ) -> None:
     """A parked slot waiter fails fast when the proxy goes unavailable."""
     bluetooth_device.available = True
+    # Seed real session state so the clearing assertions below are not
+    # satisfied vacuously by the fixture's empty defaults; free stays
+    # zero so the waiter parks.
+    bluetooth_device.async_update_ble_connection_limits(0, 2, [42, 43])
+    pushed: list[Allocations] = []
+    bluetooth_device.async_subscribe_connection_slots(pushed.append)
     task = asyncio.create_task(bluetooth_device.wait_for_ble_connections_free(60.0))
     await asyncio.sleep(0)
     assert not task.done()
@@ -212,8 +218,11 @@ async def test_set_unavailable_fails_pending_slot_waiters(
         await task
     assert bluetooth_device.available is False
     assert bluetooth_device._ble_connection_free_futures == set()
-    # The dead session's allocated list must not survive into a reuse.
+    # The dead session's allocated list must not survive into a reuse,
+    # and the cleared snapshot is pushed so the subscriber's stored copy
+    # does not keep the stale addresses either.
     assert bluetooth_device.ble_allocations == []
+    assert pushed[-1].allocated == []
 
 
 @pytest.mark.asyncio

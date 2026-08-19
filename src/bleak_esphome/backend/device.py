@@ -110,7 +110,22 @@ class ESPHomeBluetoothDevice:
         # are the cross proxy duplicate symptom this work exists to kill.
         # The free and limit counters stay, zeroing free would turn the
         # public disconnect() slot wait into an immediate TimeoutError.
+        had_allocations = bool(self.ble_allocations)
         self.ble_allocations = []
+        if had_allocations and (
+            connection_slots_callback := self._connection_slots_callback
+        ):
+            # Push the cleared snapshot so the subscriber's stored copy
+            # (habluetooth's allocations map) does not keep rendering the
+            # dead session's addresses either.
+            connection_slots_callback(
+                Allocations(
+                    self.mac_address,
+                    self.ble_connections_limit,
+                    self.ble_connections_free,
+                    [],
+                )
+            )
         message = self._unavailable_message()
         for fut in self._ble_connection_free_futures:
             # Skip futures already done (a cancelled waiter leaves its
