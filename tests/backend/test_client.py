@@ -601,7 +601,7 @@ async def test_bleak_client_connect_cancel_racing_link_up_then_drop(
 
     The abandoned attempt never handed the connection to the caller, so
     a ``connected=False`` racing in before the task resumes must not
-    fire (or null) the consumer's disconnected_callback, and the
+    fire the consumer's disconnected_callback, and the
     abandonment has nothing left to release because the ESP already
     dropped the link.
     """
@@ -822,7 +822,7 @@ async def test_bleak_client_abandoned_attempt_preserves_disconnected_callback(
         return Mock()
 
     with (
-        patch_connect_rpcs(client) as (mock_connect, _mock_disconnect),
+        patch_connect_rpcs(client) as (mock_connect, mock_disconnect),
         patch.object(
             client._client,
             "bluetooth_gatt_get_services",
@@ -864,6 +864,9 @@ async def test_bleak_client_abandoned_attempt_preserves_disconnected_callback(
                 await task
             assert disconnected_callback.call_count == (1 if drop_notifies else 0)
             assert client._disconnected_callback is disconnected_callback
+            if drop_notifies:
+                # The drop already ran cleanup, so nothing is released.
+                mock_disconnect.assert_not_called()
 
         # Attempt 2 succeeds on the same instance.
         task, callback = await start_connect(bleak_client, mock_connect)
