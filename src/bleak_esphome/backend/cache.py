@@ -53,3 +53,18 @@ class ESPHomeBluetoothCache:
     def clear_gatt_mtu_cache(self, address: int) -> None:
         """Clear the mtu cache for the given address."""
         self._gatt_mtu_cache.pop(address, None)
+
+    def get_gatt_mtu_cache_map(self) -> MutableMapping[int, int]:
+        """
+        Return the live address-to-MTU mapping backing the MTU cache.
+
+        For callers that must read a current MTU from an object whose
+        lifetime the cache controls -- the cached
+        ``BleakGATTServiceCollection`` and its characteristics. Holding
+        the cache itself there would make the services LRU reference the
+        collection and the collection reference the cache back, and the
+        LRU does not participate in garbage collection, so the resulting
+        cycle would never be collected. This mapping references nothing
+        back, so the cycle does not form.
+        """
+        return self._gatt_mtu_cache

@@ -1,7 +1,9 @@
 import asyncio
 import contextlib
+import gc
 import inspect
 import logging
+import weakref
 from typing import Any
 from unittest.mock import AsyncMock, Mock, patch
 from uuid import UUID
@@ -9,6 +11,7 @@ from uuid import UUID
 import pytest
 from aioesphomeapi import (
     APIConnectionError,
+    BluetoothDeviceClearCache,
     BluetoothDevicePairing,
     BluetoothDeviceUnpairing,
     BluetoothProxyFeature,
@@ -19,6 +22,7 @@ from bleak.backends.characteristic import BleakGATTCharacteristic
 from bleak.exc import BleakError
 from habluetooth import BaseHaRemoteScanner, HaBluetoothConnector
 
+from bleak_esphome.backend.cache import ESPHomeBluetoothCache
 from bleak_esphome.backend.client import (
     CONNECT_FREE_SLOT_TIMEOUT,
     GATT_HEADER_SIZE,
@@ -30,6 +34,7 @@ from bleak_esphome.backend.scanner import ESPHomeScanner
 from ._helpers import (
     ESP_MAC_ADDRESS,
     ESP_NAME,
+    _make_client,
     fetch_services,
     make_bleak_client,
     patch_connect_rpcs,
@@ -2203,8 +2208,16 @@ async def test_clear_cache_rebuild_keeps_current_link_write_size(
     client._mtu = 517
     client._cache.set_gatt_mtu_cache(client._address_as_int, 517)
     await fetch_services(client, esphome_bluetooth_gatt_services)
-    client._cache.clear_gatt_services_cache(client._address_as_int)
-    client._cache.clear_gatt_mtu_cache(client._address_as_int)
+    with patch.object(
+        client._client,
+        "bluetooth_device_clear_cache",
+        return_value=BluetoothDeviceClearCache(
+            address=client._address_as_int, success=True, error=0
+        ),
+    ):
+        assert await client.clear_cache() is True
+    assert client._cache.get_gatt_services_cache(client._address_as_int) is None
+    assert client._cache.get_gatt_mtu_cache(client._address_as_int) is None
     rebuilt = await fetch_services(client, esphome_bluetooth_gatt_services)
     chars = [
         char
@@ -2214,3 +2227,33 @@ async def test_clear_cache_rebuild_keeps_current_link_write_size(
     assert chars, "fixture must expose at least one characteristic"
     for char in chars:
         assert char.max_write_without_response_size == 517 - GATT_HEADER_SIZE
+
+
+@pytest.mark.asyncio
+async def test_cached_services_do_not_leak_the_cache(
+    client_data: ESPHomeClientData,
+    esphome_bluetooth_gatt_services: ESPHomeBluetoothGATTServices,
+) -> None:
+    """
+    A cached collection does not strand its cache once both are dropped.
+
+    The services LRU owns the collection, and the collection's
+    characteristics hold the callable that reads the current MTU. If that
+    callable held the cache, the cycle would run back through the LRU,
+    which does not participate in garbage collection, so neither object
+    would ever be freed.
+    """
+    client = _make_client(client_data)
+    client._is_connected = True
+    cache = ESPHomeBluetoothCache()
+    client._cache = cache
+    services = await fetch_services(client, esphome_bluetooth_gatt_services)
+    assert cache.get_gatt_services_cache(client._address_as_int) is services
+    cache_ref = weakref.ref(cache)
+    services_ref = weakref.ref(services)
+
+    del client, cache, services
+    gc.collect()
+
+    assert cache_ref() is None
+    assert services_ref() is None

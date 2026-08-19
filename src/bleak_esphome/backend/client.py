@@ -676,10 +676,16 @@ class ESPHomeClient(BaseBleakClient):
         # per-client -- it is public Bleak API and must describe the link
         # that client holds -- so the two are not unified here. Making them
         # agree needs a per-link key, which is a cache-shape change.
+        #
+        # The closure holds the MTU mapping rather than the cache itself:
+        # the cache owns the collection built here, so capturing the cache
+        # would close a reference cycle through the services LRU, which
+        # does not participate in garbage collection.
+        mtu_cache = cache.get_gatt_mtu_cache_map()
         built_mtu = self.mtu_size
 
         def get_max_write_without_response() -> int:
-            mtu = cache.get_gatt_mtu_cache(address_as_int) or built_mtu
+            mtu = mtu_cache.get(address_as_int) or built_mtu
             return mtu - GATT_HEADER_SIZE
 
         services = BleakGATTServiceCollection()

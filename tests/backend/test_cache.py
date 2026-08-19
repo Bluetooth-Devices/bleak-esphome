@@ -118,3 +118,13 @@ def test_distinct_instances_have_isolated_state() -> None:
     cache_a.set_gatt_mtu_cache(1, 247)
     assert cache_b.get_gatt_services_cache(1) is None
     assert cache_b.get_gatt_mtu_cache(1) is None
+
+
+def test_get_gatt_mtu_cache_map_is_a_live_view() -> None:
+    """The mapping accessor exposes the backing store, not a copy."""
+    cache = ESPHomeBluetoothCache()
+    mapping = cache.get_gatt_mtu_cache_map()
+    cache.set_gatt_mtu_cache(1, 247)
+    assert mapping.get(1) == 247
+    cache.clear_gatt_mtu_cache(1)
+    assert mapping.get(1) is None
