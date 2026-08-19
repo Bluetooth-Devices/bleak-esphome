@@ -262,3 +262,28 @@ cancellation_ section in {ref}`usage` for the catch pattern.
 If you _do_ see `CancelledError` from `start()`, your awaiting task was
 cancelled from somewhere else — `bleak-esphome` re-raises in that case so
 the cancellation propagates correctly.
+
+## A peripheral keeps notifying after `start_notify()` failed or was cancelled
+
+Enabling notifications is two round trips: the subscribe itself, then (on
+`REMOTE_CACHING` firmware) the CCCD write. Either leg can fail or be
+cancelled — a `BleakClient.start_notify()` wrapped in `asyncio.timeout()`,
+or a task cancelled during setup — after the proxy already enabled the
+subscription on the peripheral.
+
+`bleak-esphome` sends the disable on both legs, so the peripheral stops
+notifying. If you still see notification traffic for a characteristic you
+never successfully subscribed to, the disable did not reach the proxy;
+check the proxy's logs for a dropped API connection around the failed
+attempt.
+
+One case is not covered: when the subscribe leg is **cancelled**, the
+notification message handler `aioesphomeapi` registers on the proxy
+connection stays registered, because it unwinds that handler only on
+`Exception` and it is not yet tracked where the disable would remove it
+from. The peripheral is silenced, but a later successful subscribe on the
+same handle also delivers to the abandoned attempt's callback. Fixing that
+half requires a change in `aioesphomeapi`.
+
+Note that `stop_notify()` cannot clean this up for you: it is a no-op for a
+handle that was never successfully subscribed, matching the BlueZ backend.
