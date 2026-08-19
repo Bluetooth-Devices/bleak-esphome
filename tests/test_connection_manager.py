@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 import pytest
 import pytest_asyncio
 
+from bleak_esphome.backend.device import ESPHomeBluetoothDevice
 from bleak_esphome.connection_manager import (
     APIConnectionManager,
     ESPHomeDeviceConfig,
@@ -309,7 +310,7 @@ async def test_on_disconnect_marks_bluetooth_device_unavailable(
     The connector's ``can_connect`` gate reads ``available``; leaving it
     set would keep offering a proxy whose API connection is gone.
     """
-    bluetooth_device = Mock(available=True)
+    bluetooth_device = Mock(spec=ESPHomeBluetoothDevice, available=True)
     conn_manager._bluetooth_device = bluetooth_device
 
     await conn_manager._on_disconnect(expected_disconnect=False)
@@ -376,7 +377,7 @@ async def test_stop_tears_down_session_state(
     callback = Mock()
     callbacks: set[Callable[[], None]] = {callback}
     manager._disconnect_callbacks = callbacks
-    bluetooth_device = Mock(available=True)
+    bluetooth_device = Mock(spec=ESPHomeBluetoothDevice, available=True)
     manager._bluetooth_device = bluetooth_device
 
     await manager.stop()
@@ -388,6 +389,29 @@ async def test_stop_tears_down_session_state(
     assert cast("set[Callable[[], None]] | None", manager._disconnect_callbacks) is None
     bluetooth_device.async_set_unavailable.assert_called_once_with()
     assert manager._bluetooth_device is None
+
+
+@pytest.mark.asyncio
+async def test_on_disconnect_fails_parked_slot_waiter_end_to_end(
+    conn_manager: APIConnectionManager,
+) -> None:
+    """
+    A real parked slot waiter fails fast when the manager tears down.
+
+    Uses a real ``ESPHomeBluetoothDevice`` rather than a mock so the
+    manager to device wiring is proven end to end.
+    """
+    device = ESPHomeBluetoothDevice("proxy", "AA:BB:CC:DD:EE:FF", available=True)
+    conn_manager._bluetooth_device = device
+    task = asyncio.create_task(device.wait_for_ble_connections_free(60.0))
+    await asyncio.sleep(0)
+    assert not task.done()
+
+    await conn_manager._on_disconnect(expected_disconnect=False)
+
+    with pytest.raises(TimeoutError, match="Proxy became unavailable"):
+        await task
+    assert device.available is False
 
 
 @pytest.mark.asyncio
@@ -443,7 +467,7 @@ async def test_stop_marks_unavailable_first_and_tears_down_on_error(
     even if a shutdown await raises.
     """
     manager, mock_reconnect_logic, mock_disconnect = conn_manager_with_mocked_reconnect
-    bluetooth_device = Mock(available=True)
+    bluetooth_device = Mock(spec=ESPHomeBluetoothDevice, available=True)
     manager._bluetooth_device = bluetooth_device
     unregister = Mock()
     manager._unregister_scanner = unregister
@@ -508,7 +532,7 @@ async def test_stop_after_disconnect_does_not_refire_callbacks(
     manager, _, _ = conn_manager_with_mocked_reconnect
     callback = Mock()
     manager._disconnect_callbacks = {callback}
-    bluetooth_device = Mock(available=True)
+    bluetooth_device = Mock(spec=ESPHomeBluetoothDevice, available=True)
     manager._bluetooth_device = bluetooth_device
 
     await manager._on_disconnect(expected_disconnect=True)

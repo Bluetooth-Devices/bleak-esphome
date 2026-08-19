@@ -40,5 +40,9 @@ on disconnect, disconnect callbacks, manager registration) up to you — read
 the docstring carefully before reaching for it.
 
 ```{eval-rst}
+.. automethod:: bleak_esphome.backend.device.ESPHomeBluetoothDevice.async_set_unavailable
+```
+
+```{eval-rst}
 .. autofunction:: bleak_esphome.connect_scanner
 ```

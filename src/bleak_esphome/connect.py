@@ -44,13 +44,13 @@ def connect_scanner(
     The caller is responsible for:
 
     1. Calling ESPHomeClientData.scanner.async_setup()
-    2. Calling ESPHomeClientData.bluetooth_device.async_set_unavailable()
-       first when the ESP is disconnected, so the connector's can_connect
-       gate closes and slot waiters fail fast before anything else runs.
-    3. Calling ESPHomeClientData.disconnect_callbacks when the ESP is
-       disconnected.
-    4. Registering the scanner with the HA Bluetooth manager and also
+    2. Registering the scanner with the HA Bluetooth manager and also
        un-registering it when the ESP is disconnected.
+    3. Calling ESPHomeClientData.bluetooth_device.async_set_unavailable()
+       when the ESP is disconnected, before firing the callbacks, so the
+       connector's can_connect gate closes and slot waiters fail fast.
+    4. Calling ESPHomeClientData.disconnect_callbacks when the ESP is
+       disconnected.
 
     The caller may choose to override ESPHomeClientData.disconnect_callbacks
     with its own set. If it does so, it must do so before calling

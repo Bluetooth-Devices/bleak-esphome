@@ -105,6 +105,12 @@ class ESPHomeBluetoothDevice:
         # first connect; only an explicit unavailability marks the proxy
         # dead for the wait entry guard below.
         self._unavailable = True
+        # The dead session's allocated list must not survive into a
+        # reused device; stale addresses feeding scanner.get_allocations
+        # are the cross proxy duplicate symptom this work exists to kill.
+        # The free and limit counters stay, zeroing free would turn the
+        # public disconnect() slot wait into an immediate TimeoutError.
+        self.ble_allocations = []
         message = self._unavailable_message()
         for fut in self._ble_connection_free_futures:
             # Skip futures already done (a cancelled waiter leaves its

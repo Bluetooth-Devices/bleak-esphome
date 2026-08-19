@@ -212,6 +212,8 @@ async def test_set_unavailable_fails_pending_slot_waiters(
         await task
     assert bluetooth_device.available is False
     assert bluetooth_device._ble_connection_free_futures == set()
+    # The dead session's allocated list must not survive into a reuse.
+    assert bluetooth_device.ble_allocations == []
 
 
 @pytest.mark.asyncio
