@@ -218,11 +218,13 @@ async def test_set_unavailable_fails_pending_slot_waiters(
         await task
     assert bluetooth_device.available is False
     assert bluetooth_device._ble_connection_free_futures == set()
-    # The dead session's allocated list must not survive into a reuse,
-    # and the cleared snapshot is pushed so the subscriber's stored copy
-    # does not keep the stale addresses either.
+    # The dead session's allocated list and free count must not survive
+    # into a reuse, and the cleared snapshot is pushed so the
+    # subscriber's stored copy does not keep the stale state either.
     assert bluetooth_device.ble_allocations == []
+    assert bluetooth_device.ble_connections_free == 0
     assert pushed[-1].allocated == []
+    assert pushed[-1].free == 0
 
 
 @pytest.mark.asyncio
@@ -276,6 +278,31 @@ async def test_slot_update_clears_the_unavailability_latch(
         await bluetooth_device.wait_for_ble_connections_free(60.0)
     bluetooth_device.async_update_ble_connection_limits(2, 3, [42])
     assert await bluetooth_device.wait_for_ble_connections_free(60.0) == 2
+
+
+@pytest.mark.asyncio
+async def test_reuse_after_unavailable_does_not_trust_stale_free_count(
+    bluetooth_device: ESPHomeBluetoothDevice,
+) -> None:
+    """
+    A reused device must not serve the dead session's free count.
+
+    ``async_set_unavailable`` zeroes ``ble_connections_free``, so a
+    caller that restores ``available`` on reconnect parks for the new
+    session's first slot report instead of getting an immediate return
+    from a count the dead session left behind.
+    """
+    bluetooth_device.available = True
+    bluetooth_device.async_update_ble_connection_limits(2, 3, [42])
+    bluetooth_device.async_set_unavailable()
+    assert bluetooth_device.ble_connections_free == 0
+    assert bluetooth_device.ble_connections_limit == 3
+    bluetooth_device.available = True
+    task = asyncio.create_task(bluetooth_device.wait_for_ble_connections_free(60.0))
+    await asyncio.sleep(0)
+    assert not task.done()
+    bluetooth_device.async_update_ble_connection_limits(1, 3, [43])
+    assert await task == 1
 
 
 @pytest.mark.asyncio

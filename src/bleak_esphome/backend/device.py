@@ -98,8 +98,10 @@ class ESPHomeBluetoothDevice:
         ``async_update_ble_connection_limits``; ``available`` is not
         restored by that, so a caller reusing this device must set it
         back to ``True`` on reconnect, which also disarms the fail fast
-        immediately. This method never raises, so teardown paths can
-        call it without guards.
+        immediately; the free count stays zero until the proxy's first
+        slot report, so the new session never trusts the dead session's
+        count. This method never raises, so teardown paths can call it
+        without guards.
         """
         self.available = False
         # Distinct from ``available``, which defaults to False before the
@@ -109,12 +111,14 @@ class ESPHomeBluetoothDevice:
         # The dead session's allocated list must not survive into a
         # reused device; stale addresses feeding scanner.get_allocations
         # are the cross proxy duplicate symptom this work exists to kill.
-        # The free and limit counters keep the last reported state:
-        # inventing counter values would lie to allocation consumers, and
-        # waits on an unavailable device are governed by the entry guard,
-        # not the free count.
+        # ``free`` is zeroed with it: a proxy whose API connection is
+        # gone provably has no usable slots, and a reusing caller that
+        # restores ``available`` must not have connects gated (or slot
+        # waits satisfied) by the dead session's count. ``limit`` keeps
+        # the last reported capacity for allocation consumers.
         had_allocations = bool(self.ble_allocations)
         self.ble_allocations = []
+        self.ble_connections_free = 0
         message = self._unavailable_message()
         for fut in self._ble_connection_free_futures:
             # Skip futures already done (a cancelled waiter leaves its

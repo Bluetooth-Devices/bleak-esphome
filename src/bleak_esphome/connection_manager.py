@@ -75,16 +75,24 @@ class APIConnectionManager:
         so connect attempts stop burning their timeout on a proxy whose
         API connection is gone.
         """
-        if self._bluetooth_device is not None:
-            self._bluetooth_device.async_set_unavailable()
+        if (bluetooth_device := self._bluetooth_device) is not None:
+            # Drop the reference first so a raising call cannot re-fire
+            # against the same dead device on the next teardown.
             self._bluetooth_device = None
+            bluetooth_device.async_set_unavailable()
 
     def _teardown_session(self) -> None:
         """Tear down the per-session client state and the scanner."""
         try:
             # async_set_unavailable never raises by contract; the guard
-            # keeps a future regression from skipping the rest anyway.
+            # keeps a future regression from skipping the rest anyway,
+            # and the log keeps the root cause visible if a later step
+            # in the finally chain also raises and replaces it as the
+            # propagating error.
             self._mark_unavailable()
+        except Exception:
+            _LOGGER.exception("%s: Error marking device unavailable", self._address)
+            raise
         finally:
             try:
                 if (disconnect_callbacks := self._disconnect_callbacks) is not None:
@@ -188,31 +196,43 @@ class APIConnectionManager:
 
     async def stop(self) -> None:
         """Stop the API connection."""
-        # Close the connect gate first so no new connection attempts are
-        # offered this proxy while its API connection is being torn down.
-        self._mark_unavailable()
         try:
-            if self._reconnect_logic is not None:
-                await self._reconnect_logic.stop()
+            # Close the connect gate first so no new connection attempts
+            # are offered this proxy while its API connection is being
+            # torn down. async_set_unavailable never raises by contract;
+            # the guard keeps a future regression from skipping the
+            # shutdown chain below, which would leave the reconnect task
+            # running and a pending start() blocked forever.
+            self._mark_unavailable()
         except Exception:
-            # A later shutdown step can replace this as the propagating
-            # error; log so the root cause is never lost. Cancellation
-            # passes through unlogged.
-            _LOGGER.exception("%s: Error stopping reconnect logic", self._address)
+            _LOGGER.exception("%s: Error marking device unavailable", self._address)
             raise
         finally:
-            # Each shutdown step runs even if the previous one raised;
-            # otherwise a failing reconnect stop would leave the API
-            # client connected and a pending start() blocked forever.
             try:
-                if self._cli is not None:
-                    await self._cli.disconnect()
+                if self._reconnect_logic is not None:
+                    await self._reconnect_logic.stop()
             except Exception:
-                _LOGGER.exception("%s: Error disconnecting API client", self._address)
+                # A later shutdown step can replace this as the propagating
+                # error; log so the root cause is never lost. Cancellation
+                # passes through unlogged.
+                _LOGGER.exception("%s: Error stopping reconnect logic", self._address)
                 raise
             finally:
-                if self._start_future is not None and not self._start_future.done():
-                    self._start_future.cancel()
-                # Same teardown as _on_disconnect so a stop() that never
-                # saw a disconnect callback still clears the session state.
-                self._teardown_session()
+                # Each shutdown step runs even if the previous one raised;
+                # otherwise a failing reconnect stop would leave the API
+                # client connected and a pending start() blocked forever.
+                try:
+                    if self._cli is not None:
+                        await self._cli.disconnect()
+                except Exception:
+                    _LOGGER.exception(
+                        "%s: Error disconnecting API client", self._address
+                    )
+                    raise
+                finally:
+                    if self._start_future is not None and not self._start_future.done():
+                        self._start_future.cancel()
+                    # Same teardown as _on_disconnect so a stop() that never
+                    # saw a disconnect callback still clears the session
+                    # state.
+                    self._teardown_session()
