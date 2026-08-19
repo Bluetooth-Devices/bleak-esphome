@@ -2229,6 +2229,18 @@ async def test_clear_cache_rebuild_keeps_current_link_write_size(
         assert char.max_write_without_response_size == 517 - GATT_HEADER_SIZE
 
 
+class _WeakrefableCache(ESPHomeBluetoothCache):
+    """
+    A cache that can be weakly referenced.
+
+    ``ESPHomeBluetoothCache`` is a ``slots=True`` dataclass declared
+    without ``weakref_slot``, so its instances have no ``__weakref__``
+    slot. A plain Python subclass gets one, and keeps the reference
+    structure -- the two LRUs and the objects they own -- that the
+    cycle test below is checking.
+    """
+
+
 @pytest.mark.asyncio
 async def test_cached_services_do_not_leak_the_cache(
     client_data: ESPHomeClientData,
@@ -2245,7 +2257,7 @@ async def test_cached_services_do_not_leak_the_cache(
     """
     client = _make_client(client_data)
     client._is_connected = True
-    cache = ESPHomeBluetoothCache()
+    cache = _WeakrefableCache()
     client._cache = cache
     services = await fetch_services(client, esphome_bluetooth_gatt_services)
     assert cache.get_gatt_services_cache(client._address_as_int) is services
