@@ -588,7 +588,39 @@ async def test_bleak_client_connect_cancel_racing_link_up_releases(
             await task
         assert task.cancelled()
     assert not client.is_connected
+    assert not client._pending_release
     mock_disconnect.assert_called_once_with(BLE_ADDRESS_AS_INT)
+
+
+@pytest.mark.asyncio
+async def test_bleak_client_connect_cancel_racing_link_up_then_drop(
+    bleak_pair: tuple[BleakClient, ESPHomeClient],
+) -> None:
+    """
+    Test a deferred link up followed by a drop stays silent to the consumer.
+
+    The abandoned attempt never handed the connection to the caller, so
+    a ``connected=False`` racing in before the task resumes must not
+    fire (or null) the consumer's disconnected_callback, and the
+    abandonment has nothing left to release because the ESP already
+    dropped the link.
+    """
+    bleak_client, client = bleak_pair
+    disconnected_callback = Mock()
+    client._disconnected_callback = disconnected_callback
+    with patch_connect_rpcs(client) as (mock_connect, mock_disconnect):
+        task, callback = await start_connect(bleak_client, mock_connect)
+        assert task.cancel() is True
+        callback(True, 23, 0)
+        callback(False, 23, 0)
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert task.cancelled()
+    assert not client.is_connected
+    assert not client._pending_release
+    disconnected_callback.assert_not_called()
+    assert client._disconnected_callback is disconnected_callback
+    mock_disconnect.assert_not_called()
 
 
 @pytest.mark.asyncio

@@ -158,6 +158,7 @@ class ESPHomeClient(BaseBleakClient):
         self._bluetooth_device = client_data.bluetooth_device
         self._client = client_data.client
         self._is_connected = False
+        self._pending_release = False
         self._mtu: int | None = None
         self._cancel_connection_state: Callable[[], None] | None = None
         self._notify_cancels: dict[
@@ -185,6 +186,7 @@ class ESPHomeClient(BaseBleakClient):
         """Clean up on disconnect."""
         self.services = BleakGATTServiceCollection()
         self._is_connected = False
+        self._pending_release = False
         for _, notify_abort in self._notify_cancels.values():
             notify_abort()
         self._notify_cancels.clear()
@@ -287,13 +289,14 @@ class ESPHomeClient(BaseBleakClient):
         """
         Tear down an abandoned connect attempt.
 
-        Releases the ESP-side link when it came up (the release tears
-        down local state itself); otherwise only the local cleanup runs
-        so the connection-state subscription does not leak. Returns True
-        when an ESP-side release was sent, so callers can skip the slot
-        settle for attempts that never held a slot.
+        Releases the ESP-side link when it came up, including a link up
+        the late-callback path deferred via ``_pending_release`` (the
+        release tears down local state itself); otherwise only the local
+        cleanup runs so the connection-state subscription does not leak.
+        Returns True when an ESP-side release was sent, so callers can
+        skip the slot settle for attempts that never held a slot.
         """
-        if self._is_connected:
+        if self._is_connected or self._pending_release:
             return self._release_connection_no_wait()
         self._async_disconnected_cleanup()
         return False
@@ -371,16 +374,19 @@ class ESPHomeClient(BaseBleakClient):
                 else:
                     # The subscription that delivered this callback is
                     # still installed, so the owning ``connect()`` has not
-                    # unwound yet and its abandonment runs next. Mark the
-                    # link up so that abandonment releases it; skipping
-                    # silently here would leak the slot, since the
-                    # abandonment only releases when the link came up.
+                    # unwound yet and its abandonment runs next. Flag the
+                    # release as pending so that abandonment sends it;
+                    # skipping silently here would leak the slot. A
+                    # dedicated flag rather than ``_is_connected`` so a
+                    # racing ``connected=False`` cannot fire the
+                    # consumer's disconnected_callback for a connection
+                    # the caller never owned.
                     _LOGGER.debug(
                         "%s: Link came up on an abandoned attempt; "
                         "deferring the release to its abandonment",
                         self._description,
                     )
-                    self._is_connected = True
+                    self._pending_release = True
             return
 
         if connected:
@@ -494,7 +500,11 @@ class ESPHomeClient(BaseBleakClient):
                     settle_needed = self._abandon_connect_attempt()
                     raise
                 except BaseException:
-                    settle_needed = self._abandon_connect_attempt()
+                    # Only true ``BaseException``s reach this arm; they
+                    # bypass the outer ``except Exception`` so no settle
+                    # follows, and assigning ``settle_needed`` here would
+                    # only mislead. The link is still released.
+                    self._abandon_connect_attempt()
                     raise
                 try:
                     await connected_future
@@ -517,8 +527,8 @@ class ESPHomeClient(BaseBleakClient):
         except Exception:
             # Outside the ``connecting()`` pause on purpose: the release
             # is already sent, so nothing about the settle needs the
-            # scanner blanked for up to another DISCONNECT_TIMEOUT on a
-            # saturated proxy. Cancellations and signals are not caught
+            # scanner blanked for up to another CONNECT_FREE_SLOT_TIMEOUT
+            # on a saturated proxy. Cancellations and signals are not caught
             # here, so they can never be stalled behind it.
             if settle_needed:
                 await self._settle_slot_after_failure("failed connect")

@@ -206,10 +206,12 @@ async def test_on_bluetooth_connection_state_late_connect_does_not_resurrect(
     must not cache the reported MTU or resolve anything. With the
     subscription already gone the orphaned link is released directly.
     With the subscription still installed the owning ``connect()`` has
-    not unwound yet, so the callback defers: it marks the link up and
-    sends nothing, leaving the release to that attempt's abandonment
-    (covered end to end by
-    ``test_bleak_client_connect_cancel_racing_link_up_releases``).
+    not unwound yet, so the callback defers: it flags the release as
+    pending and sends nothing, leaving the release to that attempt's
+    abandonment (covered end to end by
+    ``test_bleak_client_connect_cancel_racing_link_up_releases``). The
+    dedicated flag keeps ``_is_connected`` false so the abandoned
+    attempt can never look consumer-owned.
     """
     client = _make_client(client_data)
     if in_flight:
@@ -221,7 +223,8 @@ async def test_on_bluetooth_connection_state_late_connect_does_not_resurrect(
         "bluetooth_device_disconnect_no_wait",
     ) as mock_disconnect:
         client._on_bluetooth_connection_state(fut, True, 23, 0)
-        assert client._is_connected is in_flight
+        assert not client._is_connected
+        assert client._pending_release is in_flight
         assert client._mtu is None
     if in_flight:
         mock_disconnect.assert_not_called()
