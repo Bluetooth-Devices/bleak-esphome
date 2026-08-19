@@ -1,5 +1,13 @@
 # Changelog
 
+## v3.10.5 (2026-08-19)
+
+### Bug fixes
+
+
+- Match the bluez disconnected callback contract and refuse handover of a dead link ([`2275349`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/22753490f27690787d97b465deda82ac1f9e12ab))
+
+
 ## v3.10.4 (2026-08-19)
 
 ### Bug fixes
