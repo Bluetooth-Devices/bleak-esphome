@@ -545,6 +545,76 @@ async def test_bleak_client_connect_real_task_cancel_propagates_outer(
 
 
 @pytest.mark.asyncio
+async def test_bleak_client_connect_failed_release_skips_settle(
+    bleak_pair: tuple[BleakClient, ESPHomeClient],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """
+    Test a failed release send skips the settle.
+
+    If the disconnect request never went out (a dead API connection above
+    all), the free count can never update over that same connection;
+    settling would stall the full timeout with scanning paused.
+    """
+    bleak_client, client = bleak_pair
+    with (
+        patch.object(
+            client._client,
+            "bluetooth_device_connect",
+            return_value=Mock(),
+        ) as mock_connect,
+        patch.object(
+            client._client,
+            "bluetooth_device_disconnect_no_wait",
+            side_effect=APIConnectionError("api gone"),
+        ),
+        patch.object(client, "_settle_slot_after_failure") as mock_settle,
+        caplog.at_level(logging.DEBUG),
+    ):
+        task, callback = await start_connect(bleak_client, mock_connect)
+        callback(True, 23, 1)
+        with pytest.raises(BleakError, match="while connecting"):
+            await task
+
+    mock_settle.assert_not_awaited()
+    assert "ESP-side release skipped" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_bleak_client_connect_settle_defect_logged_as_warning(
+    bleak_pair: tuple[BleakClient, ESPHomeClient],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """
+    Test an unexpected settle error surfaces as a warning.
+
+    A TimeoutError is the expected slow proxy shape and stays at debug;
+    anything else is a defect in the wait path and must not hide there.
+    """
+    bleak_client, client = bleak_pair
+    with (
+        patch.object(
+            client._client,
+            "bluetooth_device_connect",
+            return_value=Mock(),
+        ) as mock_connect,
+        patch.object(client._client, "bluetooth_device_disconnect_no_wait"),
+        patch.object(
+            client,
+            "_wait_for_free_connection_slot",
+            side_effect=[None, RuntimeError("wait path defect")],
+        ),
+        caplog.at_level(logging.WARNING),
+    ):
+        task, callback = await start_connect(bleak_client, mock_connect)
+        callback(True, 23, 1)
+        with pytest.raises(BleakError, match="while connecting"):
+            await task
+
+    assert "Unexpected error while waiting for the slot to settle" in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_bleak_client_connect_services_drop_skips_settle(
     bleak_pair: tuple[BleakClient, ESPHomeClient],
 ) -> None:

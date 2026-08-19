@@ -227,7 +227,7 @@ class ESPHomeClient(BaseBleakClient):
                 "%s: Discarding stored connect error: %s", self._description, exc
             )
 
-    def _release_connection_no_wait(self) -> None:
+    def _release_connection_no_wait(self) -> bool:
         """
         Release the ESP-side connection without waiting for a response.
 
@@ -236,10 +236,14 @@ class ESPHomeClient(BaseBleakClient):
         frees the slot when it processes the request and reports the
         state change through the usual subscriptions. A failed send is a
         leaked proxy slot, so it is logged as a warning rather than
-        swallowed silently. Local state is torn down either way.
+        swallowed silently. Local state is torn down either way. Returns
+        True when the request was actually sent, so callers can skip
+        settling for a slot that cannot free.
         """
+        sent = False
         try:
             self._client.bluetooth_device_disconnect_no_wait(self._address_as_int)
+            sent = True
         except APIConnectionError as exc:
             # The proxy tears down every BLE link it holds once its API
             # subscriber is gone, so nothing is leaked here.
@@ -262,6 +266,7 @@ class ESPHomeClient(BaseBleakClient):
         # instance. Real disconnects go through
         # ``_async_ble_device_disconnected`` instead.
         self._async_disconnected_cleanup()
+        return sent
 
     def _abandon_connect_attempt(self) -> bool:
         """
@@ -274,8 +279,11 @@ class ESPHomeClient(BaseBleakClient):
         settle for attempts that never held a slot.
         """
         if self._is_connected:
-            self._release_connection_no_wait()
-            return True
+            # Settle only when the request went out; a failed send (a
+            # dead API connection above all) means ``free`` can never
+            # update over that same connection, so waiting would stall
+            # for the full timeout with scanning paused.
+            return self._release_connection_no_wait()
         self._async_disconnected_cleanup()
         return False
 
@@ -291,12 +299,22 @@ class ESPHomeClient(BaseBleakClient):
         """
         try:
             await self._wait_for_free_connection_slot(DISCONNECT_TIMEOUT)
-        except Exception as settle_error:  # pylint: disable=broad-except
+        except TimeoutError as settle_error:
+            # The expected shape on a slow or saturated proxy.
             _LOGGER.debug(
                 "%s: Slot did not settle after %s: %s",
                 self._description,
                 context,
                 settle_error,
+            )
+        except Exception:  # pylint: disable=broad-except
+            # Anything else is a defect in the wait path, not a slow
+            # proxy; it must not hide at debug.
+            _LOGGER.warning(
+                "%s: Unexpected error while waiting for the slot to " "settle after %s",
+                self._description,
+                context,
+                exc_info=True,
             )
 
     def _on_bluetooth_connection_state(
