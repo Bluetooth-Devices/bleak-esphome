@@ -248,13 +248,9 @@ class ESPHomeClient(BaseBleakClient):
         """
         Release the ESP-side connection without waiting for a response.
 
-        Sends the disconnect synchronously so cleanup and cancellation
-        paths have nothing to await and no uncancellable window; the ESP
-        frees the slot when it processes the request and reports the
-        state change through the usual subscriptions. Local state is
-        torn down either way; the except clauses below carry the
-        logging policy. Returns True when the request was actually
-        sent.
+        Synchronous so cancellation has no window to land mid release.
+        Local state is torn down either way; returns True when the
+        request was actually sent.
         """
         sent = False
         try:
@@ -276,12 +272,8 @@ class ESPHomeClient(BaseBleakClient):
                 exc,
                 exc_info=True,
             )
-        # Local teardown without consumer notification: an abandoned
-        # attempt never handed the consumer a connected client, so it
-        # must not fire (and permanently null) ``disconnected_callback``,
-        # which has to survive for a later successful connect on this
-        # instance. Real disconnects go through
-        # ``_async_ble_device_disconnected`` instead.
+        # No consumer notification: an abandoned attempt must not fire
+        # (and null) ``disconnected_callback``.
         self._async_disconnected_cleanup()
         return sent
 
@@ -289,12 +281,9 @@ class ESPHomeClient(BaseBleakClient):
         """
         Tear down an abandoned connect attempt.
 
-        Releases the ESP-side link when it came up, including a link up
-        the late-callback path deferred via ``_pending_release`` (the
-        release tears down local state itself); otherwise only the local
-        cleanup runs so the connection-state subscription does not leak.
-        Returns True when an ESP-side release was sent, so callers can
-        skip the slot settle for attempts that never held a slot.
+        Releases the ESP-side link when it came up (or was deferred via
+        ``_pending_release``); otherwise only the local cleanup runs.
+        Returns True when a release was sent.
         """
         if self._is_connected or self._pending_release:
             return self._release_connection_no_wait()
@@ -305,13 +294,9 @@ class ESPHomeClient(BaseBleakClient):
         """
         Wait for the freed slot to settle after a failed attempt.
 
-        The next attempt's entry gate in ``connect()`` only waits
-        ``CONNECT_FREE_SLOT_TIMEOUT`` and would raise on a slow proxy
-        otherwise, so the settle is capped to that same window; waiting
-        longer cannot help a gate that has already given up and only
-        delays surfacing the original error. A settle failure must not
-        mask that error, but it is the direct cause of the next gate
-        failing, so it is logged rather than dropped.
+        Capped to the same window as the next attempt's entry gate in
+        ``connect()``; a settle failure is logged, never raised, so it
+        cannot mask the original error.
         """
         try:
             await self._wait_for_free_connection_slot(CONNECT_FREE_SLOT_TIMEOUT)
@@ -352,35 +337,21 @@ class ESPHomeClient(BaseBleakClient):
             self._async_ble_device_disconnected()
 
         if connected_future.done():
-            # The connect attempt already finished (timed out, failed, or
-            # was cancelled) so the owning ``connect()`` has bailed and
-            # cleanup may already have run. A late ``connected=True`` must
-            # not mark the client connected again: nobody owns it anymore
-            # and the state would never be corrected.
+            # The attempt already finished; a late ``connected=True`` must
+            # not mark an unowned client connected again.
             if connected and not self._is_connected:
                 if self._cancel_connection_state is None:
-                    # The ESP did just establish the link though (this is
-                    # not a duplicate callback on a live connection, and
-                    # no newer attempt on this instance has its
-                    # connection-state subscription installed; during the
-                    # brief RPC window before that, aioesphomeapi's own
-                    # failure handlers release the link). Release it so
-                    # the abandoned attempt does not pin a proxy slot.
+                    # No attempt owns this link; release it so it does not
+                    # pin a proxy slot.
                     _LOGGER.debug(
                         "%s: Releasing orphaned ESP-side connection",
                         self._description,
                     )
                     self._release_connection_no_wait()
                 else:
-                    # The subscription that delivered this callback is
-                    # still installed, so the owning ``connect()`` has not
-                    # unwound yet and its abandonment runs next. Flag the
-                    # release as pending so that abandonment sends it;
-                    # skipping silently here would leak the slot. A
-                    # dedicated flag rather than ``_is_connected`` so a
-                    # racing ``connected=False`` cannot fire the
-                    # consumer's disconnected_callback for a connection
-                    # the caller never owned.
+                    # The owning ``connect()`` is still unwinding; flag the
+                    # release for its abandonment. A dedicated flag so a
+                    # racing ``connected=False`` cannot look consumer owned.
                     _LOGGER.debug(
                         "%s: Link came up on an abandoned attempt; "
                         "deferring the release to its abandonment",
@@ -482,13 +453,8 @@ class ESPHomeClient(BaseBleakClient):
                         # Make the abandoned attempt terminal so a late
                         # connection-state callback cannot resurrect state.
                         connected_future.cancel()
-                    # aioesphomeapi already told the ESP to drop the link in
-                    # its own failure handlers, but abandoning uniformly does
-                    # not rely on that; a duplicate release is harmless.
-                    # Cancel-shaped exits deliberately never settle, even
-                    # when the spurious conversion below hands the caller
-                    # a retryable error; the next attempt's entry gate
-                    # performs the same wait, so nothing is lost.
+                    # A duplicate release is harmless. Cancel-shaped exits
+                    # never settle; the next entry gate waits anyway.
                     self._abandon_connect_attempt()
                     self._raise_if_spurious_cancellation()
                     raise
@@ -504,40 +470,28 @@ class ESPHomeClient(BaseBleakClient):
                     settle_needed = self._abandon_connect_attempt()
                     raise
                 except BaseException:
-                    # Only true ``BaseException``s reach this arm; they
-                    # bypass the outer ``except Exception`` so no settle
-                    # follows, and assigning ``settle_needed`` here would
-                    # only mislead. The link is still released.
+                    # True BaseExceptions bypass the outer settle; still
+                    # release the link.
                     self._abandon_connect_attempt()
                     raise
                 try:
                     await connected_future
                 except asyncio.CancelledError:
                     self._retrieve_future_error(connected_future)
-                    # The cancellation may have been delivered after the link
-                    # already came up (``connected_future`` can hold a result
-                    # while the awaiting task was cancelled before resuming);
-                    # release the ESP-side connection so the proxy's slot is
-                    # not leaked on a connection no client owns.
-                    # Cancel-shaped exits deliberately never settle, even
-                    # when the spurious conversion below hands the caller
-                    # a retryable error; the next attempt's entry gate
-                    # performs the same wait, so nothing is lost.
+                    # The cancel can land after the link came up; release
+                    # so the slot is not leaked. Cancel-shaped exits never
+                    # settle; the next entry gate waits anyway.
                     self._abandon_connect_attempt()
                     self._raise_if_spurious_cancellation()
                     raise
                 except BaseException:
-                    # The future can also fail after the link came up
-                    # (``connected=True`` with an error code); release
-                    # the ESP-side connection so the slot is not leaked.
+                    # The future can fail after the link came up; release
+                    # so the slot is not leaked.
                     settle_needed = self._abandon_connect_attempt()
                     raise
         except Exception:
-            # Outside the ``connecting()`` pause on purpose: the release
-            # is already sent, so nothing about the settle needs the
-            # scanner blanked for up to another CONNECT_FREE_SLOT_TIMEOUT
-            # on a saturated proxy. Cancellations and signals are not caught
-            # here, so they can never be stalled behind it.
+            # Settle outside the ``connecting()`` pause; cancels and
+            # signals bypass this handler and are never stalled behind it.
             if settle_needed:
                 await self._settle_slot_after_failure("failed connect")
             raise
@@ -549,15 +503,13 @@ class ESPHomeClient(BaseBleakClient):
                 dangerous_use_bleak_cache=dangerous_use_bleak_cache
             )
         except Exception:
-            # Best-effort cleanup: release the BLE connection on the ESP
-            # side, but never let a disconnect failure mask the original
-            # connect error, then let the slot settle before the retry.
+            # Release, then settle before the retry; never mask the
+            # original error.
             if self._abandon_connect_attempt():
                 await self._settle_slot_after_failure("failed connect setup")
             raise
         except BaseException:
-            # Cancellations and real signals must not be stalled behind
-            # the settle; the link is still released synchronously.
+            # No settle on cancels and signals; still release.
             self._abandon_connect_attempt()
             raise
 
