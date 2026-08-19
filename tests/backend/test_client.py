@@ -788,7 +788,7 @@ async def test_bleak_client_disconnected_callback_fires_every_cycle(
         ("pair", False),
         ("services", False),
         ("drop", True),
-        ("drop_cache_return", True),
+        ("drop_resolved", True),
     ],
 )
 async def test_bleak_client_abandoned_attempt_preserves_disconnected_callback(
@@ -815,11 +815,11 @@ async def test_bleak_client_abandoned_attempt_preserves_disconnected_callback(
         client._async_ble_device_disconnected()
         raise BleakError("dropped during discovery")
 
-    async def _drop_then_cached_services(*args: Any, **kwargs: Any) -> Any:
-        # Device initiated drop mid discovery, but the services still
-        # resolve (cache); connect() must not hand over the dead link.
+    async def _drop_then_resolved_services(*args: Any, **kwargs: Any) -> Any:
+        # Device initiated drop while the discovery RPC is in flight;
+        # the response still resolves.
         client._async_ble_device_disconnected()
-        return Mock()
+        return esphome_bluetooth_gatt_services
 
     with (
         patch_connect_rpcs(client) as (mock_connect, mock_disconnect),
@@ -847,20 +847,29 @@ async def test_bleak_client_abandoned_attempt_preserves_disconnected_callback(
             if side_effect := {
                 "services": _boom_get_services,
                 "drop": _drop_during_services,
-                "drop_cache_return": _drop_then_cached_services,
             }.get(failure_shape):
                 failure_stack.enter_context(
                     patch.object(client, "_get_services", side_effect=side_effect)
                 )
+            if failure_shape == "drop_resolved":
+                # Drive the real _get_services so its entry guard and
+                # the post-drop resolution are both exercised.
+                failure_stack.enter_context(
+                    patch.object(
+                        client._client,
+                        "bluetooth_gatt_get_services",
+                        side_effect=_drop_then_resolved_services,
+                    )
+                )
             # Attempt 1 fails; the consumer never saw a connected client.
             task, callback = await start_connect(client, mock_connect, pair=pair)
             callback(True, 23, 1 if failure_shape == "error_code" else 0)
-            raises_kwargs = (
-                {"match": "Disconnected during connect setup"}
-                if failure_shape == "drop_cache_return"
-                else {}
+            match = (
+                "Disconnected during connect setup"
+                if failure_shape == "drop_resolved"
+                else None
             )
-            with pytest.raises(BleakError, **raises_kwargs):
+            with pytest.raises(BleakError, match=match):
                 await task
             assert disconnected_callback.call_count == (1 if drop_notifies else 0)
             assert client._disconnected_callback is disconnected_callback

@@ -156,8 +156,8 @@ running, matching bleak's bluez backend for device initiated drops; the
 callback persists across connect and disconnect cycles on a reused
 client. Unlike bluez, library side abandonment of a failed attempt is
 silent, because the consumer never received the client; it surfaces
-through the raising `connect()` alone. If the link drops during setup but service
-discovery still resolves from cache, `connect()` raises
+through the raising `connect()` alone. If the link drops during setup but the
+discovery response still resolves, `connect()` raises
 `BleakError("<device>: Disconnected during connect setup")` rather than
 returning a client on a dead link.
 
