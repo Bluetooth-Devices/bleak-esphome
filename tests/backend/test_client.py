@@ -1977,6 +1977,75 @@ async def test_start_notify_ccd_write_cancelled_cleans_up(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "side_effect",
+    [Exception("subscribe failed"), asyncio.CancelledError()],
+    ids=["failure", "cancelled"],
+)
+async def test_start_notify_subscribe_abandoned_disables_notifications(
+    connected_client: ESPHomeClient,
+    esphome_bluetooth_gatt_services: ESPHomeBluetoothGATTServices,
+    side_effect: BaseException,
+) -> None:
+    """
+    An abandoned subscribe must still disable notifications.
+
+    The proxy can have enabled the subscription before the failure or
+    cancellation landed. Nothing is recorded in ``_notify_cancels`` until
+    the subscribe returns, so without the unwind the peripheral would keep
+    notifying for the life of the link with no way to stop it.
+    """
+    services = await fetch_services(connected_client, esphome_bluetooth_gatt_services)
+    char = services.get_characteristic(INDICATE_CHAR_UUID)
+    assert char is not None
+
+    with (
+        patch.object(
+            connected_client._client,
+            "bluetooth_gatt_start_notify",
+            side_effect=side_effect,
+        ),
+        patch.object(
+            connected_client._client,
+            "bluetooth_gatt_stop_notify",
+        ) as mock_stop,
+        pytest.raises(type(side_effect)),
+    ):
+        await connected_client.start_notify(char, lambda data: None)
+
+    mock_stop.assert_called_once_with(connected_client._address_as_int, char.handle)
+    assert char.handle not in connected_client._notify_cancels
+
+
+@pytest.mark.asyncio
+async def test_start_notify_subscribe_success_does_not_disable(
+    connected_client: ESPHomeClient,
+    esphome_bluetooth_gatt_services: ESPHomeBluetoothGATTServices,
+) -> None:
+    """A successful subscribe must not send a spurious disable."""
+    services = await fetch_services(connected_client, esphome_bluetooth_gatt_services)
+    char = services.get_characteristic(INDICATE_CHAR_UUID)
+    assert char is not None
+
+    with (
+        patch.object(
+            connected_client._client,
+            "bluetooth_gatt_start_notify",
+            return_value=(AsyncMock(), Mock()),
+        ),
+        patch.object(connected_client._client, "bluetooth_gatt_write_descriptor"),
+        patch.object(
+            connected_client._client,
+            "bluetooth_gatt_stop_notify",
+        ) as mock_stop,
+    ):
+        await connected_client.start_notify(char, lambda data: None)
+
+    mock_stop.assert_not_called()
+    assert char.handle in connected_client._notify_cancels
+
+
+@pytest.mark.asyncio
 async def test_start_notify_success_with_ccd_write(
     connected_client: ESPHomeClient,
     esphome_bluetooth_gatt_services: ESPHomeBluetoothGATTServices,

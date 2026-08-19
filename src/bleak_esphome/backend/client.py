@@ -896,14 +896,26 @@ class ESPHomeClient(BaseBleakClient):
                 "does not have notify or indicate property set."
             )
 
-        self._notify_cancels[ble_handle] = (
-            await self._client.bluetooth_gatt_start_notify(
-                self._address_as_int,
-                ble_handle,
-                lambda handle, data: callback(data),
-                timeout,
+        try:
+            self._notify_cancels[ble_handle] = (
+                await self._client.bluetooth_gatt_start_notify(
+                    self._address_as_int,
+                    ble_handle,
+                    lambda handle, data: callback(data),
+                    timeout,
+                )
             )
-        )
+        except BaseException:
+            # The proxy can have enabled the subscription before the failure
+            # or cancellation landed, and nothing recorded a way to stop it:
+            # ``_notify_cancels`` is only populated once this await returns,
+            # so neither ``stop_notify`` nor the disconnect cleanup can reach
+            # it and the peripheral keeps notifying for the life of the link.
+            # Send the disable, mirroring the CCCD unwind below.
+            # ``bluetooth_gatt_stop_notify`` is sync so it is safe here, and
+            # disabling a subscription that never landed is a no-op.
+            self._client.bluetooth_gatt_stop_notify(self._address_as_int, ble_handle)
+            raise
 
         if not self._feature_flags & BluetoothProxyFeature.REMOTE_CACHING.value:
             return
