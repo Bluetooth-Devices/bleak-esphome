@@ -235,7 +235,9 @@ async def test_on_bluetooth_connection_state_late_connect_does_not_resurrect(
         client._client,
         "bluetooth_device_disconnect_no_wait",
     ) as mock_disconnect:
-        client._on_bluetooth_connection_state(fut, True, 23, 0)
+        client._on_bluetooth_connection_state(
+            fut, has_cache=False, connected=True, mtu=23, error=0
+        )
         assert not client._is_connected
         assert client._pending_release is in_flight
         assert client._mtu is None
