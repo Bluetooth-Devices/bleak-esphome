@@ -228,6 +228,22 @@ async def test_set_unavailable_fails_pending_slot_waiters(
 
 
 @pytest.mark.asyncio
+async def test_update_isolates_raising_subscriber(
+    bluetooth_device: ESPHomeBluetoothDevice,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A raising slot subscriber must not abort a slot report."""
+    bluetooth_device.async_subscribe_connection_slots(
+        Mock(side_effect=ValueError("subscriber boom"))
+    )
+    with caplog.at_level(logging.ERROR):
+        bluetooth_device.async_update_ble_connection_limits(1, 3, [42])
+    # The report itself still landed.
+    assert bluetooth_device.ble_connections_free == 1
+    assert "Error pushing allocations" in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_set_unavailable_publishes_zeroed_free_for_idle_proxy(
     bluetooth_device: ESPHomeBluetoothDevice,
 ) -> None:
@@ -274,7 +290,7 @@ async def test_set_unavailable_raising_subscriber_does_not_strand_waiters(
     with pytest.raises(TimeoutError, match="Proxy became unavailable"):
         await task
     assert bluetooth_device.ble_allocations == []
-    assert "Error pushing cleared allocations" in caplog.text
+    assert "Error pushing allocations" in caplog.text
 
 
 @pytest.mark.asyncio

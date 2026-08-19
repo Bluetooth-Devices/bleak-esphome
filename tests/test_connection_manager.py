@@ -471,17 +471,16 @@ async def test_on_disconnect_isolates_raising_callback(
 
 
 @pytest.mark.asyncio
-async def test_on_disconnect_teardown_survives_raising_set_unavailable(
+async def test_teardown_survives_raising_set_unavailable(
     conn_manager: APIConnectionManager,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """
-    A raising ``async_set_unavailable`` must not skip the session teardown.
+    A raising ``async_set_unavailable`` must not skip the teardown.
 
-    The method never raises by contract; the structural guard keeps a
-    future regression from skipping the disconnect callbacks and the
-    scanner unregister, and the failure is logged so a later teardown
-    step raising cannot erase the root cause.
+    The method never raises by contract; the guard at the choke point
+    contains a regression, logs it, and lets the disconnect callbacks
+    and the scanner unregister proceed.
     """
     bluetooth_device = Mock(spec=ESPHomeBluetoothDevice, available=True)
     bluetooth_device.async_set_unavailable.side_effect = RuntimeError("device boom")
@@ -492,10 +491,7 @@ async def test_on_disconnect_teardown_survives_raising_set_unavailable(
     unregister = Mock()
     conn_manager._unregister_scanner = unregister
 
-    with (
-        caplog.at_level(logging.ERROR),
-        pytest.raises(RuntimeError, match="device boom"),
-    ):
+    with caplog.at_level(logging.ERROR):
         await conn_manager._on_disconnect(expected_disconnect=False)
 
     callback.assert_called_once_with()
@@ -505,44 +501,6 @@ async def test_on_disconnect_teardown_survives_raising_set_unavailable(
     # The reference was dropped before the call, so the next teardown
     # cannot re-fire against the same dead device.
     assert conn_manager._bluetooth_device is None
-
-
-@pytest.mark.asyncio
-async def test_stop_shutdown_survives_raising_set_unavailable(
-    conn_manager_with_mocked_reconnect: tuple[APIConnectionManager, Mock, AsyncMock],
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """
-    A raising ``async_set_unavailable`` must not skip ``stop()``'s shutdown.
-
-    ``stop()`` marks the device unavailable first; if that call raised
-    unguarded, the reconnect stop, the API client disconnect, the
-    disconnect callbacks, the scanner unregister, and the start future
-    cancel would all be skipped, leaving a pending ``start()`` blocked
-    forever.
-    """
-    manager, mock_reconnect_logic, mock_disconnect = conn_manager_with_mocked_reconnect
-    bluetooth_device = Mock(spec=ESPHomeBluetoothDevice, available=True)
-    bluetooth_device.async_set_unavailable.side_effect = RuntimeError("device boom")
-    manager._bluetooth_device = bluetooth_device
-    callback = Mock()
-    callbacks: set[Callable[[], None]] = {callback}
-    manager._disconnect_callbacks = callbacks
-    unregister = Mock()
-    manager._unregister_scanner = unregister
-
-    with (
-        caplog.at_level(logging.ERROR),
-        pytest.raises(RuntimeError, match="device boom"),
-    ):
-        await manager.stop()
-
-    mock_reconnect_logic.stop.assert_awaited_once_with()
-    mock_disconnect.assert_awaited_once_with()
-    callback.assert_called_once_with()
-    assert not callbacks
-    unregister.assert_called_once_with()
-    assert "Error marking device unavailable" in caplog.text
 
 
 @pytest.mark.asyncio

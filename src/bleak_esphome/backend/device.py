@@ -109,31 +109,35 @@ class ESPHomeBluetoothDevice:
         had_state = bool(self.ble_allocations) or bool(self.ble_connections_free)
         self.ble_allocations = []
         self.ble_connections_free = 0
-        message = self._unavailable_message()
-        for fut in self._ble_connection_free_futures:
-            # A cancelled waiter can leave a done future in the set.
-            if not fut.done():
-                fut.set_exception(TimeoutError(message))
-        self._ble_connection_free_futures.clear()
-        if had_state and (connection_slots_callback := self._connection_slots_callback):
-            # Push after the waiters are failed; guarded since it ends
-            # in consumer supplied code.
-            try:
-                connection_slots_callback(
-                    Allocations(
-                        self.mac_address,
-                        self.ble_connections_limit,
-                        self.ble_connections_free,
-                        [],
-                    )
-                )
-            except Exception:  # pylint: disable=broad-except
-                _LOGGER.exception(
-                    "%s [%s]: Error pushing cleared allocations; the"
-                    " subscriber may keep the dead session's snapshot",
-                    self.name,
-                    self.mac_address,
-                )
+        if futures := self._ble_connection_free_futures:
+            message = self._unavailable_message()
+            for fut in futures:
+                # A cancelled waiter can leave a done future in the set.
+                if not fut.done():
+                    fut.set_exception(TimeoutError(message))
+            futures.clear()
+        if had_state:
+            # Push after the waiters are failed.
+            self._async_publish_allocations(self.ble_connections_limit, 0, [])
+
+    def _async_publish_allocations(
+        self, limit: int, free: int, allocated: list[str]
+    ) -> None:
+        """Push an allocation snapshot to the subscriber, guarded."""
+        if (connection_slots_callback := self._connection_slots_callback) is None:
+            return
+        try:
+            connection_slots_callback(
+                Allocations(self.mac_address, limit, free, allocated)
+            )
+        except Exception:  # pylint: disable=broad-except
+            # Consumer supplied code; the subscriber may keep a stale
+            # snapshot until the next push.
+            _LOGGER.exception(
+                "%s [%s]: Error pushing allocations",
+                self.name,
+                self.mac_address,
+            )
 
     def async_update_ble_connection_limits(
         self, free: int, limit: int, allocated: list[int]
@@ -172,17 +176,12 @@ class ESPHomeBluetoothDevice:
         # published allocation snapshot and the clients' connected state
         # are always consistent with each other.
         self._async_reconcile_connections()
-        if (changed or not self._called_callback) and (
-            connection_slots_callback := self._connection_slots_callback
-        ):
+        if (changed or not self._called_callback) and self._connection_slots_callback:
             self._called_callback = True
-            connection_slots_callback(
-                Allocations(
-                    self.mac_address,
-                    limit,
-                    free,
-                    [int_to_bluetooth_address(address) for address in allocated],
-                )
+            self._async_publish_allocations(
+                limit,
+                free,
+                [int_to_bluetooth_address(address) for address in allocated],
             )
 
     def _async_reconcile_connections(self) -> None:
