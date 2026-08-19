@@ -1,5 +1,13 @@
 # Changelog
 
+## v3.10.3 (2026-08-19)
+
+### Bug fixes
+
+
+- Use the standard 30s timeout when enabling notifications ([`30f9efd`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/30f9efdb0edcad1e91b921e48488a2e493112531))
+
+
 ## v3.10.2 (2026-08-19)
 
 ### Bug fixes
