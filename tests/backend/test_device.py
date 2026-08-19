@@ -9,7 +9,10 @@ from unittest.mock import Mock
 import pytest
 from bleak_retry_connector import Allocations
 
-from bleak_esphome.backend.device import ESPHomeBluetoothDevice
+from bleak_esphome.backend.device import (
+    MAX_TRACKED_UNANSWERED_CONNECTS,
+    ESPHomeBluetoothDevice,
+)
 
 from ._helpers import BLE_ADDRESS, ESP_MAC_ADDRESS
 
@@ -557,3 +560,40 @@ async def test_connect_streaks_are_tracked_per_address(
     bluetooth_device.async_note_connect_response(BLE_ADDRESS)
     assert bluetooth_device.async_note_connect_timeout(other) == 2
     assert bluetooth_device.async_note_connect_timeout(BLE_ADDRESS) == 1
+
+
+@pytest.mark.asyncio
+async def test_connect_timeout_streaks_are_bounded(
+    bluetooth_device: ESPHomeBluetoothDevice,
+) -> None:
+    """
+    The streak map must not grow without bound.
+
+    An address that times out once and is never seen again has nothing to
+    clear its entry, so a peripheral rotating its address would otherwise
+    leave one behind for the life of the proxy connection.
+    """
+    overflow = 50
+    for index in range(MAX_TRACKED_UNANSWERED_CONNECTS + overflow):
+        bluetooth_device.async_note_connect_timeout(f"AA:BB:CC:DD:{index:04X}")
+
+    assert len(bluetooth_device._unanswered_connects) == (
+        MAX_TRACKED_UNANSWERED_CONNECTS
+    )
+
+
+@pytest.mark.asyncio
+async def test_connect_timeout_streaks_evict_the_least_recently_used(
+    bluetooth_device: ESPHomeBluetoothDevice,
+) -> None:
+    """Eviction must drop the stalest address, never the one still failing."""
+    still_failing = "AA:BB:CC:DD:EE:01"
+    bluetooth_device.async_note_connect_timeout(still_failing)
+
+    # Keep it the most recently used while pushing the rest past the bound.
+    for index in range(MAX_TRACKED_UNANSWERED_CONNECTS * 2):
+        bluetooth_device.async_note_connect_timeout(f"AA:BB:CC:DD:{index:04X}")
+        bluetooth_device.async_note_connect_timeout(still_failing)
+
+    # Its streak survived, so a long run of other addresses cannot reset it.
+    assert bluetooth_device.async_note_connect_timeout(still_failing) > 2

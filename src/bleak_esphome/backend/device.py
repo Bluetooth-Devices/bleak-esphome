@@ -9,13 +9,23 @@ from typing import TYPE_CHECKING
 
 from bleak_retry_connector import Allocations
 from bluetooth_data_tools import int_to_bluetooth_address
+from lru import LRU  # pylint: disable=no-name-in-module
 
 from .cache import ESPHomeBluetoothCache
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, MutableMapping
 
 _LOGGER = logging.getLogger(__name__)
+
+# Bound on the unanswered-connect streaks kept per proxy. Only addresses whose
+# connect request went unanswered are tracked, and a reply drops the entry,
+# so the live set is small. The bound is for the ones that never come back:
+# a device seen once and gone, or a peripheral rotating its address, would
+# otherwise leave an entry for the life of the connection. Evicting the
+# least-recently-used only restarts a streak for an address that has been
+# quiet longer than 128 others, which cannot mask an ongoing failure.
+MAX_TRACKED_UNANSWERED_CONNECTS = 128
 
 
 @dataclass(slots=True)
@@ -37,7 +47,9 @@ class ESPHomeBluetoothDevice:
     _tracked_clients: dict[int, Callable[[], None]] = field(default_factory=dict)
     _seen_allocated: bool = False
     _warned_untrusted: bool = False
-    _unanswered_connects: dict[str, int] = field(default_factory=dict)
+    _unanswered_connects: MutableMapping[str, int] = field(
+        default_factory=lambda: LRU(MAX_TRACKED_UNANSWERED_CONNECTS)
+    )
 
     def async_note_connect_response(self, address: str) -> None:
         """
