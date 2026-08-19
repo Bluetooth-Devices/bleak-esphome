@@ -327,7 +327,7 @@ class ESPHomeClient(BaseBleakClient):
             # Anything else is a defect in the wait path, not a slow
             # proxy; it must not hide at debug.
             _LOGGER.warning(
-                "%s: Unexpected error while waiting for the slot to " "settle after %s",
+                "%s: Unexpected error while waiting for the slot to settle after %s",
                 self._description,
                 context,
                 exc_info=True,
@@ -485,6 +485,10 @@ class ESPHomeClient(BaseBleakClient):
                     # aioesphomeapi already told the ESP to drop the link in
                     # its own failure handlers, but abandoning uniformly does
                     # not rely on that; a duplicate release is harmless.
+                    # Cancel-shaped exits deliberately never settle, even
+                    # when the spurious conversion below hands the caller
+                    # a retryable error; the next attempt's entry gate
+                    # performs the same wait, so nothing is lost.
                     self._abandon_connect_attempt()
                     self._raise_if_spurious_cancellation()
                     raise
@@ -515,6 +519,10 @@ class ESPHomeClient(BaseBleakClient):
                     # while the awaiting task was cancelled before resuming);
                     # release the ESP-side connection so the proxy's slot is
                     # not leaked on a connection no client owns.
+                    # Cancel-shaped exits deliberately never settle, even
+                    # when the spurious conversion below hands the caller
+                    # a retryable error; the next attempt's entry gate
+                    # performs the same wait, so nothing is lost.
                     self._abandon_connect_attempt()
                     self._raise_if_spurious_cancellation()
                     raise
