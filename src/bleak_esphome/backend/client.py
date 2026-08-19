@@ -667,6 +667,15 @@ class ESPHomeClient(BaseBleakClient):
         # ``clear_cache()`` drops the MTU entry without touching
         # ``self._mtu``) fall back to the MTU of the link this collection was
         # built on -- the same value ``main`` froze in.
+        #
+        # The cache key is the peripheral address alone, so the invariant
+        # this reads is "the most recently connected link wins", not "this
+        # client's link". Two clients on different proxies holding the same
+        # peripheral therefore share one answer, and it can disagree with a
+        # given client's own ``mtu_size``. ``mtu_size`` deliberately stays
+        # per-client -- it is public Bleak API and must describe the link
+        # that client holds -- so the two are not unified here. Making them
+        # agree needs a per-link key, which is a cache-shape change.
         built_mtu = self.mtu_size
 
         def get_max_write_without_response() -> int:
