@@ -535,7 +535,8 @@ class ESPHomeClient(BaseBleakClient):
             raise
         if not self._is_connected:
             # The link dropped during setup but the last step still
-            # returned (cached services); hand over nothing.
+            # returned (cached services); hand over nothing. No settle:
+            # the drop already ran cleanup, so nothing was released.
             self._abandon_connect_attempt()
             raise BleakError(f"{self._description}: Disconnected during connect setup")
         # The connection is now the consumer's; a later drop notifies

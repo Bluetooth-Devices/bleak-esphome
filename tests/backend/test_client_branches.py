@@ -284,8 +284,9 @@ async def test_esp_disconnected_does_not_refire_callback(
     client._disconnected_callback = callback
     client._async_esp_disconnected()
     callback.assert_called_once()
-    # A stale second disconnect must not refire: cleanup cleared the
-    # handover flag, so the gate stays closed until the next connect.
+    # A stale re-entry of the old gate variable must not reopen the
+    # gate; only connect() handing over sets _connect_completed again.
+    client._is_connected = True
     client._async_esp_disconnected()
     callback.assert_called_once()
 

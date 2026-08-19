@@ -148,6 +148,18 @@ give each proxy a clearly stronger signal for its intended device (position
 and antenna orientation), and avoid having two proxies with near-identical
 RSSI competing for the same peripheral.
 
+## When does `disconnected_callback` fire?
+
+Once per connection that `connect()` actually handed over: it fires on a
+real disconnect of that connection (device initiated, ESP initiated, or
+requested via `disconnect()`), persists across connect and disconnect
+cycles on a reused client, and never fires for a connect attempt that
+raised. A link that drops while pairing or service discovery is still
+running surfaces as the failing `connect()` instead; if the last setup
+step still resolves from cache after such a drop, `connect()` raises
+`BleakError("<device>: Disconnected during connect setup")` rather than
+returning a client on a dead link.
+
 ## My `disconnected_callback` fired without a disconnect event in the logs
 
 A connected client can be torn down by allocation reconciliation, without a
