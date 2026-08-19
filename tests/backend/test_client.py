@@ -377,17 +377,23 @@ async def test_bleak_client_connect(
 @pytest.mark.asyncio
 async def test_bleak_client_disconnect_completes_on_unavailable_device(
     bleak_pair: tuple[BleakClient, ESPHomeClient],
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Disconnect completes when the proxy went unavailable mid teardown."""
     _bleak_client, client = bleak_pair
     client._bluetooth_device.available = True
     client._bluetooth_device.async_set_unavailable()
-    with patch.object(
-        client._client,
-        "bluetooth_device_disconnect",
-    ) as mock_disconnect:
+    with (
+        caplog.at_level(logging.DEBUG),
+        patch.object(
+            client._client,
+            "bluetooth_device_disconnect",
+        ) as mock_disconnect,
+    ):
         await client.disconnect()
     mock_disconnect.assert_called_once()
+    # The swallowed settle timeout stays observable.
+    assert "Slot did not settle after disconnect" in caplog.text
 
 
 @pytest.mark.asyncio

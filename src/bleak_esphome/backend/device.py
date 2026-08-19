@@ -129,7 +129,8 @@ class ESPHomeBluetoothDevice:
                 )
             except Exception:  # pylint: disable=broad-except
                 _LOGGER.exception(
-                    "%s [%s]: Error pushing cleared allocations",
+                    "%s [%s]: Error pushing cleared allocations; the"
+                    " subscriber may keep the dead session's snapshot",
                     self.name,
                     self.mac_address,
                 )
