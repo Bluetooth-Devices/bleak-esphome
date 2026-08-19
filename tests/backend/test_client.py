@@ -770,13 +770,19 @@ async def test_bleak_client_disconnected_callback_fires_every_cycle(
             "bluetooth_gatt_get_services",
             return_value=esphome_bluetooth_gatt_services,
         ),
+        patch.object(client._client, "bluetooth_device_disconnect"),
     ):
         for cycle in (1, 2):
             task, callback = await start_connect(bleak_client, mock_connect)
             callback(True, 23, 0)
             await task
             assert client.is_connected
-            callback(False, 23, 0)
+            if cycle == 1:
+                # Proxy reported drop.
+                callback(False, 23, 0)
+            else:
+                # A requested disconnect notifies too, as in bluez.
+                await bleak_client.disconnect()
             assert disconnected_callback.call_count == cycle
 
 
