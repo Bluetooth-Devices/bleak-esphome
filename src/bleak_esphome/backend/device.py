@@ -116,9 +116,12 @@ class ESPHomeBluetoothDevice:
                 if not fut.done():
                     fut.set_exception(TimeoutError(message))
             futures.clear()
-        if had_state:
-            # Push after the waiters are failed.
-            self._async_publish_allocations(self.ble_connections_limit, 0, [])
+        if had_state and not self._async_publish_allocations(
+            self.ble_connections_limit, 0, []
+        ):
+            # Re-arm the forced push so the next slot report corrects
+            # the subscriber's stale snapshot.
+            self._called_callback = False
 
     def _async_publish_allocations(
         self, limit: int, free: int, allocated: list[str]

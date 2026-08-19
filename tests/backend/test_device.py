@@ -250,6 +250,30 @@ async def test_update_isolates_raising_subscriber(
 
 
 @pytest.mark.asyncio
+async def test_failed_cleared_push_rearms_the_forced_push(
+    bluetooth_device: ESPHomeBluetoothDevice,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A failed cleared snapshot push re-arms the forced push."""
+    bluetooth_device.available = True
+    good: list[Allocations] = []
+    bluetooth_device.async_subscribe_connection_slots(good.append)
+    bluetooth_device.async_update_ble_connection_limits(1, 3, [42])
+    assert len(good) == 1
+    bluetooth_device._connection_slots_callback = Mock(
+        side_effect=ValueError("subscriber boom")
+    )
+    with caplog.at_level(logging.ERROR):
+        bluetooth_device.async_set_unavailable()
+    # The subscriber heals; an update matching the zeroed state still
+    # pushes because the failed clear re-armed the forced push.
+    bluetooth_device._connection_slots_callback = good.append
+    bluetooth_device.async_update_ble_connection_limits(0, 3, [])
+    assert len(good) == 2
+    assert good[-1].free == 0
+
+
+@pytest.mark.asyncio
 async def test_set_unavailable_publishes_zeroed_free_for_idle_proxy(
     bluetooth_device: ESPHomeBluetoothDevice,
 ) -> None:

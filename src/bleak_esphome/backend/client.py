@@ -310,7 +310,7 @@ class ESPHomeClient(BaseBleakClient):
         self._async_disconnected_cleanup()
         return False
 
-    async def _settle_slot_after_failure(self, context: str, timeout: float) -> None:
+    async def _settle_slot(self, context: str, timeout: float) -> None:
         """
         Wait for the freed slot to settle after a failure or disconnect.
 
@@ -510,9 +510,7 @@ class ESPHomeClient(BaseBleakClient):
             # Settle outside the ``connecting()`` pause; cancels and
             # signals bypass this handler and are never stalled behind it.
             if settle_needed:
-                await self._settle_slot_after_failure(
-                    "failed connect", CONNECT_FREE_SLOT_TIMEOUT
-                )
+                await self._settle_slot("failed connect", CONNECT_FREE_SLOT_TIMEOUT)
             raise
 
         try:
@@ -525,7 +523,7 @@ class ESPHomeClient(BaseBleakClient):
             # Release, then settle before the retry; never mask the
             # original error.
             if self._abandon_connect_attempt():
-                await self._settle_slot_after_failure(
+                await self._settle_slot(
                     "failed connect setup", CONNECT_FREE_SLOT_TIMEOUT
                 )
             raise
@@ -551,7 +549,7 @@ class ESPHomeClient(BaseBleakClient):
         finally:
             self._async_ble_device_disconnected()
         # Settle only; a teardown path has nothing to fail over to.
-        await self._settle_slot_after_failure("disconnect", DISCONNECT_TIMEOUT)
+        await self._settle_slot("disconnect", DISCONNECT_TIMEOUT)
 
     async def _wait_for_free_connection_slot(self, timeout: float) -> None:
         """Wait for a free connection slot."""

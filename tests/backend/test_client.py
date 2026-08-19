@@ -663,9 +663,7 @@ async def test_bleak_client_connect_settle_runs_with_scanning_resumed(
 
     with (
         patch_connect_rpcs(client) as (mock_connect, _mock_disconnect),
-        patch.object(
-            client, "_settle_slot_after_failure", side_effect=_record_scanning
-        ),
+        patch.object(client, "_settle_slot", side_effect=_record_scanning),
     ):
         task, callback = await start_connect(bleak_client, mock_connect)
         callback(True, 23, 1)
@@ -691,7 +689,7 @@ async def test_bleak_client_connect_failed_release_skips_settle(
         patch_connect_rpcs(
             client, disconnect_side_effect=APIConnectionError("api gone")
         ) as (mock_connect, _mock_disconnect),
-        patch.object(client, "_settle_slot_after_failure") as mock_settle,
+        patch.object(client, "_settle_slot") as mock_settle,
     ):
         task, callback = await start_connect(bleak_client, mock_connect)
         callback(True, 23, 1)
@@ -758,7 +756,7 @@ async def test_bleak_client_connect_services_drop_skips_settle(
             client._client,
             "bluetooth_device_disconnect_no_wait",
         ) as mock_disconnect,
-        patch.object(client, "_settle_slot_after_failure") as mock_settle,
+        patch.object(client, "_settle_slot") as mock_settle,
     ):
         task, callback = await start_connect(bleak_client, mock_connect)
         callback(True, 23, 0)
@@ -1455,7 +1453,7 @@ async def test_bleak_client_connect_get_services_signal_releases_without_settle(
             client._client,
             "bluetooth_device_disconnect_no_wait",
         ) as mock_disconnect,
-        patch.object(client, "_settle_slot_after_failure") as mock_settle,
+        patch.object(client, "_settle_slot") as mock_settle,
     ):
         task, callback = await start_connect(bleak_client, mock_connect)
         callback(True, 23, 0)
