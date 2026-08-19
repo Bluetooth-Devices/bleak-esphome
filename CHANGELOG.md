@@ -1,5 +1,13 @@
 # Changelog
 
+## v3.10.4 (2026-08-19)
+
+### Bug fixes
+
+
+- Release esp side connection when connect is cancelled after link up ([`25c4973`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/25c4973ae01a827b7c82df96314858d872765fe5))
+
+
 ## v3.10.3 (2026-08-19)
 
 ### Bug fixes
