@@ -74,21 +74,6 @@ _LOGGER = logging.getLogger(__name__)
 _ESPHomeClient = TypeVar("_ESPHomeClient", bound="ESPHomeClient")
 _R = TypeVar("_R")
 _P = ParamSpec("_P")
-_E = TypeVar("_E", bound=BaseException)
-
-
-def _with_notes(err: _E, cause: BaseException) -> _E:
-    """
-    Carry any notes on ``cause`` over to the error the caller sees.
-
-    The api errors below are re-raised as bleak errors, so a note attached
-    to the original -- for example ``stop_notify``'s failed-release detail
-    -- would otherwise only be reachable through ``__cause__`` and be
-    absent from the traceback of the error the caller actually catches.
-    """
-    for note in getattr(cause, "__notes__", ()):
-        err.add_note(note)
-    return err
 
 
 def api_error_as_bleak_error(
@@ -104,7 +89,7 @@ def api_error_as_bleak_error(
         try:
             return await func(self, *args, **kwargs)
         except TimeoutAPIError as err:
-            raise _with_notes(TimeoutError(str(err)), err) from err
+            raise TimeoutError(str(err)) from err
         except BluetoothConnectionDroppedError as ex:
             _LOGGER.debug(
                 "%s: BLE device disconnected during %s operation",
@@ -112,7 +97,7 @@ def api_error_as_bleak_error(
                 func.__name__,
             )
             self._async_ble_device_disconnected()
-            raise _with_notes(BleakError(str(ex)), ex) from ex
+            raise BleakError(str(ex)) from ex
         except BluetoothGATTAPIError as ex:
             # If the device disconnects in the middle of an operation
             # be sure to mark it as disconnected so any library using
@@ -129,9 +114,9 @@ def api_error_as_bleak_error(
                     func.__name__,
                 )
                 self._async_ble_device_disconnected()
-            raise _with_notes(BleakError(str(ex)), ex) from ex
+            raise BleakError(str(ex)) from ex
         except APIConnectionError as err:
-            raise _with_notes(BleakError(str(err)), err) from err
+            raise BleakError(str(err)) from err
 
     return _async_wrap_bluetooth_operation
 
@@ -929,32 +914,17 @@ class ESPHomeClient(BaseBleakClient):
             )
         )
 
-        if not self._feature_flags & BluetoothProxyFeature.REMOTE_CACHING.value:
-            return
-
         try:
             # For connection v3 we are responsible for enabling notifications
             # on the cccd (characteristic client config descriptor) handle since
             # the esp32 will not have resolved the characteristic descriptors to
             # save memory since doing so can exhaust the memory and cause a soft
             # reset
-            cccd_descriptor = characteristic.get_descriptor(CCCD_UUID)
-            if not cccd_descriptor:
-                raise BleakError(
-                    f"{self._description}: Characteristic {characteristic.uuid} "
-                    "does not have a characteristic client config descriptor."
-                )
-
-            _LOGGER.debug(
-                "%s: Writing to CCD descriptor %s for notifications with properties=%s",
-                self._description,
-                cccd_descriptor.handle,
-                characteristic.properties,
-            )
+            if (cccd_descriptor := self._get_cccd(characteristic)) is None:
+                return
             supports_notify = "notify" in characteristic.properties
-            await self._client.bluetooth_gatt_write_descriptor(
-                self._address_as_int,
-                cccd_descriptor.handle,
+            await self._async_write_cccd(
+                cccd_descriptor,
                 CCCD_NOTIFY_BYTES if supports_notify else CCCD_INDICATE_BYTES,
                 timeout,
             )
@@ -985,17 +955,15 @@ class ESPHomeClient(BaseBleakClient):
         ``BleakError`` where it previously always returned. Both failures
         are retryable. A failed proxy-side release keeps the subscription
         entry so a later ``stop_notify`` retries it; while it is retained it
-        also blocks ``start_notify`` on that handle, which shares the same
-        bookkeeping as its duplicate-subscription guard, so the release
-        failure is attached as a note to the error the caller receives and
-        the two can be told apart. A failed CCCD write releases the
-        proxy-side subscription and drops the entry, but the handle is
-        remembered so a later ``stop_notify`` re-attempts the descriptor
-        write instead of returning a success while the peripheral keeps
-        notifying. A release that fails because the device disconnected
-        drops the entry instead of retaining it, so a reconnect can subscribe
-        to that handle again; a disconnect likewise forgets any outstanding
-        CCCD write, since the peripheral stops notifying with the link.
+        also blocks ``start_notify`` on that handle. A failed CCCD write
+        releases the proxy-side subscription and drops the entry, but the
+        handle is remembered so a later ``stop_notify`` re-attempts the
+        descriptor write instead of returning a success while the peripheral
+        keeps notifying. A release that fails because the device
+        disconnected drops the entry instead of retaining it, so a reconnect
+        can subscribe to that handle again; a disconnect likewise forgets any
+        outstanding CCCD write, since the peripheral stops notifying with the
+        link.
 
         Args:
         ----
@@ -1021,61 +989,106 @@ class ESPHomeClient(BaseBleakClient):
             if handle in self._cccd_dirty:
                 await self._async_clear_cccd(characteristic)
             return
-        notify_stop, _ = notify_cancel
         try:
             # Write the CCCD first so the peripheral is quiet before the
             # proxy-side subscription goes away.
             await self._async_clear_cccd(characteristic)
-        except BaseException as err:
+        except BaseException:
             # Use BaseException to handle CancelledError as well as Exception.
             # Always release the proxy-side subscription, even when the CCCD
-            # write fails. The release is best-effort here because the CCCD
-            # failure is the actionable root cause and must not be replaced
-            # by a secondary error from the cleanup path -- except for a
-            # BaseException that is not an Exception, which is a request to
-            # stop and has to win over any error it interrupts, so it is
-            # re-raised as-is below.
-            try:
-                await notify_stop()
-            except BaseException as release_err:
-                # Put the entry back so a later stop_notify retries the
-                # release instead of hitting the missing-handle no-op, and
-                # note the failure on the error the caller sees: while the
-                # entry is retained it also blocks start_notify on this
-                # handle, which is not something the CCCD error conveys.
-                retained = self._restore_notify_cancel(handle, notify_cancel)
-                _LOGGER.warning(
-                    "%s: Failed to release the proxy notify subscription for "
-                    "handle %s; the proxy may keep forwarding notifications",
-                    self._description,
-                    handle,
-                    exc_info=True,
-                )
-                if not isinstance(release_err, Exception):
-                    # Cancellation, Ctrl-C and SystemExit are requests to
-                    # stop; they win over the CCCD error they interrupted
-                    # instead of being demoted to a note on it.
-                    raise
-                err.add_note(
-                    "Releasing the proxy notify subscription for handle "
-                    f"{handle} also failed with {release_err!r}; "
-                    "the proxy may keep forwarding notifications."
-                    + (
-                        " start_notify on this handle stays blocked until a"
-                        " later stop_notify succeeds or the device"
-                        " disconnects."
-                        if retained
-                        else ""
-                    )
-                )
+            # write fails; that failure is the actionable root cause and must
+            # not be replaced by a secondary error from the cleanup path.
+            await self._async_release_notify(handle, notify_cancel, best_effort=True)
             raise
+        await self._async_release_notify(handle, notify_cancel)
+
+    async def _async_release_notify(
+        self,
+        handle: int,
+        notify_cancel: _NotifyCancel,
+        best_effort: bool = False,
+    ) -> None:
+        """
+        Release the proxy-side notify subscription for ``handle``.
+
+        A failing release is retryable, so the popped entry is put back
+        rather than leaving the handle unsubscribed in our bookkeeping only.
+        With ``best_effort`` the caller is already unwinding a failed CCCD
+        write, so an ordinary release failure is logged instead of replacing
+        that error; a ``BaseException`` that is not an ``Exception`` is a
+        request to stop and still wins over the error it interrupted.
+        """
+        notify_stop, _ = notify_cancel
         try:
             await notify_stop()
-        except BaseException:
-            # A failing release is retryable, so put the entry back rather
-            # than leaving the handle unsubscribed in our bookkeeping only.
+        except BaseException as release_err:
+            # Use BaseException to handle CancelledError as well as Exception.
             self._restore_notify_cancel(handle, notify_cancel)
+            if not best_effort:
+                raise
+            _LOGGER.warning(
+                "%s: Failed to release the proxy notify subscription for "
+                "handle %s; the proxy may keep forwarding notifications",
+                self._description,
+                handle,
+                exc_info=True,
+            )
+            if isinstance(release_err, Exception):
+                return
+            # Cancellation, Ctrl-C and SystemExit are requests to stop, so they
+            # win over the CCCD failure they interrupted. That failure never
+            # reaches the caller, so log it here instead of dropping it.
+            _LOGGER.warning(
+                "%s: Clearing the CCCD for handle %s failed; the peripheral "
+                "may keep notifying",
+                self._description,
+                handle,
+                exc_info=release_err.__context__,
+            )
             raise
+
+    def _get_cccd(
+        self, characteristic: BleakGATTCharacteristic
+    ) -> BleakGATTDescriptor | None:
+        """
+        Return the client config descriptor this host has to write itself.
+
+        ``None`` on firmware without ``REMOTE_CACHING``: the esp32 resolved
+        the descriptors and drives the CCCD itself, so neither
+        ``start_notify`` nor ``stop_notify`` touches it. On connection v3 the
+        esp32 skipped that resolution to save memory, so a characteristic
+        without a CCCD is an error: subscribing would never reach the
+        peripheral, and unsubscribing would leave it notifying for the life
+        of the connection.
+        """
+        if not self._feature_flags & BluetoothProxyFeature.REMOTE_CACHING.value:
+            return None
+        if cccd_descriptor := characteristic.get_descriptor(CCCD_UUID):
+            return cccd_descriptor
+        raise BleakError(
+            f"{self._description}: Characteristic {characteristic.uuid} "
+            "does not have a characteristic client config descriptor."
+        )
+
+    async def _async_write_cccd(
+        self,
+        cccd_descriptor: BleakGATTDescriptor,
+        value: bytes,
+        timeout: float,
+    ) -> None:
+        """Write ``value`` to a client config descriptor."""
+        _LOGGER.debug(
+            "%s: Writing %s to CCD descriptor %s",
+            self._description,
+            value.hex(),
+            cccd_descriptor.handle,
+        )
+        await self._client.bluetooth_gatt_write_descriptor(
+            self._address_as_int,
+            cccd_descriptor.handle,
+            value,
+            timeout,
+        )
 
     async def _async_clear_cccd(self, characteristic: BleakGATTCharacteristic) -> None:
         """
@@ -1085,41 +1098,23 @@ class ESPHomeClient(BaseBleakClient):
         never resolved the descriptors, so it cannot undo the CCCD write
         either. Without this the proxy stops forwarding the notifications
         but the peripheral keeps sending them for the life of the
-        connection. Nothing to do on firmware that resolves the descriptors
-        itself.
+        connection.
 
         The handle is recorded in ``_cccd_dirty`` while the write is
         outstanding and forgotten again once it lands, so a ``stop_notify``
         that runs after the proxy-side subscription was already released can
         tell a peripheral left notifying apart from a handle that was never
         subscribed. Only a failure that is actually retryable is recorded: a
-        characteristic with no CCCD at all, and a failure once the link is
-        already gone, leave the set untouched.
+        characteristic with no CCCD at all raises before anything is
+        recorded, and a failure once the link is already gone leaves the set
+        untouched.
         """
-        if not self._feature_flags & BluetoothProxyFeature.REMOTE_CACHING.value:
+        if (cccd_descriptor := self._get_cccd(characteristic)) is None:
             return
-        cccd_descriptor = characteristic.get_descriptor(CCCD_UUID)
-        if not cccd_descriptor:
-            # Same error start_notify raises for this condition: returning
-            # successfully here would hide a peripheral that keeps notifying
-            # for the life of the connection. Raised before the try below so
-            # the handle is not marked dirty: there is no descriptor to write,
-            # so there is nothing a later stop_notify could retry.
-            raise BleakError(
-                f"{self._description}: Characteristic {characteristic.uuid} "
-                "does not have a characteristic client config descriptor."
-            )
+        handle = characteristic.handle
         try:
-            _LOGGER.debug(
-                "%s: Writing to CCD descriptor %s to stop notifications",
-                self._description,
-                cccd_descriptor.handle,
-            )
-            await self._client.bluetooth_gatt_write_descriptor(
-                self._address_as_int,
-                cccd_descriptor.handle,
-                CCCD_DISABLE_BYTES,
-                GATT_NOTIFY_TIMEOUT,
+            await self._async_write_cccd(
+                cccd_descriptor, CCCD_DISABLE_BYTES, GATT_NOTIFY_TIMEOUT
             )
         except BaseException:
             # Use BaseException to handle CancelledError as well as Exception.
@@ -1132,15 +1127,15 @@ class ESPHomeClient(BaseBleakClient):
             # a real CCCD round trip. A disconnect stops the notifications
             # anyway, so there is nothing left to retry.
             if self._is_connected:
-                self._cccd_dirty.add(characteristic.handle)
+                self._cccd_dirty.add(handle)
             raise
-        self._cccd_dirty.discard(characteristic.handle)
+        self._cccd_dirty.discard(handle)
 
     def _restore_notify_cancel(
         self,
         handle: int,
         notify_cancel: _NotifyCancel,
-    ) -> bool:
+    ) -> None:
         """
         Put a popped notify entry back so a failed release stays retryable.
 
@@ -1153,21 +1148,14 @@ class ESPHomeClient(BaseBleakClient):
         subscription made after the pop from being clobbered; the popped
         entry has lost the handle in that case and is aborted too, so it is
         not left dangling.
-
-        Returns
-        -------
-            ``True`` when the popped entry is the one now in the dict, which
-            is also when it blocks ``start_notify`` on that handle.
-
         """
         _, notify_abort = notify_cancel
         if not self._is_connected:
             notify_abort()
-            return False
+            return
         if self._notify_cancels.setdefault(handle, notify_cancel) is not notify_cancel:
             # A start_notify after the pop already owns this handle, so the
-            # popped entry is stale: nothing will retry its release, and it
-            # must not be reported as retained.
+            # popped entry is stale: nothing will retry its release.
             _LOGGER.debug(
                 "%s: Notifications were re-enabled on handle %s while the "
                 "release was failing; discarding the stale entry",
@@ -1175,8 +1163,6 @@ class ESPHomeClient(BaseBleakClient):
                 handle,
             )
             notify_abort()
-            return False
-        return True
 
     def _raise_if_not_connected(self) -> None:
         """Raise a BleakError if not connected."""
