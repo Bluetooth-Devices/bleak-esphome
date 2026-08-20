@@ -169,8 +169,8 @@ class ESPHomeClient(BaseBleakClient):
         self._mtu: int | None = None
         self._cancel_connection_state: Callable[[], None] | None = None
         self._notify_cancels: dict[int, _NotifyCancel] = {}
-        # Handles whose CCCD clear failed after the proxy-side subscription
-        # was already released, so a later stop_notify retries the write
+        # Handles whose CCCD write may have landed while the local
+        # bookkeeping was unwound, so a later stop_notify retries the clear
         # instead of returning the missing-handle no-op.
         self._cccd_dirty: set[int] = set()
         self._device_info = client_data.device_info
@@ -924,6 +924,7 @@ class ESPHomeClient(BaseBleakClient):
                 return
             supports_notify = "notify" in characteristic.properties
             await self._async_write_cccd(
+                ble_handle,
                 cccd_descriptor,
                 CCCD_NOTIFY_BYTES if supports_notify else CCCD_INDICATE_BYTES,
                 timeout,
@@ -945,18 +946,10 @@ class ESPHomeClient(BaseBleakClient):
         need to track which characteristics they have subscribed to.
 
         On connection v3 (``REMOTE_CACHING``) proxies the client config
-        descriptor is cleared so the peripheral stops notifying. A missing
-        descriptor raises ``BleakError`` with the same message
-        ``start_notify`` uses, so a caller never gets a successful return
-        while the peripheral keeps notifying.
-
-        The CCCD write is a round trip to the peripheral, so this method
-        can block for up to the proxy GATT timeout and can raise
-        ``BleakError`` where it previously always returned. Both failures
-        are retryable by calling ``stop_notify`` again; which bookkeeping
-        survives each failure — and how a disconnect discards all of it —
-        is documented on ``_async_release_notify``, ``_async_clear_cccd``
-        and ``_restore_notify_cancel``.
+        descriptor is cleared so the peripheral stops notifying. That is a
+        round trip, so this method can block for up to the proxy GATT
+        timeout and can raise ``BleakError`` where it previously always
+        returned; calling ``stop_notify`` again retries the write.
 
         Args:
         ----
@@ -972,72 +965,39 @@ class ESPHomeClient(BaseBleakClient):
         # to be consistent with the behavior of the BlueZ backend. The entry is popped
         # up front so a second concurrent stop_notify on the same handle is the same
         # no-op it has always been instead of issuing a duplicate CCCD write and a
-        # duplicate release; it is put back only when the release fails and is
-        # therefore worth retrying.
+        # duplicate release.
         if not (notify_cancel := self._notify_cancels.pop(handle, None)):
-            # The proxy-side subscription is already gone, but an earlier
-            # stop_notify may have failed to clear the CCCD. Retry that write
-            # instead of returning a success while the peripheral is still
-            # notifying.
+            # The proxy-side subscription is already gone, but an earlier CCCD
+            # write may have failed. Retry it instead of returning a success
+            # while the peripheral is still notifying.
             if handle in self._cccd_dirty:
                 await self._async_clear_cccd(characteristic)
             return
+        notify_stop, _ = notify_cancel
         try:
             # Write the CCCD first so the peripheral is quiet before the
             # proxy-side subscription goes away.
             await self._async_clear_cccd(characteristic)
         except BaseException:
             # Use BaseException to handle CancelledError as well as Exception.
-            # Always release the proxy-side subscription, even when the CCCD
-            # write fails; that failure is the actionable root cause and must
-            # not be replaced by a secondary error from the cleanup path.
-            await self._async_release_notify(handle, notify_cancel, best_effort=True)
+            # Release the proxy-side subscription anyway, but let the CCCD
+            # failure reach the caller: it is the actionable root cause.
+            # aioesphomeapi's stop_notify is an idempotent, synchronous body in
+            # an async wrapper, so it only fails once the API connection is
+            # gone -- there is nothing to retry and the disconnect cleanup owns
+            # the rest.
+            try:
+                await notify_stop()
+            except Exception:
+                _LOGGER.warning(
+                    "%s: Failed to release the proxy notify subscription for "
+                    "handle %s; the proxy may keep forwarding notifications",
+                    self._description,
+                    handle,
+                    exc_info=True,
+                )
             raise
-        await self._async_release_notify(handle, notify_cancel)
-
-    async def _async_release_notify(
-        self,
-        handle: int,
-        notify_cancel: _NotifyCancel,
-        best_effort: bool = False,
-    ) -> None:
-        """
-        Release the proxy-side notify subscription for ``handle``.
-
-        A failing release is retryable, so the popped entry is put back
-        rather than leaving the handle unsubscribed in our bookkeeping only.
-        With ``best_effort`` the caller is already unwinding a failed CCCD
-        write, so an ordinary release failure is logged instead of replacing
-        that error; a ``BaseException`` that is not an ``Exception`` is a
-        request to stop and still wins over the error it interrupted.
-        """
-        notify_stop, _ = notify_cancel
-        try:
-            await notify_stop()
-        except BaseException as release_err:
-            self._restore_notify_cancel(handle, notify_cancel)
-            if not best_effort:
-                raise
-            _LOGGER.warning(
-                "%s: Failed to release the proxy notify subscription for "
-                "handle %s; the proxy may keep forwarding notifications",
-                self._description,
-                handle,
-                exc_info=True,
-            )
-            if isinstance(release_err, Exception):
-                return
-            # Cancellation, Ctrl-C and SystemExit are requests to stop, so they
-            # win over the CCCD failure they interrupted. That failure never
-            # reaches the caller, so log it here instead of dropping it.
-            _LOGGER.warning(
-                "%s: Clearing the CCCD for handle %s failed; the peripheral "
-                "may keep notifying",
-                self._description,
-                handle,
-                exc_info=release_err.__context__,
-            )
-            raise
+        await notify_stop()
 
     def _get_cccd(
         self, characteristic: BleakGATTCharacteristic
@@ -1064,23 +1024,48 @@ class ESPHomeClient(BaseBleakClient):
 
     async def _async_write_cccd(
         self,
+        handle: int,
         cccd_descriptor: BleakGATTDescriptor,
         value: bytes,
         timeout: float,
     ) -> None:
-        """Write ``value`` to a client config descriptor."""
+        """
+        Write ``value`` to the client config descriptor of ``handle``.
+
+        A failed write may still have landed on the peripheral, so the
+        characteristic handle is recorded in ``_cccd_dirty`` and a later
+        ``stop_notify`` clears the descriptor instead of taking the
+        missing-handle no-op. Only while the link is up: the disconnect
+        cleanup may have run inside the await and a ``TimeoutAPIError`` or
+        ``CancelledError`` does not trigger a second one, so an unguarded add
+        would survive into the next connection -- which has nothing left to
+        retry anyway.
+        """
         _LOGGER.debug(
             "%s: Writing %s to CCD descriptor %s",
             self._description,
             value,
             cccd_descriptor.handle,
         )
-        await self._client.bluetooth_gatt_write_descriptor(
-            self._address_as_int,
-            cccd_descriptor.handle,
-            value,
-            timeout,
-        )
+        try:
+            await self._client.bluetooth_gatt_write_descriptor(
+                self._address_as_int,
+                cccd_descriptor.handle,
+                value,
+                timeout,
+            )
+        except BaseException:
+            if self._is_connected:
+                self._cccd_dirty.add(handle)
+            raise
+        if handle in self._notify_cancels:
+            # A start_notify owns the handle: either this write is its own
+            # enable, or one raced a clear and has a write in flight against
+            # the same descriptor with no ordering guarantee. Leave the handle
+            # dirty so the next stop_notify clears it again instead of
+            # declaring a descriptor it may have lost the race for clean.
+            return
+        self._cccd_dirty.discard(handle)
 
     async def _async_clear_cccd(self, characteristic: BleakGATTCharacteristic) -> None:
         """
@@ -1092,65 +1077,19 @@ class ESPHomeClient(BaseBleakClient):
         but the peripheral keeps sending them for the life of the
         connection.
 
-        The handle is recorded in ``_cccd_dirty`` while the write is
-        outstanding and forgotten again once it lands, so a ``stop_notify``
-        that runs after the proxy-side subscription was already released can
-        tell a peripheral left notifying apart from a handle that was never
-        subscribed.
+        ``_async_write_cccd`` tracks whether the write landed, so a
+        ``stop_notify`` that runs after the proxy-side subscription was
+        already released can tell a peripheral left notifying apart from a
+        handle that was never subscribed.
         """
         if (cccd_descriptor := self._get_cccd(characteristic)) is None:
             return
-        handle = characteristic.handle
-        try:
-            await self._async_write_cccd(
-                cccd_descriptor, CCCD_DISABLE_BYTES, GATT_NOTIFY_TIMEOUT
-            )
-        except BaseException:
-            # Only record the handle while the link is up, mirroring the guard
-            # _restore_notify_cancel applies to the notify entry: the
-            # disconnect cleanup may have run inside the await and already
-            # cleared the set, and a TimeoutAPIError or CancelledError does not
-            # trigger a second cleanup, so an unguarded add would survive the
-            # disconnect and turn the next connection's no-op stop_notify into
-            # a real CCCD round trip. A disconnect stops the notifications
-            # anyway, so there is nothing left to retry.
-            if self._is_connected:
-                self._cccd_dirty.add(handle)
-            raise
-        self._cccd_dirty.discard(handle)
-
-    def _restore_notify_cancel(
-        self,
-        handle: int,
-        notify_cancel: _NotifyCancel,
-    ) -> None:
-        """
-        Put a popped notify entry back so a failed release stays retryable.
-
-        Nothing is restored once the device has disconnected: the popped
-        entry was invisible to ``_async_disconnected_cleanup``, so putting
-        it back would resurrect state nothing clears again and block
-        ``start_notify`` on that handle for the life of the client. The
-        abort half is run instead, mirroring what the cleanup would have
-        done had the entry still been in the dict. ``setdefault`` keeps a
-        subscription made after the pop from being clobbered; the popped
-        entry has lost the handle in that case and is aborted too, so it is
-        not left dangling.
-        """
-        _, notify_abort = notify_cancel
-        if not self._is_connected:
-            notify_abort()
-            return
-        if self._notify_cancels.setdefault(handle, notify_cancel) is not notify_cancel:
-            # A start_notify after the pop already owns this handle, so the
-            # popped entry is stale: nothing will retry its release.
-            _LOGGER.debug(
-                "%s: Notifications were re-enabled on handle %s while the "
-                "release was failing; discarding the stale entry",
-                self._description,
-                handle,
-            )
-            notify_abort()
+        await self._async_write_cccd(
+            characteristic.handle,
+            cccd_descriptor,
+            CCCD_DISABLE_BYTES,
+            GATT_NOTIFY_TIMEOUT,
+        )
 
     def _raise_if_not_connected(self) -> None:
         """Raise a BleakError if not connected."""
