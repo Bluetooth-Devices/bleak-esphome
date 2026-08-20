@@ -22,7 +22,7 @@ from habluetooth import BaseHaRemoteScanner, HaBluetoothConnector
 
 from bleak_esphome.backend.client import (
     CONNECT_FREE_SLOT_TIMEOUT,
-    CONNECT_TIMEOUT_WARN_INTERVAL,
+    CONNECT_TIMEOUT_WARN_REPEAT_ATTEMPTS,
     CONNECT_TIMEOUT_WARN_THRESHOLD,
     GATT_HEADER_SIZE,
     ESPHomeClient,
@@ -2237,10 +2237,41 @@ async def test_connect_timeout_warns_again_on_the_sparse_interval(
         "bluetooth_device_connect",
         side_effect=TimeoutAPIError("Timeout waiting for connect response"),
     ):
-        for _ in range(CONNECT_TIMEOUT_WARN_INTERVAL):
+        for _ in range(CONNECT_TIMEOUT_WARN_REPEAT_ATTEMPTS):
             with pytest.raises(TimeoutError):
                 await bleak_client.connect(dangerous_use_bleak_cache=True)
 
     # The leading edge, then the interval multiple: two warnings, not one.
     assert caplog.text.count("No connection state reported") == 2
-    assert f"last {CONNECT_TIMEOUT_WARN_INTERVAL} connect requests" in caplog.text
+    expected = f"last {CONNECT_TIMEOUT_WARN_REPEAT_ATTEMPTS} connect requests"
+    assert expected in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_connect_error_response_clears_the_timeout_streak(
+    bleak_pair: tuple[BleakClient, ESPHomeClient],
+) -> None:
+    """
+    An error response clears the streak, not only a successful one.
+
+    The proxy answering at all is what the streak measures, so the reset has
+    to sit above the error and disconnect returns. Without this only the
+    success path pins its placement.
+    """
+    bleak_client, client = bleak_pair
+    device = client._bluetooth_device
+    address = client._address_as_int
+    device.async_note_connect_timeout(address)
+    device.async_note_connect_timeout(address)
+
+    with patch.object(
+        client._client, "bluetooth_device_connect", return_value=Mock()
+    ) as mock_connect:
+        task = asyncio.create_task(bleak_client.connect(dangerous_use_bleak_cache=True))
+        await asyncio.sleep(0)
+        mock_connect.call_args_list[0][0][1](False, 0, 19)
+        with pytest.raises(BleakError):
+            await task
+
+    # Back to one: the streak was cleared by the error response.
+    assert device.async_note_connect_timeout(address) == 1

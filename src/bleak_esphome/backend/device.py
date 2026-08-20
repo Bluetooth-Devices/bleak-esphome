@@ -137,6 +137,12 @@ class ESPHomeBluetoothDevice:
         # Distinct from ``available``: only an explicit unavailability
         # arms the wait entry guard.
         self._unavailable = True
+        # Streaks describe the session that just died. The restart this
+        # warning recommends would otherwise leave the leading-edge arm
+        # unreachable for those addresses, delaying the next warning to
+        # the repeat arm. A session that flaps often enough to keep
+        # resetting these is a failure the caller can already see.
+        self._unanswered_connects.clear()
         # Clear the dead session's allocated list and free count so a
         # reused device cannot serve stale state; ``limit`` keeps the
         # last reported capacity.

@@ -179,7 +179,7 @@ Upgrade the proxy firmware. One known instance is an ESPHome bug on the
 uncached connect path, where the connected reply was only sent once _both_ the
 MTU and service-discovery events had arrived — so a peripheral that never
 completes the MTU exchange left the reply unsent. It affects ESPHome through
-2026.7.x and is fixed in 2026.8.0 (esphome/esphome#18198).
+2026.7.x and is fixed in 2026.8.0 or later (esphome/esphome#18198).
 
 If the warning persists on current firmware, capture the proxy log for one
 attempt and open an issue with both sides of the exchange.

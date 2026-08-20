@@ -61,8 +61,9 @@ DEFAULT_TIMEOUT = 30.0
 # is restarted, and nothing else in this library reports that. Warn once the
 # streak is long enough to rule out ordinary retries, then repeat sparingly
 # so a condition that never self-heals stays visible without spamming.
+# Both count attempts, not seconds.
 CONNECT_TIMEOUT_WARN_THRESHOLD = 5
-CONNECT_TIMEOUT_WARN_INTERVAL = 60
+CONNECT_TIMEOUT_WARN_REPEAT_ATTEMPTS = 60
 
 # CCCD (Characteristic Client Config Descriptor)
 CCCD_UUID = "00002902-0000-1000-8000-00805f9b34fb"
@@ -436,7 +437,7 @@ class ESPHomeClient(BaseBleakClient):
         count = self._bluetooth_device.async_note_connect_timeout(self._address_as_int)
         if (
             count != CONNECT_TIMEOUT_WARN_THRESHOLD
-            and count % CONNECT_TIMEOUT_WARN_INTERVAL
+            and count % CONNECT_TIMEOUT_WARN_REPEAT_ATTEMPTS
         ):
             return
         # Only the absence of a reply is observable. The connect request is
