@@ -955,7 +955,9 @@ class ESPHomeClient(BaseBleakClient):
         descriptor is cleared so the peripheral stops notifying. That is a
         round trip, so this method can block for up to the proxy GATT
         timeout and can raise ``BleakError`` where it previously always
-        returned; calling ``stop_notify`` again retries the write.
+        returned; calling ``stop_notify`` again retries a write that
+        failed. A characteristic with no client config descriptor raises
+        on every call and has nothing to retry.
 
         Args:
         ----
@@ -1035,10 +1037,11 @@ class ESPHomeClient(BaseBleakClient):
         which has nothing left to retry.
         """
         _LOGGER.debug(
-            "%s: Writing %s to CCD descriptor %s",
+            "%s: Writing %s to CCD descriptor %s for characteristic %s",
             self._description,
             value,
             cccd_descriptor.handle,
+            char_handle,
         )
         try:
             await self._client.bluetooth_gatt_write_descriptor(
