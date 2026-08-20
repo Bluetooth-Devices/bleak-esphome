@@ -8,7 +8,7 @@ import logging
 import sys
 from dataclasses import dataclass, field
 from functools import partial, wraps
-from typing import TYPE_CHECKING, Any, Concatenate, ParamSpec, TypeVar
+from typing import TYPE_CHECKING, Any, Concatenate, ParamSpec, TypeAlias, TypeVar
 
 from aioesphomeapi import (
     ESP_CONNECTION_ERROR_DESCRIPTION,
@@ -43,6 +43,11 @@ if TYPE_CHECKING:
     from .device import ESPHomeBluetoothDevice
     from .scanner import ESPHomeScanner
 
+    # (release, abort) pair returned by ``bluetooth_gatt_start_notify``.
+    _NotifyCancel: TypeAlias = tuple[
+        Callable[[], Coroutine[Any, Any, None]], Callable[[], None]
+    ]
+
     if sys.version_info < (3, 12):
         from typing_extensions import Buffer
     else:
@@ -60,6 +65,7 @@ DEFAULT_TIMEOUT = 30.0
 CCCD_UUID = "00002902-0000-1000-8000-00805f9b34fb"
 CCCD_NOTIFY_BYTES = b"\x01\x00"
 CCCD_INDICATE_BYTES = b"\x02\x00"
+CCCD_DISABLE_BYTES = b"\x00\x00"
 
 DEFAULT_MAX_WRITE_WITHOUT_RESPONSE = DEFAULT_MTU - GATT_HEADER_SIZE
 
@@ -162,9 +168,10 @@ class ESPHomeClient(BaseBleakClient):
         self._pending_release = False
         self._mtu: int | None = None
         self._cancel_connection_state: Callable[[], None] | None = None
-        self._notify_cancels: dict[
-            int, tuple[Callable[[], Coroutine[Any, Any, None]], Callable[[], None]]
-        ] = {}
+        self._notify_cancels: dict[int, _NotifyCancel] = {}
+        # Handles whose CCCD write may have landed while the local bookkeeping
+        # was unwound, so a later stop_notify retries the clear.
+        self._cccd_dirty: set[int] = set()
         self._device_info = client_data.device_info
         self._feature_flags = device_info.bluetooth_proxy_feature_flags_compat(
             client_data.api_version
@@ -191,6 +198,7 @@ class ESPHomeClient(BaseBleakClient):
         for _, notify_abort in self._notify_cancels.values():
             notify_abort()
         self._notify_cancels.clear()
+        self._cccd_dirty.clear()
         self._disconnect_callbacks.discard(self._async_esp_disconnected)
         self._bluetooth_device.async_untrack_client(
             self._address_as_int, self._async_ble_device_disconnected
@@ -876,6 +884,13 @@ class ESPHomeClient(BaseBleakClient):
                     proxy (the subscribe, and the CCCD write that follows it
                     on v3/REMOTE_CACHING connections). Defaults to 30.0.
 
+        Note:
+        ----
+            On a ``REMOTE_CACHING`` proxy a failed CCCD write may still have
+            landed, leaving the peripheral notifying. Callers that keep the
+            connection alive should call ``stop_notify`` on the same
+            characteristic to clear it.
+
         """
         self._raise_if_not_connected()
         timeout = kwargs.get("timeout", GATT_NOTIFY_TIMEOUT)
@@ -905,32 +920,18 @@ class ESPHomeClient(BaseBleakClient):
             )
         )
 
-        if not self._feature_flags & BluetoothProxyFeature.REMOTE_CACHING.value:
-            return
-
         try:
             # For connection v3 we are responsible for enabling notifications
             # on the cccd (characteristic client config descriptor) handle since
             # the esp32 will not have resolved the characteristic descriptors to
             # save memory since doing so can exhaust the memory and cause a soft
             # reset
-            cccd_descriptor = characteristic.get_descriptor(CCCD_UUID)
-            if not cccd_descriptor:
-                raise BleakError(
-                    f"{self._description}: Characteristic {characteristic.uuid} "
-                    "does not have a characteristic client config descriptor."
-                )
-
-            _LOGGER.debug(
-                "%s: Writing to CCD descriptor %s for notifications with properties=%s",
-                self._description,
-                cccd_descriptor.handle,
-                characteristic.properties,
-            )
+            if (cccd_descriptor := self._get_cccd(characteristic)) is None:
+                return
             supports_notify = "notify" in characteristic.properties
-            await self._client.bluetooth_gatt_write_descriptor(
-                self._address_as_int,
-                cccd_descriptor.handle,
+            await self._async_write_cccd(
+                ble_handle,
+                cccd_descriptor,
                 CCCD_NOTIFY_BYTES if supports_notify else CCCD_INDICATE_BYTES,
                 timeout,
             )
@@ -950,6 +951,15 @@ class ESPHomeClient(BaseBleakClient):
         handle, matching the BlueZ backend's behavior. Callers do not
         need to track which characteristics they have subscribed to.
 
+        On connection v3 (``REMOTE_CACHING``) proxies the client config
+        descriptor is cleared so the peripheral stops notifying. That is a
+        round trip, so this method can block for up to the proxy GATT
+        timeout and can raise ``BleakError`` where it previously always
+        returned. Calling ``stop_notify`` again retries whatever failed:
+        the CCCD write, and the proxy-side release, which is put back
+        under its handle when it raises. A characteristic with no client
+        config descriptor raises on every call and has nothing to retry.
+
         Args:
         ----
             characteristic (BleakGATTCharacteristic):
@@ -959,11 +969,138 @@ class ESPHomeClient(BaseBleakClient):
 
         """
         self._raise_if_not_connected()
+        handle = characteristic.handle
         # Do not raise KeyError if notifications are not enabled on this characteristic
-        # to be consistent with the behavior of the BlueZ backend
-        if notify_cancel := self._notify_cancels.pop(characteristic.handle, None):
-            notify_stop, _ = notify_cancel
+        # to be consistent with the behavior of the BlueZ backend. Popping up front
+        # keeps a concurrent second stop_notify the no-op it has always been.
+        if not (notify_cancel := self._notify_cancels.pop(handle, None)):
+            # The subscription is already gone, but an earlier CCCD write may
+            # have failed. Retry it instead of reporting success.
+            if handle in self._cccd_dirty:
+                await self._async_clear_cccd(characteristic)
+            return
+        try:
+            # Write the CCCD first so the peripheral is quiet before the
+            # proxy-side subscription goes away.
+            await self._async_clear_cccd(characteristic)
+        except BaseException:
+            # Use BaseException to handle CancelledError as well as Exception.
+            # Release the proxy-side subscription anyway, but let the CCCD
+            # failure reach the caller: it is the actionable root cause. The
+            # release keeps its own retry affordance, so nothing is lost.
+            try:
+                await self._async_release_notify(handle, notify_cancel)
+            except Exception:
+                _LOGGER.warning(
+                    "%s: Failed to release the proxy notify subscription for "
+                    "handle %s; the proxy may keep forwarding notifications",
+                    self._description,
+                    handle,
+                    exc_info=True,
+                )
+            raise
+        await self._async_release_notify(handle, notify_cancel)
+
+    async def _async_release_notify(
+        self, handle: int, notify_cancel: _NotifyCancel
+    ) -> None:
+        """
+        Release the proxy-side notify subscription for ``handle``.
+
+        The handle is popped from ``_notify_cancels`` before the CCCD write,
+        so a failed release would strand the subscription: nothing left for
+        ``_async_disconnected_cleanup`` to abort and nothing for a later
+        ``stop_notify`` to retry. Put the pair back so both paths reach it
+        again -- unless the link went down, since the cleanup already ran and
+        an unguarded restore would survive into the next connection, or a
+        ``start_notify`` took the handle over in the meantime.
+        """
+        notify_stop, _ = notify_cancel
+        try:
             await notify_stop()
+        except BaseException:
+            if self._is_connected:
+                self._notify_cancels.setdefault(handle, notify_cancel)
+            raise
+
+    def _get_cccd(
+        self, characteristic: BleakGATTCharacteristic
+    ) -> BleakGATTDescriptor | None:
+        """
+        Return the client config descriptor this host has to write itself.
+
+        ``None`` without ``REMOTE_CACHING``: the esp32 resolved the
+        descriptors and drives the CCCD itself. On connection v3 it skipped
+        that resolution to save memory, so a missing CCCD is an error.
+        """
+        if not self._feature_flags & BluetoothProxyFeature.REMOTE_CACHING.value:
+            return None
+        if cccd_descriptor := characteristic.get_descriptor(CCCD_UUID):
+            return cccd_descriptor
+        raise BleakError(
+            f"{self._description}: Characteristic {characteristic.uuid} "
+            "does not have a characteristic client config descriptor."
+        )
+
+    async def _async_write_cccd(
+        self,
+        char_handle: int,
+        cccd_descriptor: BleakGATTDescriptor,
+        value: bytes,
+        timeout: float,
+    ) -> None:
+        """
+        Write ``value`` to the client config descriptor of ``char_handle``.
+
+        A failed write may still have landed on the peripheral, so the
+        characteristic handle is recorded in ``_cccd_dirty`` and a later
+        ``stop_notify`` clears the descriptor instead of taking the
+        missing-handle no-op. Only while the link is up: a disconnect clears
+        the set, so an unguarded add would survive into the next connection,
+        which has nothing left to retry.
+        """
+        _LOGGER.debug(
+            "%s: Writing %s to CCD descriptor %s for characteristic %s",
+            self._description,
+            value,
+            cccd_descriptor.handle,
+            char_handle,
+        )
+        try:
+            await self._client.bluetooth_gatt_write_descriptor(
+                self._address_as_int,
+                cccd_descriptor.handle,
+                value,
+                timeout,
+            )
+        except BaseException:
+            if self._is_connected:
+                self._cccd_dirty.add(char_handle)
+            raise
+        if char_handle in self._notify_cancels:
+            # A start_notify owns the handle and may have a write in flight
+            # against the same descriptor with no ordering guarantee, so leave
+            # it dirty for the next stop_notify rather than declaring it clean.
+            return
+        self._cccd_dirty.discard(char_handle)
+
+    async def _async_clear_cccd(self, characteristic: BleakGATTCharacteristic) -> None:
+        """
+        Write ``0x0000`` to the client config descriptor.
+
+        Mirror of the connection v3 branch in ``start_notify``: the esp32
+        never resolved the descriptors, so it cannot undo the CCCD write
+        either. Without this the proxy stops forwarding the notifications but
+        the peripheral keeps sending them for the life of the connection.
+        """
+        if (cccd_descriptor := self._get_cccd(characteristic)) is None:
+            return
+        await self._async_write_cccd(
+            characteristic.handle,
+            cccd_descriptor,
+            CCCD_DISABLE_BYTES,
+            GATT_NOTIFY_TIMEOUT,
+        )
 
     def _raise_if_not_connected(self) -> None:
         """Raise a BleakError if not connected."""
