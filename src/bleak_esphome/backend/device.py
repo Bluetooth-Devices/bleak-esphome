@@ -130,8 +130,9 @@ class ESPHomeBluetoothDevice:
         next slot report; ``available`` is not restored by that, so a
         reusing caller must set it back to ``True`` on reconnect, which
         disarms the fail fast immediately. The free count stays zero
-        until the first slot report. This method never raises, so
-        teardown paths can call it without guards.
+        until the first slot report. Unanswered-connect streaks are
+        dropped with the rest of the dead session's state. This method
+        never raises, so teardown paths can call it without guards.
         """
         self.available = False
         # Distinct from ``available``: only an explicit unavailability
