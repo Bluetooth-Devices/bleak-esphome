@@ -16,7 +16,7 @@ import gc
 import logging
 from collections.abc import Iterator
 from typing import Any
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import ANY, AsyncMock, Mock, patch
 
 import pytest
 from aioesphomeapi import (
@@ -616,10 +616,37 @@ async def test_stop_notify_cccd_failure_survives_failing_release(
     ):
         await client.stop_notify(char)
     stop.assert_awaited_once()
-    assert char.handle not in client._notify_cancels
+    # The failed release is put back so a retry and the disconnect cleanup
+    # can still reach it.
+    assert client._notify_cancels[char.handle] == (stop, ANY)
     # The CCCD failure is the actionable root cause the caller gets; the
     # secondary release failure is reported through the log.
     assert "Failed to release the proxy notify subscription" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_stop_notify_release_failure_after_disconnect_is_not_restored(
+    client_data: ESPHomeClientData,
+    esphome_bluetooth_gatt_services: ESPHomeBluetoothGATTServices,
+) -> None:
+    """A release failing after the link dropped must not outlive it."""
+    client, char = await _connected_client_with_char(
+        client_data, esphome_bluetooth_gatt_services
+    )
+
+    async def _disconnect_and_raise() -> None:
+        client._is_connected = False
+        raise RuntimeError("release failed")
+
+    stop = AsyncMock(side_effect=_disconnect_and_raise)
+    client._notify_cancels[char.handle] = (stop, Mock())
+    with (
+        patch.object(client._client, "bluetooth_gatt_write_descriptor"),
+        pytest.raises(RuntimeError),
+    ):
+        await client.stop_notify(char)
+    stop.assert_awaited_once()
+    assert char.handle not in client._notify_cancels
 
 
 @pytest.mark.asyncio
@@ -672,7 +699,8 @@ async def test_stop_notify_cccd_failure_survives_cancelled_release(
     ):
         await client.stop_notify(char)
     stop.assert_awaited_once()
-    assert char.handle not in client._notify_cancels
+    # A cancelled release is retryable too, so the pair goes back.
+    assert client._notify_cancels[char.handle] == (stop, ANY)
 
 
 @pytest.mark.asyncio
@@ -690,7 +718,7 @@ async def test_stop_notify_raises_when_release_fails(
     with pytest.raises(RuntimeError):
         await client.stop_notify(char)
     stop.assert_awaited_once()
-    assert 99 not in client._notify_cancels
+    assert client._notify_cancels[99] == (stop, ANY)
 
 
 @pytest.mark.asyncio

@@ -955,9 +955,10 @@ class ESPHomeClient(BaseBleakClient):
         descriptor is cleared so the peripheral stops notifying. That is a
         round trip, so this method can block for up to the proxy GATT
         timeout and can raise ``BleakError`` where it previously always
-        returned; calling ``stop_notify`` again retries a write that
-        failed. A characteristic with no client config descriptor raises
-        on every call and has nothing to retry.
+        returned. Calling ``stop_notify`` again retries whatever failed:
+        the CCCD write, and the proxy-side release, which is put back
+        under its handle when it raises. A characteristic with no client
+        config descriptor raises on every call and has nothing to retry.
 
         Args:
         ----
@@ -978,7 +979,6 @@ class ESPHomeClient(BaseBleakClient):
             if handle in self._cccd_dirty:
                 await self._async_clear_cccd(characteristic)
             return
-        notify_stop, _ = notify_cancel
         try:
             # Write the CCCD first so the peripheral is quiet before the
             # proxy-side subscription goes away.
@@ -986,9 +986,10 @@ class ESPHomeClient(BaseBleakClient):
         except BaseException:
             # Use BaseException to handle CancelledError as well as Exception.
             # Release the proxy-side subscription anyway, but let the CCCD
-            # failure reach the caller: it is the actionable root cause.
+            # failure reach the caller: it is the actionable root cause. The
+            # release keeps its own retry affordance, so nothing is lost.
             try:
-                await notify_stop()
+                await self._async_release_notify(handle, notify_cancel)
             except Exception:
                 _LOGGER.warning(
                     "%s: Failed to release the proxy notify subscription for "
@@ -998,7 +999,29 @@ class ESPHomeClient(BaseBleakClient):
                     exc_info=True,
                 )
             raise
-        await notify_stop()
+        await self._async_release_notify(handle, notify_cancel)
+
+    async def _async_release_notify(
+        self, handle: int, notify_cancel: _NotifyCancel
+    ) -> None:
+        """
+        Release the proxy-side notify subscription for ``handle``.
+
+        The handle is popped from ``_notify_cancels`` before the CCCD write,
+        so a failed release would strand the subscription: nothing left for
+        ``_async_disconnected_cleanup`` to abort and nothing for a later
+        ``stop_notify`` to retry. Put the pair back so both paths reach it
+        again -- unless the link went down, since the cleanup already ran and
+        an unguarded restore would survive into the next connection, or a
+        ``start_notify`` took the handle over in the meantime.
+        """
+        notify_stop, _ = notify_cancel
+        try:
+            await notify_stop()
+        except BaseException:
+            if self._is_connected:
+                self._notify_cancels.setdefault(handle, notify_cancel)
+            raise
 
     def _get_cccd(
         self, characteristic: BleakGATTCharacteristic
