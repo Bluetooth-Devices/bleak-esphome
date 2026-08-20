@@ -9,13 +9,23 @@ from typing import TYPE_CHECKING
 
 from bleak_retry_connector import Allocations
 from bluetooth_data_tools import int_to_bluetooth_address
+from lru import LRU  # pylint: disable=no-name-in-module
 
 from .cache import ESPHomeBluetoothCache
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, MutableMapping
 
 _LOGGER = logging.getLogger(__name__)
+
+# Bound on the unanswered-connect streaks kept per proxy. Only addresses whose
+# connect request went unanswered are tracked, and a reply drops the entry,
+# so the live set is small. The bound is for the ones that never come back:
+# a device seen once and gone, or a peripheral rotating its address, would
+# otherwise leave an entry for the life of the connection. Evicting the
+# least-recently-used only restarts a streak for an address that has been
+# quiet longer than 128 others, which cannot mask an ongoing failure.
+MAX_TRACKED_UNANSWERED_CONNECTS = 128
 
 
 @dataclass(slots=True)
@@ -37,6 +47,30 @@ class ESPHomeBluetoothDevice:
     _tracked_clients: dict[int, Callable[[], None]] = field(default_factory=dict)
     _seen_allocated: bool = False
     _warned_untrusted: bool = False
+    _unanswered_connects: MutableMapping[int, int] = field(
+        default_factory=lambda: LRU(MAX_TRACKED_UNANSWERED_CONNECTS)
+    )
+
+    def async_note_connect_response(self, address: int) -> None:
+        """
+        Record that the proxy reported a connection state for ``address``.
+
+        Any response clears the streak, including a failure or a disconnect:
+        the proxy answering at all is what distinguishes a device that cannot
+        be reached from a proxy that has stopped replying.
+        """
+        self._unanswered_connects.pop(address, None)
+
+    def async_note_connect_timeout(self, address: int) -> int:
+        """
+        Record a connect request the proxy never answered for ``address``.
+
+        Returns the number of consecutive unanswered requests, so the caller
+        can decide when the streak is long enough to be worth reporting.
+        """
+        count = self._unanswered_connects.get(address, 0) + 1
+        self._unanswered_connects[address] = count
+        return count
 
     def async_subscribe_connection_slots(
         self, callback: Callable[[Allocations], None]
@@ -96,13 +130,20 @@ class ESPHomeBluetoothDevice:
         next slot report; ``available`` is not restored by that, so a
         reusing caller must set it back to ``True`` on reconnect, which
         disarms the fail fast immediately. The free count stays zero
-        until the first slot report. This method never raises, so
-        teardown paths can call it without guards.
+        until the first slot report. Unanswered-connect streaks are
+        dropped with the rest of the dead session's state. This method
+        never raises, so teardown paths can call it without guards.
         """
         self.available = False
         # Distinct from ``available``: only an explicit unavailability
         # arms the wait entry guard.
         self._unavailable = True
+        # Streaks describe the session that just died. The restart this
+        # warning recommends would otherwise leave the leading-edge arm
+        # unreachable for those addresses, delaying the next warning to
+        # the repeat arm. A session that flaps often enough to keep
+        # resetting these is a failure the caller can already see.
+        self._unanswered_connects.clear()
         # Clear the dead session's allocated list and free count so a
         # reused device cannot serve stale state; ``limit`` keeps the
         # last reported capacity.
