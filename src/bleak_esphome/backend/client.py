@@ -953,17 +953,10 @@ class ESPHomeClient(BaseBleakClient):
         The CCCD write is a round trip to the peripheral, so this method
         can block for up to the proxy GATT timeout and can raise
         ``BleakError`` where it previously always returned. Both failures
-        are retryable. A failed proxy-side release keeps the subscription
-        entry so a later ``stop_notify`` retries it; while it is retained it
-        also blocks ``start_notify`` on that handle. A failed CCCD write
-        releases the proxy-side subscription and drops the entry, but the
-        handle is remembered so a later ``stop_notify`` re-attempts the
-        descriptor write instead of returning a success while the peripheral
-        keeps notifying. A release that fails because the device
-        disconnected drops the entry instead of retaining it, so a reconnect
-        can subscribe to that handle again; a disconnect likewise forgets any
-        outstanding CCCD write, since the peripheral stops notifying with the
-        link.
+        are retryable by calling ``stop_notify`` again; which bookkeeping
+        survives each failure — and how a disconnect discards all of it —
+        is documented on ``_async_release_notify``, ``_async_clear_cccd``
+        and ``_restore_notify_cancel``.
 
         Args:
         ----
@@ -1022,7 +1015,6 @@ class ESPHomeClient(BaseBleakClient):
         try:
             await notify_stop()
         except BaseException as release_err:
-            # Use BaseException to handle CancelledError as well as Exception.
             self._restore_notify_cancel(handle, notify_cancel)
             if not best_effort:
                 raise
@@ -1080,7 +1072,7 @@ class ESPHomeClient(BaseBleakClient):
         _LOGGER.debug(
             "%s: Writing %s to CCD descriptor %s",
             self._description,
-            value.hex(),
+            value,
             cccd_descriptor.handle,
         )
         await self._client.bluetooth_gatt_write_descriptor(
@@ -1104,10 +1096,7 @@ class ESPHomeClient(BaseBleakClient):
         outstanding and forgotten again once it lands, so a ``stop_notify``
         that runs after the proxy-side subscription was already released can
         tell a peripheral left notifying apart from a handle that was never
-        subscribed. Only a failure that is actually retryable is recorded: a
-        characteristic with no CCCD at all raises before anything is
-        recorded, and a failure once the link is already gone leaves the set
-        untouched.
+        subscribed.
         """
         if (cccd_descriptor := self._get_cccd(characteristic)) is None:
             return
@@ -1117,7 +1106,6 @@ class ESPHomeClient(BaseBleakClient):
                 cccd_descriptor, CCCD_DISABLE_BYTES, GATT_NOTIFY_TIMEOUT
             )
         except BaseException:
-            # Use BaseException to handle CancelledError as well as Exception.
             # Only record the handle while the link is up, mirroring the guard
             # _restore_notify_cancel applies to the notify entry: the
             # disconnect cleanup may have run inside the await and already

@@ -30,6 +30,7 @@ from bleak_esphome.backend.scanner import ESPHomeScanner
 from ._helpers import (
     ESP_MAC_ADDRESS,
     ESP_NAME,
+    INDICATE_CHAR_UUID,
     fetch_services,
     make_bleak_client,
     patch_connect_rpcs,
@@ -38,7 +39,6 @@ from ._helpers import (
 )
 
 PRIMARY_CHAR_UUID = "090b7847-e12b-09a8-b04b-8e0922a9abab"
-INDICATE_CHAR_UUID = "00002a05-0000-1000-8000-00805f9b34fb"
 CCCD_UUID = "00002902-0000-1000-8000-00805f9b34fb"
 BLE_ADDRESS_AS_INT = 225106397622015
 

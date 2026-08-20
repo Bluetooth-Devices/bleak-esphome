@@ -37,13 +37,32 @@ from bleak.exc import BleakError
 from pytest_asyncio import fixture as aio_fixture
 
 from bleak_esphome.backend.client import (
+    CCCD_DISABLE_BYTES,
     CCCD_UUID,
     GATT_NOTIFY_TIMEOUT,
     ESPHomeClient,
     ESPHomeClientData,
 )
 
-from ._helpers import ESP_MAC_ADDRESS, _make_client
+from ._helpers import (
+    ESP_MAC_ADDRESS,
+    INDICATE_CHAR_UUID,
+    _make_client,
+    fetch_services,
+)
+
+
+async def _connected_client_with_char(
+    client_data: ESPHomeClientData,
+    services_payload: ESPHomeBluetoothGATTServices,
+) -> tuple[ESPHomeClient, BleakGATTCharacteristic]:
+    """Return a connected client and the fixture's indicate characteristic."""
+    client = _make_client(client_data)
+    client._is_connected = True
+    services = await fetch_services(client, services_payload)
+    char = services.get_characteristic(INDICATE_CHAR_UUID)
+    assert char is not None
+    return client, char
 
 
 @pytest.mark.asyncio
@@ -394,16 +413,9 @@ async def test_start_notify_already_enabled_raises(
     esphome_bluetooth_gatt_services: ESPHomeBluetoothGATTServices,
 ) -> None:
     """A second start_notify on the same handle raises BleakError."""
-    client = _make_client(client_data)
-    client._is_connected = True
-    with patch.object(
-        client._client,
-        "bluetooth_gatt_get_services",
-        return_value=esphome_bluetooth_gatt_services,
-    ):
-        services = await client._get_services()
-    char = services.get_characteristic("00002a05-0000-1000-8000-00805f9b34fb")
-    assert char is not None
+    client, char = await _connected_client_with_char(
+        client_data, esphome_bluetooth_gatt_services
+    )
     # Pre-populate the cancels dict; the implementation only inspects keys.
     client._notify_cancels[char.handle] = (AsyncMock(), Mock())
     with pytest.raises(BleakError, match="already enabled"):
@@ -439,16 +451,9 @@ async def test_start_notify_skips_cccd_without_remote_caching(
     esphome_bluetooth_gatt_services: ESPHomeBluetoothGATTServices,
 ) -> None:
     """Without REMOTE_CACHING the host does not write to the CCCD itself."""
-    client = _make_client(client_data)
-    client._is_connected = True
-    with patch.object(
-        client._client,
-        "bluetooth_gatt_get_services",
-        return_value=esphome_bluetooth_gatt_services,
-    ):
-        services = await client._get_services()
-    char = services.get_characteristic("00002a05-0000-1000-8000-00805f9b34fb")
-    assert char is not None
+    client, char = await _connected_client_with_char(
+        client_data, esphome_bluetooth_gatt_services
+    )
     # Disable REMOTE_CACHING so start_notify returns before touching the CCCD.
     client._feature_flags &= ~BluetoothProxyFeature.REMOTE_CACHING.value
     mock_stop_notify = AsyncMock()
@@ -492,16 +497,9 @@ async def test_stop_notify_disables_cccd(
     esphome_bluetooth_gatt_services: ESPHomeBluetoothGATTServices,
 ) -> None:
     """With REMOTE_CACHING the host clears the CCCD it wrote on start."""
-    client = _make_client(client_data)
-    client._is_connected = True
-    with patch.object(
-        client._client,
-        "bluetooth_gatt_get_services",
-        return_value=esphome_bluetooth_gatt_services,
-    ):
-        services = await client._get_services()
-    char = services.get_characteristic("00002a05-0000-1000-8000-00805f9b34fb")
-    assert char is not None
+    client, char = await _connected_client_with_char(
+        client_data, esphome_bluetooth_gatt_services
+    )
     cccd = char.get_descriptor(CCCD_UUID)
     assert cccd is not None
     stop = AsyncMock()
@@ -511,7 +509,7 @@ async def test_stop_notify_disables_cccd(
     ) as mock_write_desc:
         await client.stop_notify(char)
     mock_write_desc.assert_awaited_once_with(
-        client._address_as_int, cccd.handle, b"\x00\x00", GATT_NOTIFY_TIMEOUT
+        client._address_as_int, cccd.handle, CCCD_DISABLE_BYTES, GATT_NOTIFY_TIMEOUT
     )
     stop.assert_awaited_once()
     assert char.handle not in client._notify_cancels
@@ -523,16 +521,9 @@ async def test_stop_notify_skips_cccd_without_remote_caching(
     esphome_bluetooth_gatt_services: ESPHomeBluetoothGATTServices,
 ) -> None:
     """Without REMOTE_CACHING the esp32 owns the CCCD, so the host leaves it."""
-    client = _make_client(client_data)
-    client._is_connected = True
-    with patch.object(
-        client._client,
-        "bluetooth_gatt_get_services",
-        return_value=esphome_bluetooth_gatt_services,
-    ):
-        services = await client._get_services()
-    char = services.get_characteristic("00002a05-0000-1000-8000-00805f9b34fb")
-    assert char is not None
+    client, char = await _connected_client_with_char(
+        client_data, esphome_bluetooth_gatt_services
+    )
     client._feature_flags &= ~BluetoothProxyFeature.REMOTE_CACHING.value
     stop = AsyncMock()
     client._notify_cancels[char.handle] = (stop, Mock())
@@ -550,16 +541,9 @@ async def test_stop_notify_releases_proxy_when_cccd_write_fails(
     esphome_bluetooth_gatt_services: ESPHomeBluetoothGATTServices,
 ) -> None:
     """A failing CCCD write still releases the proxy-side subscription."""
-    client = _make_client(client_data)
-    client._is_connected = True
-    with patch.object(
-        client._client,
-        "bluetooth_gatt_get_services",
-        return_value=esphome_bluetooth_gatt_services,
-    ):
-        services = await client._get_services()
-    char = services.get_characteristic("00002a05-0000-1000-8000-00805f9b34fb")
-    assert char is not None
+    client, char = await _connected_client_with_char(
+        client_data, esphome_bluetooth_gatt_services
+    )
     stop = AsyncMock()
     client._notify_cancels[char.handle] = (stop, Mock())
     with (
@@ -585,7 +569,7 @@ async def test_stop_notify_raises_when_cccd_missing(
     stop = AsyncMock()
     char = Mock()
     char.handle = 99
-    char.uuid = "00002a05-0000-1000-8000-00805f9b34fb"
+    char.uuid = INDICATE_CHAR_UUID
     char.get_descriptor.return_value = None
     client._notify_cancels[99] = (stop, Mock())
     with (
@@ -616,16 +600,9 @@ async def test_stop_notify_cccd_failure_survives_failing_release(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """A failing release keeps the entry so the caller can retry it."""
-    client = _make_client(client_data)
-    client._is_connected = True
-    with patch.object(
-        client._client,
-        "bluetooth_gatt_get_services",
-        return_value=esphome_bluetooth_gatt_services,
-    ):
-        services = await client._get_services()
-    char = services.get_characteristic("00002a05-0000-1000-8000-00805f9b34fb")
-    assert char is not None
+    client, char = await _connected_client_with_char(
+        client_data, esphome_bluetooth_gatt_services
+    )
     stop = AsyncMock(side_effect=RuntimeError("release failed"))
     client._notify_cancels[char.handle] = (stop, Mock())
     with (
@@ -651,16 +628,9 @@ async def test_stop_notify_drops_entry_when_release_fails_after_disconnect(
     esphome_bluetooth_gatt_services: ESPHomeBluetoothGATTServices,
 ) -> None:
     """A disconnect during the CCCD write must not resurrect the entry."""
-    client = _make_client(client_data)
-    client._is_connected = True
-    with patch.object(
-        client._client,
-        "bluetooth_gatt_get_services",
-        return_value=esphome_bluetooth_gatt_services,
-    ):
-        services = await client._get_services()
-    char = services.get_characteristic("00002a05-0000-1000-8000-00805f9b34fb")
-    assert char is not None
+    client, char = await _connected_client_with_char(
+        client_data, esphome_bluetooth_gatt_services
+    )
     stop = AsyncMock(side_effect=RuntimeError("release failed"))
     abort = Mock()
     client._notify_cancels[char.handle] = (stop, abort)
@@ -692,16 +662,9 @@ async def test_stop_notify_forgets_cccd_when_disconnected_mid_write(
     esphome_bluetooth_gatt_services: ESPHomeBluetoothGATTServices,
 ) -> None:
     """A timeout after a disconnect must not latch the handle as dirty."""
-    client = _make_client(client_data)
-    client._is_connected = True
-    with patch.object(
-        client._client,
-        "bluetooth_gatt_get_services",
-        return_value=esphome_bluetooth_gatt_services,
-    ):
-        services = await client._get_services()
-    char = services.get_characteristic("00002a05-0000-1000-8000-00805f9b34fb")
-    assert char is not None
+    client, char = await _connected_client_with_char(
+        client_data, esphome_bluetooth_gatt_services
+    )
     client._notify_cancels[char.handle] = (AsyncMock(), Mock())
 
     async def _disconnect_and_time_out(*args: Any, **kwargs: Any) -> None:
@@ -738,7 +701,6 @@ async def test_stop_notify_release_failure_keeps_newer_subscription(
 
     char = Mock()
     char.handle = 99
-    char.uuid = "00002a05-0000-1000-8000-00805f9b34fb"
     abort = Mock()
     client._notify_cancels[99] = (_resubscribe, abort)
     with pytest.raises(RuntimeError):
@@ -755,16 +717,9 @@ async def test_stop_notify_cccd_failure_survives_cancelled_release(
     esphome_bluetooth_gatt_services: ESPHomeBluetoothGATTServices,
 ) -> None:
     """A cancelled release propagates instead of being demoted to a log."""
-    client = _make_client(client_data)
-    client._is_connected = True
-    with patch.object(
-        client._client,
-        "bluetooth_gatt_get_services",
-        return_value=esphome_bluetooth_gatt_services,
-    ):
-        services = await client._get_services()
-    char = services.get_characteristic("00002a05-0000-1000-8000-00805f9b34fb")
-    assert char is not None
+    client, char = await _connected_client_with_char(
+        client_data, esphome_bluetooth_gatt_services
+    )
     stop = AsyncMock(side_effect=asyncio.CancelledError())
     client._notify_cancels[char.handle] = (stop, Mock())
     with (
@@ -791,7 +746,6 @@ async def test_stop_notify_keeps_entry_when_release_fails(
     stop = AsyncMock(side_effect=RuntimeError("release failed"))
     char = Mock()
     char.handle = 99
-    char.uuid = "00002a05-0000-1000-8000-00805f9b34fb"
     client._notify_cancels[99] = (stop, Mock())
     with pytest.raises(RuntimeError):
         await client.stop_notify(char)
@@ -805,16 +759,9 @@ async def test_stop_notify_survives_concurrent_cancel_clear(
     esphome_bluetooth_gatt_services: ESPHomeBluetoothGATTServices,
 ) -> None:
     """A disconnect clearing the dict during the CCCD write is not a KeyError."""
-    client = _make_client(client_data)
-    client._is_connected = True
-    with patch.object(
-        client._client,
-        "bluetooth_gatt_get_services",
-        return_value=esphome_bluetooth_gatt_services,
-    ):
-        services = await client._get_services()
-    char = services.get_characteristic("00002a05-0000-1000-8000-00805f9b34fb")
-    assert char is not None
+    client, char = await _connected_client_with_char(
+        client_data, esphome_bluetooth_gatt_services
+    )
     stop = AsyncMock()
     client._notify_cancels[char.handle] = (stop, Mock())
 
@@ -835,16 +782,9 @@ async def test_stop_notify_is_single_winner_when_reentered(
     esphome_bluetooth_gatt_services: ESPHomeBluetoothGATTServices,
 ) -> None:
     """A second stop_notify during the CCCD write is a no-op, not a duplicate."""
-    client = _make_client(client_data)
-    client._is_connected = True
-    with patch.object(
-        client._client,
-        "bluetooth_gatt_get_services",
-        return_value=esphome_bluetooth_gatt_services,
-    ):
-        services = await client._get_services()
-    char = services.get_characteristic("00002a05-0000-1000-8000-00805f9b34fb")
-    assert char is not None
+    client, char = await _connected_client_with_char(
+        client_data, esphome_bluetooth_gatt_services
+    )
     stop = AsyncMock()
     client._notify_cancels[char.handle] = (stop, Mock())
 
@@ -866,16 +806,9 @@ async def test_stop_notify_cccd_failure_survives_concurrent_cancel_clear(
     esphome_bluetooth_gatt_services: ESPHomeBluetoothGATTServices,
 ) -> None:
     """The error path pops defensively when a disconnect cleared the dict."""
-    client = _make_client(client_data)
-    client._is_connected = True
-    with patch.object(
-        client._client,
-        "bluetooth_gatt_get_services",
-        return_value=esphome_bluetooth_gatt_services,
-    ):
-        services = await client._get_services()
-    char = services.get_characteristic("00002a05-0000-1000-8000-00805f9b34fb")
-    assert char is not None
+    client, char = await _connected_client_with_char(
+        client_data, esphome_bluetooth_gatt_services
+    )
 
     async def _clear_and_raise(*args: Any, **kwargs: Any) -> None:
         client._notify_cancels.clear()
@@ -1103,16 +1036,9 @@ async def test_stop_notify_retries_cccd_after_a_failed_clear(
     esphome_bluetooth_gatt_services: ESPHomeBluetoothGATTServices,
 ) -> None:
     """A later stop_notify re-attempts a CCCD clear that failed before."""
-    client = _make_client(client_data)
-    client._is_connected = True
-    with patch.object(
-        client._client,
-        "bluetooth_gatt_get_services",
-        return_value=esphome_bluetooth_gatt_services,
-    ):
-        services = await client._get_services()
-    char = services.get_characteristic("00002a05-0000-1000-8000-00805f9b34fb")
-    assert char is not None
+    client, char = await _connected_client_with_char(
+        client_data, esphome_bluetooth_gatt_services
+    )
     cccd = char.get_descriptor(CCCD_UUID)
     assert cccd is not None
     stop = AsyncMock()
@@ -1135,7 +1061,7 @@ async def test_stop_notify_retries_cccd_after_a_failed_clear(
     ) as mock_write_desc:
         await client.stop_notify(char)
     mock_write_desc.assert_awaited_once_with(
-        client._address_as_int, cccd.handle, b"\x00\x00", GATT_NOTIFY_TIMEOUT
+        client._address_as_int, cccd.handle, CCCD_DISABLE_BYTES, GATT_NOTIFY_TIMEOUT
     )
     assert char.handle not in client._cccd_dirty
     stop.assert_awaited_once()
