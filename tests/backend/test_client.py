@@ -1,7 +1,9 @@
 import asyncio
 import contextlib
+import gc
 import inspect
 import logging
+import weakref
 from typing import Any
 from unittest.mock import AsyncMock, Mock, patch
 from uuid import UUID
@@ -9,6 +11,7 @@ from uuid import UUID
 import pytest
 from aioesphomeapi import (
     APIConnectionError,
+    BluetoothDeviceClearCache,
     BluetoothDevicePairing,
     BluetoothDeviceUnpairing,
     BluetoothProxyFeature,
@@ -16,9 +19,11 @@ from aioesphomeapi import (
 )
 from bleak import BleakClient
 from bleak.backends.characteristic import BleakGATTCharacteristic
+from bleak.backends.service import BleakGATTServiceCollection
 from bleak.exc import BleakError
 from habluetooth import BaseHaRemoteScanner, HaBluetoothConnector
 
+from bleak_esphome.backend.cache import ESPHomeBluetoothCache
 from bleak_esphome.backend.client import (
     CONNECT_FREE_SLOT_TIMEOUT,
     GATT_HEADER_SIZE,
@@ -30,6 +35,7 @@ from bleak_esphome.backend.scanner import ESPHomeScanner
 from ._helpers import (
     ESP_MAC_ADDRESS,
     ESP_NAME,
+    _make_client,
     fetch_services,
     make_bleak_client,
     patch_connect_rpcs,
@@ -2117,3 +2123,182 @@ async def test_set_connection_params_not_connected(
     with pytest.raises(BleakError) as exc_info:
         await esphome_client.set_connection_params(800, 800, 0, 300)
     assert "is not connected" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_reconnect_at_lower_mtu_shrinks_max_write_without_response(
+    connected_client: ESPHomeClient,
+    esphome_bluetooth_gatt_services: ESPHomeBluetoothGATTServices,
+) -> None:
+    """
+    A reconnect at a lower MTU shrinks max_write_without_response_size.
+
+    Walks the whole chain the fix exists for: services are discovered and
+    cached on a link that negotiated 517, the next link reports 23, and
+    the cached collection must hand out ``23 - GATT_HEADER_SIZE`` rather
+    than a size the new link cannot carry.
+    """
+    client = connected_client
+    client._mtu = 517
+    client._cache.set_gatt_mtu_cache(client._address_as_int, 517)
+    services = await fetch_services(client, esphome_bluetooth_gatt_services)
+    cached_entry = client._cache.get_gatt_services_cache(client._address_as_int)
+    assert cached_entry is not None
+    assert cached_entry is services
+
+    # The next link reports a smaller MTU on a non-cached connect.
+    fut: asyncio.Future[bool] = client._loop.create_future()
+    client._on_bluetooth_connection_state(
+        fut, has_cache=False, connected=True, mtu=23, error=0
+    )
+    assert fut.result() is True
+
+    # The cached collection is still served, and reports the new size.
+    cached = await fetch_services(
+        client, esphome_bluetooth_gatt_services, dangerous_use_bleak_cache=True
+    )
+    assert cached is services
+    chars = [
+        char for service in cached.services.values() for char in service.characteristics
+    ]
+    assert chars, "fixture must expose at least one characteristic"
+    for char in chars:
+        assert char.max_write_without_response_size == 23 - GATT_HEADER_SIZE
+
+
+@pytest.mark.asyncio
+async def test_max_write_without_response_falls_back_when_mtu_evicted(
+    connected_client: ESPHomeClient,
+    esphome_bluetooth_gatt_services: ESPHomeBluetoothGATTServices,
+) -> None:
+    """
+    An evicted MTU entry falls back to the build-time MTU.
+
+    The services and MTU LRUs evict independently, so a cached collection
+    can outlive the MTU it was built against; the link it was built on is
+    a better answer than the conservative default.
+    """
+    client = connected_client
+    client._mtu = 517
+    client._cache.set_gatt_mtu_cache(client._address_as_int, 517)
+    services = await fetch_services(client, esphome_bluetooth_gatt_services)
+    client._cache.clear_gatt_mtu_cache(client._address_as_int)
+    chars = [
+        char
+        for service in services.services.values()
+        for char in service.characteristics
+    ]
+    assert chars, "fixture must expose at least one characteristic"
+    for char in chars:
+        assert char.max_write_without_response_size == 517 - GATT_HEADER_SIZE
+
+
+@pytest.mark.asyncio
+async def test_clear_cache_rebuild_keeps_current_link_write_size(
+    connected_client: ESPHomeClient,
+    esphome_bluetooth_gatt_services: ESPHomeBluetoothGATTServices,
+) -> None:
+    """
+    A rebuild after ``clear_cache()`` still reports this link's size.
+
+    ``clear_cache()`` drops the MTU entry without resetting ``self._mtu``,
+    so the rebuilt collection has no cache entry to read and must fall
+    back to the MTU of the live link rather than the default.
+    """
+    client = connected_client
+    client._mtu = 517
+    client._cache.set_gatt_mtu_cache(client._address_as_int, 517)
+    await fetch_services(client, esphome_bluetooth_gatt_services)
+    with patch.object(
+        client._client,
+        "bluetooth_device_clear_cache",
+        return_value=BluetoothDeviceClearCache(
+            address=client._address_as_int, success=True, error=0
+        ),
+    ):
+        assert await client.clear_cache() is True
+    assert client._cache.get_gatt_services_cache(client._address_as_int) is None
+    assert client._cache.get_gatt_mtu_cache(client._address_as_int) is None
+    rebuilt = await fetch_services(client, esphome_bluetooth_gatt_services)
+    chars = [
+        char
+        for service in rebuilt.services.values()
+        for char in service.characteristics
+    ]
+    assert chars, "fixture must expose at least one characteristic"
+    for char in chars:
+        assert char.max_write_without_response_size == 517 - GATT_HEADER_SIZE
+
+
+class _WeakrefableCache(ESPHomeBluetoothCache):
+    """
+    A cache that can be weakly referenced.
+
+    ``ESPHomeBluetoothCache`` is a ``slots=True`` dataclass declared
+    without ``weakref_slot``, so its instances have no ``__weakref__``
+    slot. A plain Python subclass gets one, and keeps the reference
+    structure -- the two LRUs and the objects they own -- that the
+    cycle test below is checking.
+    """
+
+
+@pytest.mark.asyncio
+async def test_cached_services_do_not_leak_the_cache(
+    client_data: ESPHomeClientData,
+    esphome_bluetooth_gatt_services: ESPHomeBluetoothGATTServices,
+) -> None:
+    """
+    A cached collection does not strand its cache once both are dropped.
+
+    The services LRU owns the collection, and the collection's
+    characteristics hold the callable that reads the current MTU. If that
+    callable held the cache, the cycle would run back through the LRU,
+    which does not participate in garbage collection, so neither object
+    would ever be freed.
+    """
+    client = _make_client(client_data)
+    client._is_connected = True
+    cache = _WeakrefableCache()
+    client._cache = cache
+    services = await fetch_services(client, esphome_bluetooth_gatt_services)
+    assert cache.get_gatt_services_cache(client._address_as_int) is services
+    cache_ref = weakref.ref(cache)
+    services_ref = weakref.ref(services)
+
+    del client, cache, services
+    # ``ESPHomeClient.__del__`` schedules ``_async_disconnected_cleanup`` on
+    # the loop, and that pending handle holds a bound method -- so the client,
+    # and through it the cache -- until the loop runs it. Let the tick land
+    # before deciding whether anything is stranded.
+    await asyncio.sleep(0)
+    gc.collect()
+
+    assert cache_ref() is None
+    assert services_ref() is None
+
+
+@pytest.mark.asyncio
+async def test_cached_connect_binds_has_cache_and_keeps_cached_mtu(
+    bleak_pair: tuple[BleakClient, ESPHomeClient],
+) -> None:
+    """
+    A cached connect keeps the cached MTU end to end.
+
+    Pins ``connect()``'s ``has_cache`` computation and its propagation
+    into the connection-state callback: on the cached path the proxy
+    reports before MTU exchange completes, so the reported 23 is a
+    placeholder that must not clobber the cached value.
+    """
+    bleak_client, client = bleak_pair
+    cached_mtu = 517
+    client._cache.set_gatt_services_cache(
+        BLE_ADDRESS_AS_INT, BleakGATTServiceCollection()
+    )
+    client._cache.set_gatt_mtu_cache(BLE_ADDRESS_AS_INT, cached_mtu)
+    with patch_connect_rpcs(client) as (mock_connect, _mock_disconnect):
+        task, callback = await start_connect(bleak_client, mock_connect)
+        assert mock_connect.call_args_list[-1][1]["has_cache"] is True
+        callback(True, 23, 0)
+        await task
+    assert client.mtu_size == cached_mtu
+    assert client._cache.get_gatt_mtu_cache(BLE_ADDRESS_AS_INT) == cached_mtu
