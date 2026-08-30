@@ -1,5 +1,13 @@
 # Changelog
 
+## v4.1.0 (2026-08-30)
+
+### Features
+
+
+- Warn when a proxy never answers a connect request ([`e2e9942`](https://github.com/Bluetooth-Devices/bleak-esphome/commit/e2e9942cbe68acc81304ad20135cf6db4efbe504))
+
+
 ## v4.0.0 (2026-08-19)
 
 ### Bug fixes
