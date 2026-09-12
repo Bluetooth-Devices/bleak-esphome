@@ -100,6 +100,53 @@ peripheral, the bug is on the peripheral or the proxy — not in
 `REMOTE_CACHING` (or `dangerous_use_bleak_cache`) is set _and_ a cached
 collection exists, so clearing it does not help here.
 
+## `BleakError("Peripheral … changed connection status while waiting for …")`
+
+Symptoms: the connection is established, then a GATT call fails part-way
+through with a message naming the request that was in flight:
+
+```
+BluetoothConnectionDroppedError: Peripheral FA:CD:C7:… changed connection
+status while waiting for BluetoothGATTNotifyResponse: Insufficient
+authentication (5)
+```
+
+which reaches your code as `BleakError` with the same text.
+
+"Changed connection status" is `aioesphomeapi`'s wording for **the link
+dropped**, not for a benign state transition. The response type in the middle
+names the request that was outstanding when the drop was noticed
+(`BluetoothGATTNotifyResponse` for `start_notify`,
+`BluetoothGATTReadResponse` for a read, and so on), so it tells you _where_ in
+the sequence the peripheral went away — not what caused it. The cause is the
+disconnect reason at the **end** of the message.
+
+`bleak-esphome` handles this in `api_error_as_bleak_error`: it marks the
+device disconnected before re-raising, so retry layers such as
+`bleak-retry-connector` see a clean state rather than a client that still
+believes it is connected. The failed GATT operation is not retried here —
+reconnect and retry policy is the caller's (or `bleak-retry-connector`'s).
+
+Read the numeric reason first — it is usually decisive:
+
+- `Insufficient authentication (5)` — the peripheral requires bonding before
+  it will accept that operation. A caller that reacts by retrying with
+  pairing enabled will then hit `NotImplementedError` if the proxy lacks the
+  `PAIRING` flag — see the `BleakClient.pair()` / `unpair()` section above.
+- `Unknown error (256)` / `Unknown error (62)` — these are `0x100` and `0x3e`,
+  the radio-link failures described in the section below. They render as
+  "Unknown error" only because `aioesphomeapi`'s `ESPHOME_GATT_ERRORS` table
+  covers `-1`–`255`; read the number, not the description.
+
+Fall back to the attempt pattern only when the code is uninformative: always
+failing at the same step points at the GATT interaction (bonding, a
+peripheral-side restriction), while failing at varying steps points at the
+radio link.
+
+A related but distinct case is `TimeoutError` (translated from
+`TimeoutAPIError`): there the proxy never answered at all, whereas a dropped
+connection means the proxy answered by reporting that the peripheral is gone.
+
 ## Connections drop repeatedly with `reason 0x100` or `0x3e`
 
 Symptoms: a device connects, then the proxy log shows a repeating
