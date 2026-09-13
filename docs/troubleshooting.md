@@ -87,6 +87,81 @@ NotImplementedError(
 This is a hard error — there is no host-side fallback. Either upgrade the
 proxy firmware or avoid `pair()` / `unpair()` for that device.
 
+## Reads or writes fail with `error=5 Insufficient authentication`
+
+The connection succeeds, then the first access to a protected attribute
+fails:
+
+```
+Bluetooth GATT Error address=AA:BB:CC:DD:EE:FF handle=15 error=5
+description=Insufficient authentication
+```
+
+The peripheral requires an encrypted (bonded) link before that handle can be
+read or written. The code is raised by the ESP32's GATT stack and relayed
+verbatim — it is not a `bleak-esphome` failure, and no amount of retrying
+will clear it.
+
+Two things make bonding over a proxy different from bonding over a local
+adapter:
+
+**The bond lives on the proxy, not on the host.** The security handshake is
+between the ESP32 and the peripheral; the host never participates. Pairing
+the host's own Bluetooth adapter with the peripheral (for example
+`bluetoothctl pair`) therefore has no effect on a proxied connection, and
+the bond it creates is not visible to the proxy.
+
+**The pairing API carries no passkey exchange.** A pair request is
+`BluetoothDeviceRequest(address, request_type=PAIR)` and the reply is
+`BluetoothDevicePairingResponse(address, paired, error)`. Neither direction
+has a field for a passkey, a numeric-comparison confirmation, or
+IO-capability negotiation. Only pairing that needs no user interaction
+("Just Works") can complete through a proxy. A peripheral that demands
+passkey entry or numeric comparison returns `paired=False`, which surfaces
+as:
+
+```python
+BleakError("Pairing failed due to error: <code>")
+```
+
+What to do, in order:
+
+1. Bond explicitly instead of relying on the peripheral to trigger it. `pair`
+   is a constructor argument, not a `connect()` keyword:
+
+   ```python
+   # direct bleak
+   client = bleak.BleakClient(device, pair=True)
+   await client.connect()
+
+   # or via bleak_retry_connector
+   client = await establish_connection(
+       BleakClientWithServiceCache, device, name="MyDevice", pair=True
+   )
+   ```
+
+   This backend pairs immediately after link-up and before service discovery,
+   which is what a peripheral that protects its whole GATT database expects.
+
+2. If that raises `NotImplementedError`, the proxy firmware predates the
+   `PAIRING` flag — see the section above.
+3. If pairing reports success but protected handles still fail, the ESP32 may
+   be holding a stale bond the peripheral no longer honours (peripheral
+   factory-reset, or its bond table evicted the entry). Call `await
+client.unpair()` on the connected client to drop the proxy-side bond, then
+   reconnect with pairing enabled. `unpair()` is gated on the same `PAIRING`
+   flag as `pair()`, so the caveat in step 2 applies to it too.
+4. If pairing is attempted but returns an error, assume the peripheral needs
+   interactive pairing and route it through the host's own adapter instead:
+   set `active: false` on the `bluetooth_proxy` block of every proxy that can
+   hear the device, then bond the host adapter normally. A proxy without
+   `ACTIVE_CONNECTIONS` is registered as a non-connectable scanner, so it is
+   never a connection candidate — this is a hard exclusion, not an RSSI
+   preference. It is also per-proxy, not per-device: those proxies stop
+   accepting connections for _all_ peripherals they serve, and the device must
+   be in radio range of the host adapter for this to help. Prefer restricting
+   it to proxies that serve only this device.
+
 ## `BleakError("Failed to get services from remote esp")`
 
 The proxy returned a GATT services response with an empty `services` list.
