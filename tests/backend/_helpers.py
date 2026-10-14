@@ -23,6 +23,8 @@ if TYPE_CHECKING:
 ESP_MAC_ADDRESS = "AA:BB:CC:DD:EE:FF"
 ESP_NAME = "proxy"
 BLE_ADDRESS = "CC:BB:AA:DD:EE:FF"
+# The indicate-only characteristic in the standard GATT services fixture.
+INDICATE_CHAR_UUID = "00002a05-0000-1000-8000-00805f9b34fb"
 
 
 def make_ble_device() -> BLEDevice:
