@@ -102,11 +102,19 @@ def connect_scanner(
             bluetooth_device.async_update_ble_connection_limits
         )
 
+    # A raw proxy may report scanner state even if it cannot change modes.
+    # Register the local handler before subscribing to advertisements, since
+    # the first state report can be sent in response to that subscription.
+    if feature_flags & (
+        BluetoothProxyFeature.RAW_ADVERTISEMENTS
+        | BluetoothProxyFeature.FEATURE_STATE_AND_MODE
+    ):
+        cli.subscribe_bluetooth_scanner_state(scanner.async_update_scanner_state)
+
     if feature_flags & BluetoothProxyFeature.FEATURE_STATE_AND_MODE:
         _LOGGER.debug(
             "%s [%s]: Bluetooth scanner state and mode support available", name, source
         )
-        cli.subscribe_bluetooth_scanner_state(scanner.async_update_scanner_state)
         scanner.set_client(cli)
 
     if feature_flags & BluetoothProxyFeature.RAW_ADVERTISEMENTS:

@@ -241,10 +241,13 @@ Caveat: the underlying proto field shipped in ESPHome 2025.9.
 proto3 decodes as the default `PASSIVE` — indistinguishable from an explicit
 `PASSIVE` configuration.
 
-All of the above requires the proxy to advertise `FEATURE_STATE_AND_MODE`.
-Without it the `APIClient` is never bound to the scanner, so mode requests
-have no firmware effect and `async_request_active_window` returns `False`
-instead of opening a window — see the _Feature Flag Reference_ section below.
+The host listens for scanner state if the proxy advertises `RAW_ADVERTISEMENTS`
+or `FEATURE_STATE_AND_MODE`. A raw proxy without `FEATURE_STATE_AND_MODE`
+may report its configured and current modes, but is not required to send state.
+Without `FEATURE_STATE_AND_MODE` the `APIClient` is not bound to the scanner:
+mode requests have no firmware effect, `async_request_active_window` returns
+`False`, and the host does not retry the raw subscription on a missing first
+state report. See the _Feature Flag Reference_ section below.
 
 ## Extension Methods
 
@@ -322,15 +325,16 @@ checks these flags before calling proxy-side APIs and degrades gracefully when
 a flag is missing. The table below maps each public surface to the flag it
 requires and what happens when the proxy firmware does not advertise it.
 
-| Public surface                                  | Required flag               | Behavior when flag is absent                                                                                                                                                                                                                                                                                     |
-| ----------------------------------------------- | --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `BleakClient.connect` / GATT operations         | `ACTIVE_CONNECTIONS`        | The scanner is registered as non-connectable. Discovery still works; connect attempts are rejected by `bleak` before reaching this library.                                                                                                                                                                      |
-| Decoded vs. raw advertisements                  | `RAW_ADVERTISEMENTS`        | Falls back to `subscribe_bluetooth_le_advertisements` (proxy-side decoded) instead of `subscribe_bluetooth_le_raw_advertisements`. Both paths feed the same scanner.                                                                                                                                             |
-| Scanner state / mode + on-demand active windows | `FEATURE_STATE_AND_MODE`    | `subscribe_bluetooth_scanner_state` is skipped and the `APIClient` is not bound to the scanner, so `current_mode` / `requested_mode` stay at their defaults and `habluetooth` cannot open on-demand active-scan windows (`async_request_active_window` returns `False`). Connection-slot tracking is unaffected. |
-| `connect(dangerous_use_bleak_cache=…)`          | `REMOTE_CACHING`            | The cached-services hint sent to the proxy is forced off, so the proxy re-discovers services on every connect. `dangerous_use_bleak_cache` still hits the on-host LRU in `_get_services` when populated, and `start_notify` skips the CCCD write because the firmware handles it.                                |
-| `BleakClient.pair` / `unpair`                   | `PAIRING`                   | Raises `NotImplementedError("Pairing is not available in this version ESPHome; Upgrade the ESPHome version on the … device.")`.                                                                                                                                                                                  |
-| `ESPHomeClient.clear_cache`                     | `CACHE_CLEARING`            | Returns `True` after clearing only the on-host LRU caches; logs `"On device cache clear is not available with this ESPHome version; … Only memory cache will be cleared"`. No proxy round-trip.                                                                                                                  |
-| `ESPHomeClient.set_connection_params`           | `CONNECTION_PARAMS_SETTING` | Silently returns after logging `"Setting connection parameters is not available with ESPHome version …; Upgrade the ESPHome version on the device"`. No exception is raised.                                                                                                                                     |
+| Public surface                          | Required flag                                    | Behavior when flag is absent                                                                                                                                                                                                                                                      |
+| --------------------------------------- | ------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `BleakClient.connect` / GATT operations | `ACTIVE_CONNECTIONS`                             | The scanner is registered as non-connectable. Discovery still works; connect attempts are rejected by `bleak` before reaching this library.                                                                                                                                       |
+| Decoded vs. raw advertisements          | `RAW_ADVERTISEMENTS`                             | Falls back to `subscribe_bluetooth_le_advertisements` (proxy-side decoded) instead of `subscribe_bluetooth_le_raw_advertisements`. Both paths feed the same scanner.                                                                                                              |
+| Scanner state / reported mode           | `RAW_ADVERTISEMENTS` or `FEATURE_STATE_AND_MODE` | If neither flag is present, the host does not listen for state. Raw proxies without `FEATURE_STATE_AND_MODE` can report state but are not required to.                                                                                                                            |
+| Mode control / on-demand active windows | `FEATURE_STATE_AND_MODE`                         | The `APIClient` is not bound to the scanner, mode requests have no firmware effect, and `async_request_active_window` returns `False`. The host does not retry a raw subscription on a missing first state report.                                                                |
+| `connect(dangerous_use_bleak_cache=…)`  | `REMOTE_CACHING`                                 | The cached-services hint sent to the proxy is forced off, so the proxy re-discovers services on every connect. `dangerous_use_bleak_cache` still hits the on-host LRU in `_get_services` when populated, and `start_notify` skips the CCCD write because the firmware handles it. |
+| `BleakClient.pair` / `unpair`           | `PAIRING`                                        | Raises `NotImplementedError("Pairing is not available in this version ESPHome; Upgrade the ESPHome version on the … device.")`.                                                                                                                                                   |
+| `ESPHomeClient.clear_cache`             | `CACHE_CLEARING`                                 | Returns `True` after clearing only the on-host LRU caches; logs `"On device cache clear is not available with this ESPHome version; … Only memory cache will be cleared"`. No proxy round-trip.                                                                                   |
+| `ESPHomeClient.set_connection_params`   | `CONNECTION_PARAMS_SETTING`                      | Silently returns after logging `"Setting connection parameters is not available with ESPHome version …; Upgrade the ESPHome version on the device"`. No exception is raised.                                                                                                      |
 
 If a method appears to silently do nothing, check the proxy's reported feature
 flags first — the warning is logged at WARNING level on the

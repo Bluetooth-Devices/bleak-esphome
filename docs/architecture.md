@@ -80,11 +80,14 @@ That bitmask drives every subsequent decision:
   non-connectable.
 - `RAW_ADVERTISEMENTS` — if set, the host subscribes to raw advertisement frames; if
   not, it falls back to per-advertisement decoded messages.
-- `FEATURE_STATE_AND_MODE` — if set, the host subscribes to scanner state updates and
-  tracks both the current scanner state (`IDLE` / `STARTING` / `RUNNING` / `STOPPING`
-  / `STOPPED` / `FAILED`) and the active scanning mode (`PASSIVE` / `ACTIVE`). It also
-  binds the `APIClient` to the scanner so `habluetooth` can request bounded on-demand
-  active-scan windows (see "On-demand active scanning" below).
+- `RAW_ADVERTISEMENTS` or `FEATURE_STATE_AND_MODE` — the host registers a local
+  state handler before subscribing to advertisements. It tracks scanner lifecycle
+  and the reported current and configured modes (`PASSIVE` / `ACTIVE`). Raw
+  proxies without `FEATURE_STATE_AND_MODE` may send state but can also stay silent.
+- `FEATURE_STATE_AND_MODE` — binds the `APIClient` to the scanner for mode control
+  and bounded on-demand active-scan windows (see below). Only with this flag does
+  the host arm the watchdog that retries a raw subscription if no first state
+  report arrives.
 - `REMOTE_CACHING` — gates the cached-services hint sent on connect. When unset the
   hint is forced off, so the proxy re-discovers services on every connect; the
   on-host LRU cache still works.
