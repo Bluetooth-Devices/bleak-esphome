@@ -89,25 +89,35 @@ async def test_connect_fixed_mode_reports_state_without_mode_control(
             | BluetoothProxyFeature.RAW_ADVERTISEMENTS
         ),
     )
+    running = BluetoothScannerStateResponse(
+        state=BluetoothScannerState.RUNNING,
+        mode=BluetoothScannerMode.ACTIVE,
+        configured_mode=BluetoothScannerMode.ACTIVE,
+    )
+
+    def subscribe_raw(_on_advertisements: object) -> None:
+        # The first report can arrive as soon as the subscribe is sent.
+        registration = mock_client.subscribe_bluetooth_scanner_state.call_args
+        if registration is not None:
+            (report_state,) = registration.args
+            report_state(running)
+
+    mock_client.subscribe_bluetooth_le_raw_advertisements.side_effect = subscribe_raw
     client_data = connect_scanner(mock_client, info, available=True)
     scanner = client_data.scanner
     assert scanner is not None
+    active = BluetoothScanningMode.ACTIVE
+    assert scanner.current_mode == active
+    assert scanner.requested_mode == active
+    assert scanner.configured_mode == active
+
     mock_client.subscribe_bluetooth_scanner_state.assert_called_once()
     (report_state,) = mock_client.subscribe_bluetooth_scanner_state.call_args.args
-
-    active = BluetoothScanningMode.ACTIVE
     for state, current_mode in (
-        (BluetoothScannerState.RUNNING, active),
         (BluetoothScannerState.STOPPED, None),
         (BluetoothScannerState.RUNNING, active),
     ):
-        report_state(
-            BluetoothScannerStateResponse(
-                state=state,
-                mode=BluetoothScannerMode.ACTIVE,
-                configured_mode=BluetoothScannerMode.ACTIVE,
-            )
-        )
+        report_state(dataclasses.replace(running, state=state))
         assert scanner.current_mode == current_mode
         assert scanner.requested_mode == active
         assert scanner.configured_mode == active
