@@ -1,9 +1,18 @@
+import asyncio
 import dataclasses
 
 import pytest
-from aioesphomeapi import APIClient, BluetoothProxyFeature, DeviceInfo
+from aioesphomeapi import (
+    APIClient,
+    BluetoothProxyFeature,
+    BluetoothScannerMode,
+    BluetoothScannerState,
+    BluetoothScannerStateResponse,
+    DeviceInfo,
+)
 from habluetooth import BluetoothScanningMode
 
+from bleak_esphome.backend import scanner as scanner_module
 from bleak_esphome.backend.device import ESPHomeBluetoothDevice
 from bleak_esphome.connect import _can_connect, connect_scanner
 
@@ -35,7 +44,6 @@ async def test_connect_passive_only(
     client_data = connect_scanner(mock_client, info, available=True)
     assert client_data is not None
     mock_client.subscribe_bluetooth_connections_free.assert_not_called()
-    mock_client.subscribe_bluetooth_scanner_state.assert_not_called()
     mock_client.subscribe_bluetooth_le_raw_advertisements.assert_called_once()
     mock_client.subscribe_bluetooth_le_advertisements.assert_not_called()
 
@@ -61,26 +69,51 @@ async def test_connect_state_and_mode_binds_client(mock_client: APIClient) -> No
     # The client is bound only via the FEATURE_STATE_AND_MODE branch; without
     # it async_set_scanning_mode would no-op. A firmware command proves wiring.
     client_data.scanner.async_set_scanning_mode(BluetoothScanningMode.ACTIVE)
-    mock_client.bluetooth_scanner_set_mode.assert_called_once()
+    mock_client.bluetooth_scanner_set_mode.assert_called_once_with(
+        BluetoothScannerMode.ACTIVE
+    )
 
 
 @pytest.mark.asyncio
-async def test_connect_no_state_and_mode_leaves_client_unbound(
+async def test_connect_fixed_mode_reports_state_without_mode_control(
     mock_client: APIClient, mock_device_info: DeviceInfo
 ) -> None:
-    """Without FEATURE_STATE_AND_MODE, mode control cannot reach the proxy."""
+    """A fixed-active raw proxy can report status without accepting commands."""
     info = dataclasses.replace(
         mock_device_info,
         bluetooth_proxy_feature_flags=(
             BluetoothProxyFeature.PASSIVE_SCAN
             | BluetoothProxyFeature.ACTIVE_CONNECTIONS
+            | BluetoothProxyFeature.REMOTE_CACHING
+            | BluetoothProxyFeature.PAIRING
             | BluetoothProxyFeature.RAW_ADVERTISEMENTS
         ),
     )
     client_data = connect_scanner(mock_client, info, available=True)
-    assert client_data.scanner is not None
-    # Local intent still pins, but the unbound client gets no firmware command.
-    client_data.scanner.async_set_scanning_mode(BluetoothScanningMode.ACTIVE)
+    scanner = client_data.scanner
+    assert scanner is not None
+    mock_client.subscribe_bluetooth_scanner_state.assert_called_once()
+    (report_state,) = mock_client.subscribe_bluetooth_scanner_state.call_args.args
+
+    active = BluetoothScanningMode.ACTIVE
+    for state, current_mode in (
+        (BluetoothScannerState.RUNNING, active),
+        (BluetoothScannerState.STOPPED, None),
+        (BluetoothScannerState.RUNNING, active),
+    ):
+        report_state(
+            BluetoothScannerStateResponse(
+                state=state,
+                mode=BluetoothScannerMode.ACTIVE,
+                configured_mode=BluetoothScannerMode.ACTIVE,
+            )
+        )
+        assert scanner.current_mode == current_mode
+        assert scanner.requested_mode == active
+        assert scanner.configured_mode == active
+
+    assert await scanner.async_request_active_window(0) is False
+    scanner.async_set_scanning_mode(BluetoothScanningMode.PASSIVE)
     mock_client.bluetooth_scanner_set_mode.assert_not_called()
 
 
@@ -143,9 +176,12 @@ async def test_connect_arms_subscription_watchdog(
 
 @pytest.mark.asyncio
 async def test_connect_no_watchdog_without_state_and_mode(
-    mock_client: APIClient, mock_device_info: DeviceInfo
+    mock_client: APIClient,
+    mock_device_info: DeviceInfo,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Without FEATURE_STATE_AND_MODE there is no signal, so no watchdog."""
+    """Silence from a legacy raw proxy must not trigger resubscription."""
+    monkeypatch.setattr(scanner_module, "_SUBSCRIPTION_RETRY_DELAYS", (0.0,))
     info = dataclasses.replace(
         mock_device_info,
         bluetooth_proxy_feature_flags=(
@@ -156,4 +192,13 @@ async def test_connect_no_watchdog_without_state_and_mode(
     client_data = connect_scanner(mock_client, info, available=True)
     scanner = client_data.scanner
     assert scanner is not None
-    assert scanner._resubscribe_advertisements is None
+    unsetup = scanner.async_setup()
+    try:
+        # Let a wrongly armed watchdog start and pass its first delay.
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        mock_client.subscribe_bluetooth_le_raw_advertisements.assert_called_once()
+        assert scanner.current_mode is None
+        assert scanner.requested_mode is None
+    finally:
+        unsetup()
