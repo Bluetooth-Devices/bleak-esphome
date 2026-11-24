@@ -914,10 +914,15 @@ class ESPHomeClient(BaseBleakClient):
                 timeout (float): Seconds to wait for each round-trip to the
                     proxy (the subscribe, and the CCCD write that follows it
                     on v3/REMOTE_CACHING connections). Defaults to 30.0.
+                allow_missing_cccd (bool): On v3/REMOTE_CACHING connections,
+                    keep the subscription when the characteristic has no
+                    CCCD instead of raising. Some peripherals notify without
+                    one, contrary to the spec. Defaults to False.
 
         """
         self._raise_if_not_connected()
         timeout = kwargs.get("timeout", GATT_NOTIFY_TIMEOUT)
+        allow_missing_cccd = kwargs.get("allow_missing_cccd", False)
         ble_handle = characteristic.handle
         if ble_handle in self._notify_cancels:
             raise BleakError(
@@ -954,6 +959,14 @@ class ESPHomeClient(BaseBleakClient):
             # save memory since doing so can exhaust the memory and cause a soft
             # reset
             cccd_descriptor = characteristic.get_descriptor(CCCD_UUID)
+            if not cccd_descriptor and allow_missing_cccd:
+                _LOGGER.debug(
+                    "%s: Characteristic %s has no CCCD; relying on the "
+                    "peripheral to notify without one",
+                    self._description,
+                    characteristic.uuid,
+                )
+                return
             if not cccd_descriptor:
                 raise BleakError(
                     f"{self._description}: Characteristic {characteristic.uuid} "

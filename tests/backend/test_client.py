@@ -2076,6 +2076,42 @@ async def test_start_notify_missing_cccd_raises_error(
 
 
 @pytest.mark.asyncio
+async def test_start_notify_missing_cccd_allowed(
+    connected_client: ESPHomeClient,
+    esphome_bluetooth_gatt_services: ESPHomeBluetoothGATTServices,
+) -> None:
+    """Test that allow_missing_cccd keeps the subscription without a CCCD."""
+    services = await fetch_services(connected_client, esphome_bluetooth_gatt_services)
+    char = services.get_characteristic(INDICATE_CHAR_UUID)
+    assert char is not None
+
+    mock_stop_notify = AsyncMock()
+    mock_remove_callback = Mock()
+    with (
+        patch.object(
+            connected_client._client,
+            "bluetooth_gatt_start_notify",
+            return_value=(mock_stop_notify, mock_remove_callback),
+        ) as mock_start,
+        patch.object(char, "get_descriptor", return_value=None),
+        patch.object(
+            connected_client._client, "bluetooth_gatt_write_descriptor"
+        ) as mock_write,
+        patch.object(
+            connected_client._client, "bluetooth_gatt_stop_notify"
+        ) as mock_stop,
+    ):
+        await connected_client.start_notify(
+            char, lambda data: None, allow_missing_cccd=True
+        )
+
+    mock_start.assert_called_once()
+    mock_write.assert_not_called()
+    mock_stop.assert_not_called()
+    assert char.handle in connected_client._notify_cancels
+
+
+@pytest.mark.asyncio
 async def test_set_connection_params(connected_client: ESPHomeClient) -> None:
     """Test that set_connection_params calls through to the API client."""
     connected_client._feature_flags |= (
